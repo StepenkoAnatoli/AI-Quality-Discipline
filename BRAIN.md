@@ -44,9 +44,10 @@ Each layer should be independently useful. A user should be able to install one 
 
 Planned canonical documents:
 
-- `core/PRINCIPLES.md` — shared quality principles and terminology.
+- `core/PRINCIPLES.md` — canonical shared quality principles.
 - `docs/QUALITY-RECEIPTS.md` — current canonical receipt specification. Do not create a competing copy.
 - `core/REPLY-DISCIPLINE.md` — short always-on response guidance.
+- `docs/AGENT-COMPATIBILITY.md` — dated record of the Agent Skills specification and official integration paths.
 
 ### 4.2 Canonical Agent Skills
 
@@ -280,8 +281,9 @@ Do not claim benchmark wins from anecdotes.
 - [x] Establish repository and initial README.
 - [x] Define quality receipt format.
 - [x] Record architecture and project plan in this file.
-- [ ] Define canonical principles and terminology.
-- [ ] Confirm Agent Skills specification revision and official target-specific discovery paths.
+- [x] Define canonical quality principles in `core/PRINCIPLES.md`.
+- [x] Review the living Agent Skills specification and document official Codex, Claude Code, and Copilot paths in `docs/AGENT-COMPATIBILITY.md`.
+- [x] Record the review date and the fact that the public specification has no conventional semantic version in the reviewed document.
 
 ### Phase 1 — Core skills
 - [ ] Implement code-discipline.
@@ -347,13 +349,15 @@ Before reporting an implementation task complete:
 - **2026-11-18 — Quality receipts:** retain the eight-field receipt in `docs/QUALITY-RECEIPTS.md`; receipts are for substantial work, not every response.
 - **2026-11-18 — Quality modes:** plan Standard, Strict, and Audit as optional levels of rigor.
 - **2026-11-18 — Evaluation before claims:** compare with/without conditions and publish methodology before claiming effectiveness.
+- **2026-11-19 — Agent Skills baseline confirmed:** use the living agentskills.io specification as the canonical format; do not invent a spec version number. Record the review date and re-check before compatibility releases.
+- **2026-11-19 — Initial integration paths documented:** Codex project/user skills use .agents/skills; Claude Code uses .claude/skills; Copilot supports .github/skills, .agents/skills, and .claude/skills with surface-specific differences. Keep one neutral canonical skills/ tree and copy/package it to target locations.
 
 When a decision changes, add a dated entry explaining why. Do not silently rewrite history.
 
 ## 11. Open questions
 
-- Which Agent Skills specification revision should be pinned, and how should compatibility be tested?
-- Which exact target paths and metadata conventions are currently supported by Codex, Claude Code, and GitHub Copilot?
+- Which specific Codex, Claude Code, and Copilot versions/surfaces should be included in hands-on compatibility tests before declaring a release supported?
+- What automated conformance checks should run against the living Agent Skills specification?
 - Should the installer be Python-only, shell-based, or offer both?
 - Should distribution use Git, release archives, a package registry, or multiple channels?
 - What is the minimum useful MCP tool set after real workflows are tested?
