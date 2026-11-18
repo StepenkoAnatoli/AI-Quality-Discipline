@@ -305,10 +305,10 @@ Exit gate: each skill has clear metadata, narrow scope, useful examples/tests, a
 Exit gate: a new user can install one or all skills without silently losing existing files. The local installer and target-path adapters are implemented; 14 automated installer tests pass. Live discovery/invocation testing in Codex, Claude Code, and Copilot remains unverified and is not claimed.
 
 ### Phase 3 — Validation and evaluation
-- [ ] Add receipt validator.
-- [ ] Add skill/package validator.
-- [ ] Create representative task suites and rubric. (Pilot design drafted: 12 tasks, shared rubric, evaluator key; fixtures and calibration runs remain.)
-- [ ] Run with/without comparisons.
+- [x] Add receipt validator (structural only; does not verify truth).
+- [x] Add skill/package validator (structural checks; not full Agent Skills spec conformance).
+- [x] Create representative pilot task suite and rubric (12 prompts, evaluator key, synthetic fixtures, fixture manifest, and run instructions). Full 10-task-per-skill suite remains future work.
+- [ ] Run with/without comparisons (not started; validate fixture baselines and CI first).
 - [ ] Publish results and limitations.
 
 Exit gate: validators are tested, and benchmark claims are reproducible from published methodology.
