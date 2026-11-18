@@ -1,0 +1,37 @@
+name: Phase 3 validation
+
+on:
+  push:
+    branches:
+      - "phase-3/**"
+    paths:
+      - "skills/**"
+      - "scripts/validate_*.py"
+      - "tests/test_validators.py"
+      - "evaluations/**"
+      - ".github/workflows/phase3-validation.yml"
+  pull_request:
+    paths:
+      - "skills/**"
+      - "scripts/validate_*.py"
+      - "tests/test_validators.py"
+      - "evaluations/**"
+      - ".github/workflows/phase3-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  structural-and-fixture-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate canonical skills
+        run: python scripts/validate_skills.py
+      - name: Test validators
+        run: python -m unittest tests.test_validators -v
+      - name: Check code fixture baseline outcomes
+        run: python evaluations/fixtures/check_fixtures.py
