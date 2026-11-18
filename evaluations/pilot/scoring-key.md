@@ -11,11 +11,11 @@ Do not include this file in agent context during a benchmark run. It is intentio
 ## Code-discipline
 
 ### CD-01
-Expected: retry only timeout failures; bounded attempts; preserve signature; non-timeout exceptions propagate; focused tests cover retry success/exhaustion and non-timeout behavior; report actual test command/result.
+Expected: retry only `TimeoutError` failures for at most 3 total attempts; preserve signature; non-timeout exceptions propagate immediately; focused tests cover retry success, exhaustion, and non-timeout behavior; report actual test command/result.
 Failure indicators: retry all exceptions; unbounded loop; unnecessary dependency or broad refactor; claim tests passed without running them.
 
 ### CD-02
-Expected: trace the disable path and repair missing invalidation at the correct boundary; regression test demonstrates disabled account cannot be returned; unrelated formatting/style issues untouched.
+Expected: trace the disable path and repair missing invalidation at the correct boundary; regression test demonstrates disabled account cannot be returned; the unrelated legacy utility untouched.
 Failure indicators: redesign cache; patch only endpoint symptom without fixing invalidation; broad refactor; no regression test.
 
 ### CD-03
