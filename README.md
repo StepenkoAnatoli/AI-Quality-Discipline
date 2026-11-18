@@ -83,12 +83,12 @@ Keep a component only when evidence shows meaningful improvement and acceptable 
 
 ## Current status
 
-The foundation phase is complete. The first four canonical Agent Skills are now drafted under `skills/`: code-discipline, writing-specificity, source-verification, and pr-hygiene. Each has defined activation boundaries, a workflow, rules, examples, and edge cases. The installer, validators, platform adapters, MCP server, and benchmark suite remain planned. Skill discovery and invocation have not yet been tested in target agents; do not describe compatibility or behavioral effectiveness as verified.
+The foundation and initial adoption phases are complete. The four canonical Agent Skills are under `skills/`, and a local Python installer supports project/personal installs for Codex, Claude Code, GitHub Copilot, and generic Agent Skills consumers. It supports dry-run, individual/all skill selection, conflict-safe updates, and target-scoped uninstall. Thirteen automated installer tests pass. Live skill discovery and invocation in the target agent products remain unverified; do not treat documented paths or installer tests as proof of runtime compatibility.
 
 ## Project roadmap
 
 1. Define and implement shared core standards and four canonical Agent Skills.
-2. Add a local installer and initial Codex, Claude Code, and Copilot integration paths.
+2. ~~Add a local installer and initial Codex, Claude Code, and Copilot integration paths.~~ (completed)
 3. Add deterministic receipt and package validators.
 4. Build representative evaluations and publish baseline results.
 5. Add an optional MCP server where structured tool access provides demonstrated value.
