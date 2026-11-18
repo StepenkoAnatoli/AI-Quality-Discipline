@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check that code pilot fixtures exhibit their documented baseline outcomes."""
 from __future__ import annotations
-import subprocess, sys
+import re, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
