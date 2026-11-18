@@ -83,7 +83,7 @@ Keep a component only when evidence shows meaningful improvement and acceptable 
 
 ## Current status
 
-The foundation and initial adoption phases are complete. The four canonical Agent Skills are under `skills/`, and a local Python installer supports project/personal installs for Codex, Claude Code, GitHub Copilot, and generic Agent Skills consumers. It supports dry-run, individual/all skill selection, conflict-safe updates, and target-scoped uninstall. Fourteen automated installer tests pass. Live skill discovery and invocation in the target agent products remain unverified; do not treat documented paths or installer tests as proof of runtime compatibility.
+The foundation and initial adoption phases are complete. The four canonical Agent Skills are under `skills/`, and a local Python installer supports project/personal installs for Codex, Claude Code, GitHub Copilot, and generic Agent Skills consumers. It supports dry-run, individual/all skill selection, conflict-safe updates, and target-scoped uninstall. Fourteen automated installer tests pass. Phase 3 has begun: a 12-task pilot design, shared rubric, and evaluation protocol are drafted; concrete fixtures, validator implementation, calibration, and live with/without runs remain pending. Live skill discovery and invocation in the target agent products remain unverified; do not treat documented paths or installer tests as proof of runtime compatibility.
 
 ## Project roadmap
 
@@ -106,7 +106,7 @@ See [Installation](docs/INSTALLATION.md) for preview, project/user installs, ind
 - [Quality receipts](docs/QUALITY-RECEIPTS.md) — receipt format and integrity rules.
 - [Canonical skills](skills/) — four independently installable Agent Skills.
 - [Installation guide](docs/INSTALLATION.md) — local installer and manual setup.
-- [Adapters](adapters/) — target-specific discovery paths and limitations.
+- [Adapters](adapters/) — target-specific discovery paths and limitations.\n- [Evaluation suite](evaluations/) — protocol, rubric, pilot tasks, and evaluator scoring key.
 
 ## Guiding principle
 
