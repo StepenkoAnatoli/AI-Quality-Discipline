@@ -83,7 +83,7 @@ Keep a component only when evidence shows meaningful improvement and acceptable 
 
 ## Current status
 
-The foundation and initial adoption phases are complete. The four canonical Agent Skills are under `skills/`, and a local Python installer supports project/personal installs for Codex, Claude Code, GitHub Copilot, and generic Agent Skills consumers. It supports dry-run, individual/all skill selection, conflict-safe updates, and target-scoped uninstall. Thirteen automated installer tests pass. Live skill discovery and invocation in the target agent products remain unverified; do not treat documented paths or installer tests as proof of runtime compatibility.
+The foundation and initial adoption phases are complete. The four canonical Agent Skills are under `skills/`, and a local Python installer supports project/personal installs for Codex, Claude Code, GitHub Copilot, and generic Agent Skills consumers. It supports dry-run, individual/all skill selection, conflict-safe updates, and target-scoped uninstall. Fourteen automated installer tests pass. Live skill discovery and invocation in the target agent products remain unverified; do not treat documented paths or installer tests as proof of runtime compatibility.
 
 ## Project roadmap
 
