@@ -83,7 +83,7 @@ Keep a component only when evidence shows meaningful improvement and acceptable 
 
 ## Current status
 
-The foundation phase is complete: the repository now contains the project brain, canonical quality principles, the quality-receipt specification, and a dated compatibility record for the Agent Skills format and initial Codex, Claude Code, and Copilot paths. The four skills, installer, validators, adapters, MCP server, and benchmark suite remain planned work; do not describe them as implemented until they exist and have been tested.
+The foundation phase is complete. The first four canonical Agent Skills are now drafted under `skills/`: code-discipline, writing-specificity, source-verification, and pr-hygiene. Each has defined activation boundaries, a workflow, rules, examples, and edge cases. The installer, validators, platform adapters, MCP server, and benchmark suite remain planned. Skill discovery and invocation have not yet been tested in target agents; do not describe compatibility or behavioral effectiveness as verified.
 
 ## Project roadmap
 
@@ -100,6 +100,7 @@ The foundation phase is complete: the repository now contains the project brain,
 - [Core quality principles](core/PRINCIPLES.md) — shared principles for every component.
 - [Agent compatibility](docs/AGENT-COMPATIBILITY.md) — reviewed specification and installation paths.
 - [Quality receipts](docs/QUALITY-RECEIPTS.md) — receipt format and integrity rules.
+- [Canonical skills](skills/) — four independently installable Agent Skills.
 
 ## Guiding principle
 
