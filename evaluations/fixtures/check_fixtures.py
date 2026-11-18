@@ -22,7 +22,7 @@ def main() -> int:
             cwd=directory, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         output = result.stdout
-        match = re.search(r"FAILED \\(failures=(\\d+)(?:, errors=(\\d+))?\\)", output)
+        match = re.search(r"FAILED \(failures=(\d+)(?:, errors=(\d+))?\)", output)
         failures = (int(match.group(1)) + int(match.group(2) or 0)) if match else 0
         ok = result.returncode == expected_code and failures == expected_failures
         print(f"{'PASS' if ok else 'FAIL'} {name}: exit={result.returncode}, test_failures={failures}; expected exit={expected_code}, failures={expected_failures}")
