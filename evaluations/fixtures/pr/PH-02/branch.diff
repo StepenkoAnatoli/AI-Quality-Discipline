@@ -1,0 +1,8 @@
+diff --git a/src/reminders.py b/src/reminders.py
+index aaaaaaa..bbbbbbb 100644
+--- a/src/reminders.py
++++ b/src/reminders.py
+@@ -1,2 +1,4 @@
+ def should_send_reminder(appointment):
+-    return appointment.status == "booked"
++    return appointment.status == "booked" and not appointment.reminder_sent
