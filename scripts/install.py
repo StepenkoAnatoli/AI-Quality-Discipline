@@ -53,7 +53,7 @@ def reject_symlink_components(path: Path, root: Path) -> None:
             raise InstallError(f"Refusing to follow symlink: {current}")
 
 
-def load_manifest(path: Path) -> Dict[str, dict]:
+def load_manifest(path: Path, scope: str) -> Dict[str, dict]:
     if not path.exists():
         return {}
     if path.is_symlink() or not path.is_file():
@@ -69,7 +69,13 @@ def load_manifest(path: Path) -> Dict[str, dict]:
         candidate = Path(rel)
         if candidate.is_absolute() or ".." in candidate.parts or not isinstance(record, dict):
             raise InstallError(f"Unsafe manifest entry: {rel!r}")
-        if not isinstance(record.get("sha256"), str):
+        target = record.get("target")
+        skill = record.get("skill")
+        expected = TARGETS.get(target, {}).get(scope)
+        if skill not in SKILLS or not expected or candidate.as_posix() != f"{expected}/{skill}/SKILL.md":
+            raise InstallError(f"Manifest entry is outside a known skill install path: {rel!r}")
+        file_hash = record.get("sha256")
+        if not isinstance(file_hash, str) or len(file_hash) != 64 or any(ch not in "0123456789abcdef" for ch in file_hash):
             raise InstallError(f"Malformed manifest hash for: {rel!r}")
     return records
 
@@ -133,7 +139,7 @@ def run_install(args: argparse.Namespace) -> int:
     manifest_path = root / MANIFEST_NAME
     reject_symlink_components(destination_base, root)
     reject_symlink_components(manifest_path, root)
-    records = load_manifest(manifest_path)
+    records = load_manifest(manifest_path, args.scope)
     next_records = dict(records)
     conflicts = 0
     actions = []
@@ -205,7 +211,7 @@ def run_uninstall(args: argparse.Namespace) -> int:
     root = installation_root(args.scope, args.project_dir)
     manifest_path = root / MANIFEST_NAME
     reject_symlink_components(manifest_path, root)
-    records = load_manifest(manifest_path)
+    records = load_manifest(manifest_path, args.scope)
     if not records:
         print("No installer-managed files found.")
         return 0
