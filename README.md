@@ -94,6 +94,10 @@ The foundation phase is complete. The first four canonical Agent Skills are now 
 5. Add an optional MCP server where structured tool access provides demonstrated value.
 6. Expand compatibility based on tested demand and maintenance capacity.
 
+## Installation
+
+See [Installation](docs/INSTALLATION.md) for preview, project/user installs, individual skill selection, conflict handling, uninstall, and manual setup. The installer is `scripts/install.py`; its safety tests are in `tests/test_install.py`.
+
 ## Repository guide
 
 - [BRAIN.md](BRAIN.md) — project brain: architecture, principles, decisions, roadmap, and acceptance criteria.
@@ -101,6 +105,8 @@ The foundation phase is complete. The first four canonical Agent Skills are now 
 - [Agent compatibility](docs/AGENT-COMPATIBILITY.md) — reviewed specification and installation paths.
 - [Quality receipts](docs/QUALITY-RECEIPTS.md) — receipt format and integrity rules.
 - [Canonical skills](skills/) — four independently installable Agent Skills.
+- [Installation guide](docs/INSTALLATION.md) — local installer and manual setup.
+- [Adapters](adapters/) — target-specific discovery paths and limitations.
 
 ## Guiding principle
 
