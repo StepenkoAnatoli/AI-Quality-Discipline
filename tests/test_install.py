@@ -117,6 +117,15 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.project / ".agents/skills/writing-specificity/SKILL.md").exists())
         self.assertFalse((self.project / ".ai-quality-discipline-manifest.json").exists())
 
+    def test_uninstall_is_scoped_to_selected_target(self):
+        self.assertEqual(run_cli(self.repo, self.project, "--target", "codex").returncode, 0)
+        self.assertEqual(run_cli(self.repo, self.project, "--target", "claude").returncode, 0)
+        result = run_cli(self.repo, self.project, "--target", "codex", "--uninstall")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.project / ".agents/skills/code-discipline/SKILL.md").exists())
+        self.assertTrue((self.project / ".claude/skills/code-discipline/SKILL.md").exists())
+        self.assertTrue((self.project / ".ai-quality-discipline-manifest.json").exists())
+
     def test_symlink_destination_is_rejected(self):
         outside = self.root / "outside"
         outside.mkdir()
@@ -133,6 +142,13 @@ class InstallerTests(unittest.TestCase):
         result = run_cli(self.repo, self.project, "--target", "codex", "--uninstall")
         self.assertEqual(result.returncode, 1)
         self.assertIn("outside a known skill install path", result.stderr)
+
+    def test_malformed_manifest_root_is_rejected_cleanly(self):
+        manifest = self.project / ".ai-quality-discipline-manifest.json"
+        manifest.write_text("[]", encoding="utf-8")
+        result = run_cli(self.repo, self.project, "--target", "codex", "--uninstall")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("malformed installer manifest", result.stderr)
 
     def test_invalid_skill_metadata_is_rejected(self):
         path = self.repo / "skills/code-discipline/SKILL.md"
