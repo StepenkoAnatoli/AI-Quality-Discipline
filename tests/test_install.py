@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -123,6 +124,15 @@ class InstallerTests(unittest.TestCase):
         result = run_cli(self.repo, self.project, "--target", "codex", "--skills", "code-discipline")
         self.assertEqual(result.returncode, 1)
         self.assertFalse((outside / "skills").exists())
+
+    def test_tampered_manifest_cannot_target_arbitrary_project_files(self):
+        manifest = self.project / ".ai-quality-discipline-manifest.json"
+        manifest.write_text(json.dumps({"version": 1, "files": {
+            "README.md": {"sha256": "0" * 64, "target": "codex", "skill": "code-discipline"}
+        }}), encoding="utf-8")
+        result = run_cli(self.repo, self.project, "--target", "codex", "--uninstall")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("outside a known skill install path", result.stderr)
 
     def test_invalid_skill_metadata_is_rejected(self):
         path = self.repo / "skills/code-discipline/SKILL.md"
