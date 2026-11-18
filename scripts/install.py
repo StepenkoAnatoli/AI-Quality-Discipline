@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Safe, local-first installer for AI-Quality-Discipline Agent Skills.
-
-Copies canonical SKILL.md files only. It never executes skill content or
-repository scripts, never elevates privileges, and never silently overwrites
-an unmanaged or user-modified file.
-"""
+"""Safe, local-first installer for AI-Quality-Discipline Agent Skills."""
 from __future__ import annotations
 
 import argparse
@@ -62,7 +57,7 @@ def load_manifest(path: Path, scope: str) -> Dict[str, dict]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise InstallError(f"Cannot read installer manifest {path}: {exc}") from exc
-    if payload.get("version") != MANIFEST_VERSION or not isinstance(payload.get("files"), dict):
+    if not isinstance(payload, dict) or payload.get("version") != MANIFEST_VERSION or not isinstance(payload.get("files"), dict):
         raise InstallError(f"Unsupported or malformed installer manifest: {path}")
     records = payload["files"]
     for rel, record in records.items():
@@ -212,12 +207,13 @@ def run_uninstall(args: argparse.Namespace) -> int:
     manifest_path = root / MANIFEST_NAME
     reject_symlink_components(manifest_path, root)
     records = load_manifest(manifest_path, args.scope)
-    if not records:
-        print("No installer-managed files found.")
+    selected_records = {rel: record for rel, record in records.items() if record.get("target") == args.target}
+    if not selected_records:
+        print(f"No installer-managed files found for target {args.target}.")
         return 0
     removable = []
     preserved = []
-    for rel, record in records.items():
+    for rel, record in selected_records.items():
         path = root / Path(rel)
         reject_symlink_components(path, root)
         if not path.exists():
@@ -244,7 +240,11 @@ def run_uninstall(args: argparse.Namespace) -> int:
             except OSError:
                 break
             parent = parent.parent
-    manifest_path.unlink(missing_ok=True)
+    remaining = {rel: record for rel, record in records.items() if record.get("target") != args.target}
+    if remaining:
+        write_manifest(manifest_path, remaining)
+    else:
+        manifest_path.unlink(missing_ok=True)
     print("Uninstall complete. User-modified files were preserved.")
     return 0
 
