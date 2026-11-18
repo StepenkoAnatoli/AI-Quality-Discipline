@@ -143,6 +143,15 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("outside a known skill install path", result.stderr)
 
+    def test_manifest_rejects_non_string_target(self):
+        manifest = self.project / ".ai-quality-discipline-manifest.json"
+        manifest.write_text(json.dumps({"version": 1, "files": {
+            ".agents/skills/code-discipline/SKILL.md": {"sha256": "0" * 64, "target": [], "skill": "code-discipline"}
+        }}), encoding="utf-8")
+        result = run_cli(self.repo, self.project, "--target", "codex", "--uninstall")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Malformed target or skill", result.stderr)
+
     def test_malformed_manifest_root_is_rejected_cleanly(self):
         manifest = self.project / ".ai-quality-discipline-manifest.json"
         manifest.write_text("[]", encoding="utf-8")
