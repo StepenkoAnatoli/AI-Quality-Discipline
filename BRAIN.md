@@ -307,7 +307,7 @@ Exit gate: a new user can install one or all skills without silently losing exis
 ### Phase 3 — Validation and evaluation
 - [ ] Add receipt validator.
 - [ ] Add skill/package validator.
-- [ ] Create representative task suites and rubric.
+- [ ] Create representative task suites and rubric. (Pilot design drafted: 12 tasks, shared rubric, evaluator key; fixtures and calibration runs remain.)
 - [ ] Run with/without comparisons.
 - [ ] Publish results and limitations.
 
@@ -352,7 +352,7 @@ Before reporting an implementation task complete:
 - **2026-11-19 — Agent Skills baseline confirmed:** use the living agentskills.io specification as the canonical format; do not invent a spec version number. Record the review date and re-check before compatibility releases.
 - **2026-11-19 — Initial integration paths documented:** Codex project/user skills use .agents/skills; Claude Code uses .claude/skills; Copilot supports .github/skills, .agents/skills, and .claude/skills with surface-specific differences. Keep one neutral canonical skills/ tree and copy/package it to target locations.
 - **2026-11-19 — First four canonical skills drafted:** Added code-discipline, writing-specificity, source-verification, and pr-hygiene under skills/. Each has a narrow trigger, explicit exclusions, workflow, rules, examples, edge cases, and references. These are instruction drafts; discovery and behavior have not yet been tested in target agents.
-- **2026-11-19 — Local installer and initial adapters implemented:** Added a Python standard-library installer for project/personal scopes, one/all skill selection, dry-run, idempotent copying, conflict preservation, hash-based managed updates, target-scoped uninstall, and symlink/manifest path checks. Added Codex, Claude Code, Copilot, and generic adapter notes plus installation documentation. Fourteen local installer tests pass; live agent discovery/invocation remains unverified.
+- **2026-11-19 — Phase 3 benchmark foundation drafted:** Added an evaluation protocol, shared 100-point rubric, and a 12-task pilot (three tasks per skill) with a separate evaluator scoring key. The pilot explicitly tests ceiling effects, domain-specific regressions, and evidence integrity. These are task designs only: concrete fixtures, calibration, validators, and with/without runs are not yet complete; no effectiveness claim is made.\n- **2026-11-19 — Local installer and initial adapters implemented:** Added a Python standard-library installer for project/personal scopes, one/all skill selection, dry-run, idempotent copying, conflict preservation, hash-based managed updates, target-scoped uninstall, and symlink/manifest path checks. Added Codex, Claude Code, Copilot, and generic adapter notes plus installation documentation. Fourteen local installer tests pass; live agent discovery/invocation remains unverified.
 
 When a decision changes, add a dated entry explaining why. Do not silently rewrite history.
 
