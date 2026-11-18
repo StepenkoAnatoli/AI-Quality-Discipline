@@ -107,3 +107,14 @@ These prompts are intended to be copied verbatim into fresh sessions. Use the sa
 - For each task, save the exact prompt, transcript, final answer/artifact, diff, and command outputs.
 - These task descriptions define expected fixture properties. Build and version concrete fixtures before running the full benchmark.
 - Do not use the same small task repeatedly and mistake repeated runs for task diversity.
+
+
+## Fixture map
+
+The matching synthetic inputs live under `evaluations/fixtures/`:
+- CD-01 to CD-03: `code/CD-01`, `code/CD-02`, `code/CD-03` respectively.
+- WS-01 to WS-03: `writing/WS-01/input.md` through `writing/WS-03/input.md`.
+- SV-01 to SV-03: `source/SV-01/evidence.md` through `source/SV-03/evidence.md`.
+- PH-01 to PH-03: `pr/PH-01` through `pr/PH-03`.
+
+See [fixture execution instructions](../fixtures/RUNNING.md) and [fixture manifest](../fixtures/manifest.json). The code fixtures have documented baseline outcomes; validate those before using them in scored runs.
