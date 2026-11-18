@@ -106,7 +106,10 @@ See [Installation](docs/INSTALLATION.md) for preview, project/user installs, ind
 - [Quality receipts](docs/QUALITY-RECEIPTS.md) — receipt format and integrity rules.
 - [Canonical skills](skills/) — four independently installable Agent Skills.
 - [Installation guide](docs/INSTALLATION.md) — local installer and manual setup.
-- [Adapters](adapters/) — target-specific discovery paths and limitations.\n- [Evaluation suite](evaluations/) — protocol, rubric, pilot tasks, and evaluator scoring key.
+- [Adapters](adapters/) — target-specific discovery paths and limitations.
+- [Evaluation suite](evaluations/) — protocol, rubric, pilot tasks, and evaluator scoring key.
+- [Pilot fixtures](evaluations/fixtures/) — synthetic task inputs, baseline setup, and execution guide.
+- [Validators](scripts/) — receipt and skill-package structural checks.
 
 ## Guiding principle
 
