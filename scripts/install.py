@@ -66,6 +66,8 @@ def load_manifest(path: Path, scope: str) -> Dict[str, dict]:
             raise InstallError(f"Unsafe manifest entry: {rel!r}")
         target = record.get("target")
         skill = record.get("skill")
+        if not isinstance(target, str) or not isinstance(skill, str):
+            raise InstallError(f"Malformed target or skill in manifest entry: {rel!r}")
         expected = TARGETS.get(target, {}).get(scope)
         if skill not in SKILLS or not expected or candidate.as_posix() != f"{expected}/{skill}/SKILL.md":
             raise InstallError(f"Manifest entry is outside a known skill install path: {rel!r}")
