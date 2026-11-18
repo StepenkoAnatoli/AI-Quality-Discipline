@@ -83,7 +83,7 @@ Keep a component only when evidence shows meaningful improvement and acceptable 
 
 ## Current status
 
-The repository currently contains this README and the quality-receipt specification. The skills, installer, validators, adapters, MCP server, and benchmark suite are planned work; do not describe them as implemented until they exist and have been tested.
+The foundation phase is complete: the repository now contains the project brain, canonical quality principles, the quality-receipt specification, and a dated compatibility record for the Agent Skills format and initial Codex, Claude Code, and Copilot paths. The four skills, installer, validators, adapters, MCP server, and benchmark suite remain planned work; do not describe them as implemented until they exist and have been tested.
 
 ## Project roadmap
 
@@ -97,6 +97,8 @@ The repository currently contains this README and the quality-receipt specificat
 ## Repository guide
 
 - [BRAIN.md](BRAIN.md) — project brain: architecture, principles, decisions, roadmap, and acceptance criteria.
+- [Core quality principles](core/PRINCIPLES.md) — shared principles for every component.
+- [Agent compatibility](docs/AGENT-COMPATIBILITY.md) — reviewed specification and installation paths.
 - [Quality receipts](docs/QUALITY-RECEIPTS.md) — receipt format and integrity rules.
 
 ## Guiding principle
