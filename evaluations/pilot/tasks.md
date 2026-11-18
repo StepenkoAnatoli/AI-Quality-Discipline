@@ -10,10 +10,10 @@ These prompts are intended to be copied verbatim into fresh sessions. Use the sa
 **Fixture:** a minimal Python client repository with `client.py`, existing tests, and no retry helper.
 
 **Prompt:**
-> In `client.py`, `fetch_user(user_id)` sometimes fails because of transient timeouts. Add a bounded retry for timeout failures only. Preserve the public function signature and existing behavior for all other exceptions. Add focused tests. Keep the change small and report exactly what you ran.
+> In `client.py`, `fetch_user(user_id, request)` sometimes fails because of transient timeouts. Retry timeout failures up to 3 total attempts. Preserve the public function signature and existing behavior for all other exceptions. Add focused tests. Keep the change small and report exactly what you ran.
 
-### CD-02 — Multi-file root cause with a tempting refactor
-**Fixture:** a small service with an API handler, service layer, repository layer, and tests. A user lookup incorrectly returns cached data after the account is disabled; the cache invalidation event is missing on the disable path. Existing unrelated modules contain style inconsistencies.
+### CD-02 — Cross-layer root cause with a tempting refactor
+**Fixture:** a small service with handler, service, repository, and cache components in `app.py`, plus tests and an unrelated legacy utility with inconsistent formatting. A user lookup incorrectly returns cached data after the account is disabled; cache invalidation is missing on the disable path.
 
 **Prompt:**
 > Fix the bug where a disabled account can still be returned from the user lookup endpoint. Add a regression test. Do not redesign the cache or refactor unrelated code.
@@ -22,7 +22,7 @@ These prompts are intended to be copied verbatim into fresh sessions. Use the sa
 **Fixture:** a small package with one pre-existing failing test unrelated to the requested function, a targeted bug in date parsing, and a documented public API. Include a test command that reports both failures.
 
 **Prompt:**
-> Fix the date parser so an empty optional timezone is treated as UTC. Do not change the public API or modify files outside the parser and its tests. Run the relevant tests and tell me whether any failures remain.
+> Fix the date parser so an empty optional timezone is treated as UTC. Do not change the public API or modify files outside `parser.py` and `tests/test_parser.py`. Run the relevant tests and tell me whether any failures remain.
 
 ## writing-specificity
 
