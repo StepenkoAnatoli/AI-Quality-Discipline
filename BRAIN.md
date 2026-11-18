@@ -295,14 +295,14 @@ Do not claim benchmark wins from anecdotes.
 Exit gate: each skill has clear metadata, narrow scope, useful examples/tests, and no unsupported capability claims. The four initial SKILL.md files are drafted and structurally reviewed; live discovery/invocation tests and automated conformance validation remain for the validation phase.
 
 ### Phase 2 — Adoption
-- [ ] Build installer with dry-run and safe conflict handling.
-- [ ] Add Codex support.
-- [ ] Add Claude Code support.
-- [ ] Add GitHub Copilot support.
-- [ ] Add generic/manual fallback guidance.
-- [ ] Test installation, repeat installation, conflicts, and removal.
+- [x] Build installer with dry-run and safe conflict handling.
+- [x] Add Codex support.
+- [x] Add Claude Code support.
+- [x] Add GitHub Copilot support.
+- [x] Add generic/manual fallback guidance.
+- [x] Test installation, repeat installation, conflicts, and removal.
 
-Exit gate: a new user can install one or all skills without silently losing existing files.
+Exit gate: a new user can install one or all skills without silently losing existing files. The local installer and target-path adapters are implemented; 13 automated installer tests pass. Live discovery/invocation testing in Codex, Claude Code, and Copilot remains unverified and is not claimed.
 
 ### Phase 3 — Validation and evaluation
 - [ ] Add receipt validator.
@@ -352,6 +352,7 @@ Before reporting an implementation task complete:
 - **2026-11-19 — Agent Skills baseline confirmed:** use the living agentskills.io specification as the canonical format; do not invent a spec version number. Record the review date and re-check before compatibility releases.
 - **2026-11-19 — Initial integration paths documented:** Codex project/user skills use .agents/skills; Claude Code uses .claude/skills; Copilot supports .github/skills, .agents/skills, and .claude/skills with surface-specific differences. Keep one neutral canonical skills/ tree and copy/package it to target locations.
 - **2026-11-19 — First four canonical skills drafted:** Added code-discipline, writing-specificity, source-verification, and pr-hygiene under skills/. Each has a narrow trigger, explicit exclusions, workflow, rules, examples, edge cases, and references. These are instruction drafts; discovery and behavior have not yet been tested in target agents.
+- **2026-11-19 — Local installer and initial adapters implemented:** Added a Python standard-library installer for project/personal scopes, one/all skill selection, dry-run, idempotent copying, conflict preservation, hash-based managed updates, target-scoped uninstall, and symlink/manifest path checks. Added Codex, Claude Code, Copilot, and generic adapter notes plus installation documentation. Thirteen local installer tests pass; live agent discovery/invocation remains unverified.
 
 When a decision changes, add a dated entry explaining why. Do not silently rewrite history.
 
