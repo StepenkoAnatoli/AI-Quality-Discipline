@@ -286,13 +286,13 @@ Do not claim benchmark wins from anecdotes.
 - [x] Record the review date and the fact that the public specification has no conventional semantic version in the reviewed document.
 
 ### Phase 1 — Core skills
-- [ ] Implement code-discipline.
-- [ ] Implement writing-specificity.
-- [ ] Implement source-verification.
-- [ ] Implement pr-hygiene.
-- [ ] Review scope, triggers, length, overlap, and examples.
+- [x] Implement code-discipline.
+- [x] Implement writing-specificity.
+- [x] Implement source-verification.
+- [x] Implement pr-hygiene.
+- [x] Review scope, triggers, length, overlap, and examples.
 
-Exit gate: each skill has clear metadata, narrow scope, useful examples/tests, and no unsupported capability claims.
+Exit gate: each skill has clear metadata, narrow scope, useful examples/tests, and no unsupported capability claims. The four initial SKILL.md files are drafted and structurally reviewed; live discovery/invocation tests and automated conformance validation remain for the validation phase.
 
 ### Phase 2 — Adoption
 - [ ] Build installer with dry-run and safe conflict handling.
@@ -351,6 +351,7 @@ Before reporting an implementation task complete:
 - **2026-11-18 — Evaluation before claims:** compare with/without conditions and publish methodology before claiming effectiveness.
 - **2026-11-19 — Agent Skills baseline confirmed:** use the living agentskills.io specification as the canonical format; do not invent a spec version number. Record the review date and re-check before compatibility releases.
 - **2026-11-19 — Initial integration paths documented:** Codex project/user skills use .agents/skills; Claude Code uses .claude/skills; Copilot supports .github/skills, .agents/skills, and .claude/skills with surface-specific differences. Keep one neutral canonical skills/ tree and copy/package it to target locations.
+- **2026-11-19 — First four canonical skills drafted:** Added code-discipline, writing-specificity, source-verification, and pr-hygiene under skills/. Each has a narrow trigger, explicit exclusions, workflow, rules, examples, edge cases, and references. These are instruction drafts; discovery and behavior have not yet been tested in target agents.
 
 When a decision changes, add a dated entry explaining why. Do not silently rewrite history.
 
