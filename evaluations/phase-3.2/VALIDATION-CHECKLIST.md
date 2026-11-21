@@ -1,6 +1,6 @@
 # Phase 3.2 — Validation checklist (v3, 2026-11-21)
 
-Status words: **LOCAL** = tested on the operator PC (Windows, Python 3.14.7); **CI** = tested in GitHub Actions; **AUDIT** = independently audited; **NOT TESTED**; **BLOCKED**. Nothing is CI-tested or audited yet: the branch changes are not pushed.
+Status words: **LOCAL** = tested on the operator PC (Windows, Python 3.14.7); **CI** = tested in GitHub Actions; **AUDIT** = independently audited; **NOT TESTED**; **BLOCKED**. CI: GitHub Actions runs 44864449784 and 44864453346 on commit `8680c4c`, both green; they ran `test_harness.py`, `test_scoring.py` and `test_sandbox.py`. Nothing is independently audited yet.
 
 | # | Requirement | Evidence | Status |
 |---|---|---|---|
@@ -13,7 +13,7 @@ Status words: **LOCAL** = tested on the operator PC (Windows, Python 3.14.7); **
 | V7 | Syntax error, hang, wrong answer → VALID failure; valid zero ≠ invalid | `test_scoring.py` ValidOutcomeTests | LOCAL |
 | V8 | Only the mutable file and additive tests are scored; agent tests never invalidate | `test_scoring.py` | LOCAL |
 | V9 | Candidate code is refused without a sandbox; unpinned image refused | `test_scoring.py` CliTests | LOCAL |
-| V10 | Sandbox: no network, read-only code, non-root, no host env, no evaluator files, containers removed | `test_sandbox.py` | **NOT TESTED** (no Docker locally; CI job added, not run) |
+| V10 | Sandbox: no network, read-only code, non-root, no host env, no evaluator files, containers removed | `test_sandbox.py` | CI (3/3 OK, no skips; synthetic probe). Not run on the real scoring host yet; `score-all.sh` enforces it there |
 | V11 | In-process tampering is flagged for review (cannot be prevented) | `test_scoring.py` ResidualRiskTests | LOCAL |
 | V12 | Missing, invalid or unevaluated runs → INCOMPLETE; duplicate valid runs → error; reruns replace invalid attempts | `test_harness.py` AnalyzeTests | LOCAL |
 | V13 | Documentation scores cannot raise the primary outcome | `test_harness.py` AnalyzeTests | LOCAL |

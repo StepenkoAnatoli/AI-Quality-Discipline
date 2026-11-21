@@ -309,7 +309,7 @@ Exit gate: a new user can install one or all skills without silently losing exis
 - [x] Add skill/package validator (structural checks; not full Agent Skills spec conformance).
 - [x] Create representative pilot task suite and rubric (12 prompts, evaluator key, synthetic fixtures, fixture manifest, and run instructions). Full 10-task-per-skill suite remains future work.
 - [ ] Run with/without comparisons (not started; validate fixture baselines and CI first).
-- [ ] Phase 3.2: does code-discipline make Claude and Grok build better working software? Specification v3 in `evaluations/phase-3.2/`: model × skill design (skill effect within model only), revised NEW-01/02/03 prompts, fail-closed hidden scoring with inventories and a Docker sandbox, fail-closed analysis. Tested offline only. NOT READY: sandbox not demonstrated, launcher never executed, no Claude/Grok run yet (needs host and keys from the user). Next: the 2×2 smoke test in `PROMPT-SMOKE-TEST.md`.
+- [ ] Phase 3.2: does code-discipline make Claude and Grok build better working software? Specification v3 in `evaluations/phase-3.2/`: model × skill design (skill effect within model only), revised NEW-01/02/03 prompts, fail-closed hidden scoring with inventories and a Docker sandbox, fail-closed analysis. Tested locally and in CI (scoring sandbox demonstrated on the CI runner, 2026-11-21). NOT READY: launcher never executed, no Claude/Grok run yet (needs host and keys from the user). Next: the 2×2 smoke test in `PROMPT-SMOKE-TEST.md`.
 - [ ] Publish results and limitations.
 
 Exit gate: validators are tested, and benchmark claims are reproducible from published methodology.

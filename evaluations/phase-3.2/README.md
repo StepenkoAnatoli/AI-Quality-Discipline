@@ -2,7 +2,7 @@
 
 A controlled comparison of the same coding agent with and without the `code-discipline` skill, run separately for Claude and for Grok, on three synthetic tasks. The primary outcome is objective: hidden tests run against the code each agent leaves behind.
 
-**Status: NOT READY for a pilot.** The scoring code has been corrected and tested offline. The scoring sandbox, the run launcher and every live model run have **not** been executed. See [SPECIFICATION.md §1 and §10](SPECIFICATION.md#1-status).
+**Status: NOT READY for a pilot.** The scoring code has been corrected and tested locally and in CI, including the Docker scoring sandbox (synthetic probes). The run launcher and every live model run have **not** been executed. See [SPECIFICATION.md §1 and §10](SPECIFICATION.md#1-status).
 
 | File | Purpose |
 |---|---|

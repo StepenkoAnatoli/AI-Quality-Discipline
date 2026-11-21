@@ -10,15 +10,15 @@
 
 ## 1. Status
 
-Only rows marked *tested locally* were run, on Windows with Python 3.14.7. Nothing has been tested in CI, independently audited or run against a model.
+Local runs were on Windows with Python 3.14.7. CI = GitHub Actions on `ubuntu-latest`, commit `8680c4c`, runs 44864449784 (push) and 44864453346 (PR #1), both green. Nothing has been independently audited or run against a model.
 
 | Component | Implemented | Tested locally | Tested in CI | Independently audited | Status |
 |---|---|---|---|---|---|
-| Tasks NEW-01/02/03, revised prompts | yes | baseline tests pass; prompt/workspace hashes pinned by a test | no | no | ready for a smoke test |
-| Hidden oracles (41 checks), references, 11 mutants (private pack) | yes | `check_oracles.py`: ORACLES OK, all mutants killed | never (private) | no | ready |
-| Fail-closed scoring (`score_run.py`, `run_checks.py`, inventories) | yes | 30 adversarial tests (`test_scoring.py`) | no | no | ready apart from the sandbox |
-| Docker scoring sandbox | yes | **no** (no Docker on the operator PC; tests skip) | job added, not yet run | no | **NOT DEMONSTRATED → hidden evaluation of real agent code is NOT READY** |
-| Fail-closed analysis (`analyze.py`), model-aware schedule | yes | unit tests (`test_harness.py`) | no | no | ready |
+| Tasks NEW-01/02/03, revised prompts | yes | baseline tests pass; prompt/workspace hashes pinned by a test | yes (hash test) | no | ready for a smoke test |
+| Hidden oracles (41 checks), references, 11 mutants (private pack) | yes | `check_oracles.py`: ORACLES OK, all mutants killed | never (private) | no | ready; re-run on the scoring host |
+| Fail-closed scoring (`score_run.py`, `run_checks.py`, inventories) | yes | 30 adversarial tests (`test_scoring.py`) | yes, 30 OK | no | ready |
+| Docker scoring sandbox | yes | no (no Docker on the operator PC; tests skip) | yes, 3/3 isolation probes OK, no skips (`python:3.12-slim` pinned by digest) | no | **demonstrated on the CI runner**; `score-all.sh` re-runs the probes on the scoring host and refuses to score if they fail or skip |
+| Fail-closed analysis (`analyze.py`), model-aware schedule | yes | unit tests (`test_harness.py`) | yes | no | ready |
 | OpenCode run launcher (`launch-run.sh`, `preflight.sh`, driver, checks) | yes, model now a parameter | Python parts unit-tested with a fake server; shell syntax only | no | no | **never executed** |
 | Live Claude / Grok runs | — | — | — | — | **not executed** (§9) |
 
@@ -118,7 +118,7 @@ The boundary is a fresh Docker container per test with `--network none --read-on
 | Read the hidden test source of the task being scored | **Yes** | In-process unit tests must import alongside the code they test. This cannot feed back into the agent's work: the agent session has ended, and there is no network or persistence |
 | Forge its own result in-process (for example by monkeypatching `unittest`, or reading the nonce from memory) | **Yes, detectable only** | Naive forging (no nonce, wrong ID, crash, extra files) is rejected by tests. Deliberate in-process tampering cannot be prevented. The code is scanned for constructs a solution has no reason to use (`unittest`, `sys.modules`, `os._exit`, `inspect`, `gc`, `subprocess`, `socket`, …); a match forces a human tamper review of the diff, which is small (one file) |
 
-**Status: NOT DEMONSTRATED.** The isolation tests were skipped on the operator PC (no Docker, no WSL). `score-all.sh` refuses to score unless `test_sandbox.py` passes, with no skips, on the scoring host. Until then, hidden evaluation of real agent output is **NOT READY**. Directory permissions alone are not relied on.
+**Status: demonstrated in CI, with synthetic probes only.** On 2026-11-21 the probe candidate in `test_sandbox.py` passed on GitHub's Ubuntu runner (runs 44864449784 and 44864453346): it found no network, no DNS, no writable code, no root, no host environment variable and no evaluator files. The tests skip on the operator PC, which has no Docker. The boundary must also hold on the host that does the real scoring, so `score-all.sh` re-runs the probes there and refuses to score if they fail or skip. Directory permissions alone are not relied on.
 
 ## 8. Interpretation
 
@@ -130,11 +130,11 @@ No Claude or Grok run was executed for v3. This environment has no xAI provider,
 
 ## 10. Readiness
 
-**NOT READY.** No known defect remains in the scoring code. The blockers are that nothing on the execution path has been demonstrated:
+**NOT READY.** No known defect remains in the scoring code, and the scoring sandbox has been demonstrated in CI. The blockers are that the agent-run path has never been executed:
 
 | # | Blocker | Resolved by |
 |---|---|---|
-| B1 | Docker isolation not demonstrated | `test_sandbox.py` passing with no skips on the scoring host, or in CI once the branch is pushed (needs approval) |
+| B1 | ~~Docker isolation not demonstrated~~ Demonstrated in CI on 2026-11-21; it must also pass on the real scoring host | Enforced automatically by `score-all.sh` |
 | B2 | Launcher never executed against OpenCode, Claude or Grok | Host, OpenCode install, SMOKE-task runs per model (runtime gates in PROMPT-SMOKE-TEST.md) |
 | B3 | No model access | The user supplies spend-capped Anthropic and xAI keys and the exact model IDs and variants |
 | B4 | Smoke test not run or reviewed | The four-run 2×2 on NEW-02, reviewed before the pilot is approved |
