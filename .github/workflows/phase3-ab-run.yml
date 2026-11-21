@@ -1,0 +1,811 @@
+name: Phase 3.2 NEW-02 A/B run (2 scored model runs)
+
+# Manual only. SENDS REAL MODEL REQUESTS AND SPENDS MONEY.
+#
+# Exactly two scored agent runs of task NEW-02 with anthropic/claude-opus-5-5#medium
+# through the unchanged Phase 3.2 harness of phase-3/benchmark-foundation at
+# aaf3e25: control (no skill) and treatment (code-discipline, attached through
+# the API: api-attachment mode), in the sealed random order schedule.py draws.
+# No rerun, no SMOKE call, no other model request. Hidden scoring runs only if
+# BOTH runs are valid. An invalid run (provider or API error, isolation,
+# activation) stops the job before any scoring.
+#
+# Repository secrets (created by the owner; never printed, never in a script file):
+#   ANTHROPIC_API_KEY       the owner's existing key. Steps: "Check", "Seal" (written
+#                           to a 0600 operator file), "Package" (credential scan only).
+#   AQD_NEW02_HIDDEN_B64    NEW-02 hidden tests + inventory (build_hidden_pack.py).
+#                           Steps: "Check" (verified in memory), "Decode" (after both runs).
+#   AQD_RESULTS_PASSPHRASE  >= 32 characters. Steps: "Check" (length), "Package".
+#
+# What leaves the runner:
+#   * public: this file, the job logs and the job summary. They hold fixed status
+#     lines only: no harness output, transcript, code, diff, score or test name.
+#   * one artifact, encrypted on the runner (OpenPGP symmetric, AES-256), 1-day
+#     retention. The repository is public: ANYONE WITH READ ACCESS (any signed-in
+#     GitHub user) CAN DOWNLOAD THE ENCRYPTED FILE; only a holder of the
+#     passphrase can decrypt it.
+# Everything else (operator store, hidden tests, OpenCode data) is discarded
+# with the runner VM.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type RUN-NEW02-AB to start two real model runs (spends money)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase3-ab-run
+  cancel-in-progress: false
+
+env:
+  AQD_TEST_BRANCH: phase-3/benchmark-foundation
+  AQD_TEST_SHA: aaf3e25bb186a3de85973f5132c45137fd188c32
+  AQD_MODEL: "anthropic/claude-opus-5-5#medium"
+  AQD_ACTIVATION_MODE: api-attachment
+  AQD_OPERATOR: /home/runner/aqd-operator
+  # The image test_sandbox.py passed with in run 44918883660 (python:3.12-slim on 2026-11-21).
+  AQD_SANDBOX_IMAGE: python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  ab-run:
+    if: github.repository == 'StepenkoAnatoli/AI-Quality-Discipline'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out phase-3/benchmark-foundation (no credentials persisted)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: phase-3/benchmark-foundation
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Write the workflow helpers (no secrets)
+        run: |
+          set -euo pipefail
+          umask 077
+          CI="$RUNNER_TEMP/aqd"
+          mkdir -p "$CI/logs" "$CI/status" "$CI/bin" "$CI/private" "$CI/upload"
+          cat >"$CI/env.sh" <<'EOF'
+          # Sourced by every later step. Never prints the environment.
+          set -euo pipefail
+          umask 077
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          CI="$RUNNER_TEMP/aqd"; LOGS="$CI/logs"; STATUS="$CI/status"; BIN="$CI/bin"; PRIV="$CI/private"; UP="$CI/upload"
+          H="$GITHUB_WORKSPACE/evaluations/phase-3.2/harness"
+          SEALED="$AQD_OPERATOR/sealed"; CAPTURES="$AQD_OPERATOR/captures"; EVALUATOR="$AQD_OPERATOR/evaluator"
+          AGENTS="aqd-a aqd-b aqd-eval"
+          # note: one public status line (log and status/public.log). Fixed text only.
+          note() { printf '%s\n' "$*"; printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" >>"$STATUS/public.log"; }
+          die() { note "STOP: $*"; exit 1; }
+          mark() { printf '%s\n' "$2" >"$STATUS/$1"; }
+          EOF
+
+          cat >"$CI/bin/hidden_pack.py" <<'EOF'
+          """Verify, and optionally extract, the NEW-02 hidden-test pack held in
+          AQD_HIDDEN_B64 (base64 of a tar.xz). Messages never quote pack content."""
+          import base64, binascii, hashlib, io, lzma, os, sys, tarfile
+
+          EXPECTED = {
+              "hidden_tests/NEW-02/hidden_tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "hidden_tests/NEW-02/hidden_tests/slow_db.py": "2d6de928cf2dd6b6bc7fd4e2e504428205c4282bb6404b5b2ae87033679d7d62",
+              "hidden_tests/NEW-02/hidden_tests/test_new02_hidden.py": "db4b69549ee3b16c64f957da89673377347a80b035563761a286503ddfcfe4ab",
+              "inventory/NEW-02.json": "8dc45e6b32a56a6548df51146e73385bae971bcfa4017843ec778e8a4771c9bd",
+          }
+
+
+          def fail(message):
+              print(f"hidden pack: {message}", file=sys.stderr)
+              sys.exit(1)
+
+
+          def load():
+              raw = os.environ.get("AQD_HIDDEN_B64", "")
+              if not raw.strip():
+                  fail("secret AQD_NEW02_HIDDEN_B64 is empty")
+              try:
+                  data = base64.b64decode("".join(raw.split()), validate=True)
+              except (binascii.Error, ValueError):
+                  fail("secret is not valid base64")
+              if len(data) > 1_000_000:
+                  fail("pack is too large")
+              files = {}
+              try:
+                  with tarfile.open(fileobj=io.BytesIO(data), mode="r:xz") as tar:
+                      for member in tar.getmembers():
+                          if not member.isreg():
+                              fail("pack holds a member that is not a regular file")
+                          if member.name not in EXPECTED or member.name in files:
+                              fail("pack holds an unexpected or duplicate member")
+                          content = tar.extractfile(member).read()
+                          if hashlib.sha256(content).hexdigest() != EXPECTED[member.name]:
+                              fail("a member differs from its pinned SHA-256")
+                          files[member.name] = content
+              except (tarfile.TarError, lzma.LZMAError, EOFError, OSError):
+                  fail("pack is not a readable tar.xz")
+              if set(files) != set(EXPECTED):
+                  fail("pack lacks a required member")
+              return files
+
+
+          def main():
+              mode = sys.argv[1] if len(sys.argv) > 1 else ""
+              files = load()
+              if mode == "verify":
+                  print("hidden pack: verified in memory (4 members, pinned hashes match)")
+                  return
+              if mode != "extract" or len(sys.argv) != 3:
+                  fail("usage: hidden_pack.py verify | extract DEST")
+              dest = sys.argv[2]
+              if os.listdir(dest):
+                  fail("destination is not empty")
+              os.umask(0o077)
+              for name, content in sorted(files.items()):
+                  path = os.path.join(dest, *name.split("/"))
+                  os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+                  fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                  with os.fdopen(fd, "wb") as handle:
+                      handle.write(content)
+              print("hidden pack: extracted to the operator-only evaluator directory")
+
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          cat >"$CI/bin/check_runs.py" <<'EOF'
+          """After run-all.sh: are both runs valid, identical in setup, and correctly
+          activated? Prints fixed check names with PASS/FAIL only; details go to the
+          JSON report (encrypted bundle). Exit 0 only when every check passes."""
+          import hashlib, json, os, sys
+
+          MODEL = "anthropic/claude-opus-5-5#medium"
+          PIN = {
+              "prompt_sha256": "9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f",
+              "workspace_sha256": "cf0fea1a45be98860c0121b5e3b9d6b066bcf6530128140eef85e7067b2d2ed5",
+              "global_config_sha256": "978ef1603067c33e0ffc0bcda430e58e92d6587005579d663f18e460b4d86160",
+          }
+          SKILL_SHA256 = "d050d00fa8564b08cac71ca221368568420c731c830ef19667a760d5f7ebc842"
+          SAME = ("model", "model_provider", "model_id", "model_variant", "interface", "activation_mode", "agent",
+                  "timeout_seconds", "prompt_sha256", "workspace_sha256", "global_config_sha256",
+                  "opencode_install_tree_sha256", "task")
+          checks = []
+
+
+          def check(name, ok):
+              checks.append({"check": name, "ok": bool(ok)})
+
+
+          def load(path):
+              try:
+                  with open(path, encoding="utf-8") as handle:
+                      data = json.load(handle)
+              except (OSError, ValueError):
+                  return None
+              return data if isinstance(data, dict) else None
+
+
+          def run(schedule_path, captures, evaluator):
+              schedule = load(schedule_path) or {}
+              runs = schedule.get("runs") or []
+              check("schedule: exactly 2 runs, no rerun entries", len(runs) == 2 and not any("replaces_slot" in r for r in runs))
+              check("schedule: design is 1 model x NEW-02 x 1 repetition",
+                    schedule.get("design") == {"models": [MODEL], "tasks": ["NEW-02"], "repetitions": 1,
+                                               "groups": ["control", "treatment"]})
+              check("schedule: one control and one treatment run, NEW-02, pinned model",
+                    sorted(str(r.get("group")) for r in runs) == ["control", "treatment"]
+                    and all(r.get("task") == "NEW-02" and r.get("model") == MODEL for r in runs))
+              by_group = {r.get("group"): r for r in runs if isinstance(r, dict)}
+              records, sessions = {}, {}
+              for group in ("control", "treatment"):
+                  r = by_group.get(group)
+                  if not r or not isinstance(r.get("run_id"), str):
+                      check(f"{group}: present in the schedule", False)
+                      continue
+                  cap = os.path.join(captures, r["run_id"])
+                  status = load(os.path.join(cap, "run-status.json")) or {}
+                  record = load(os.path.join(cap, "run-record.json")) or {}
+                  api = load(os.path.join(cap, "api-checks.json")) or {}
+                  export = load(os.path.join(cap, "export-checks.json")) or {}
+                  prompt = load(os.path.join(cap, "driver", "prompt-request.json")) or {}
+                  sessions[group] = load(os.path.join(cap, "driver", "session-request.json")) or {}
+                  records[group] = record
+                  check(f"{group}: run-status valid (harness gates G1-G5)", status.get("valid") is True)
+                  check(f"{group}: run record names the pinned model, variant, interface, agent, timeout, activation mode",
+                        record.get("model") == MODEL and record.get("model_variant") == "medium"
+                        and record.get("interface") == "opencode 2.3.2" and record.get("agent") == "build"
+                        and record.get("timeout_seconds") == 2700 and record.get("activation_mode") == "api-attachment")
+                  check(f"{group}: prompt, workspace and global-config SHA-256 equal the pinned values",
+                        all(record.get(k) == v for k, v in PIN.items()))
+                  check(f"{group}: prompt text sent equals the pinned TASK.md",
+                        isinstance(prompt.get("text"), str)
+                        and hashlib.sha256(prompt["text"].encode("utf-8")).hexdigest() == PIN["prompt_sha256"])
+                  check(f"{group}: api checks exited 0", api.get("exit_code") == 0)
+                  check(f"{group}: every assistant message used the pinned model, no provider error",
+                        export.get("model_ok") is True and not export.get("errors"))
+                  found = (api.get("skills") or {}).get("code_discipline")
+                  if group == "control":
+                      check("control: run record says no skill installed", record.get("skill") == {"installed": False, "sha256": None})
+                      check("control: server offered no code-discipline skill", found is None)
+                      check("control: prompt request carried no skill attachment", set(prompt) == {"text"})
+                      check("control: no code-discipline text anywhere in the session",
+                            export.get("activation") == "NOT_APPLICABLE" and export.get("contamination") is False
+                            and export.get("sentinel_occurrences") == 0)
+                  else:
+                      root = f"/aqd/{r.get('env')}/runs/{r['run_id']}/"
+                      check("treatment: run record names the canonical skill SHA-256 (pinned)",
+                            record.get("skill") == {"installed": True, "sha256": SKILL_SHA256})
+                      check("treatment: server offered code-discipline from inside this run only",
+                            isinstance(found, dict) and str(found.get("path", "")).startswith(root)
+                            and found.get("has_sentinel") is True)
+                      check("treatment: prompt request attached exactly the code-discipline skill",
+                            set(prompt) == {"text", "skills"} and prompt.get("skills") == [{"id": "code-discipline"}])
+                      check("treatment: skill text confirmed inside the session", export.get("activation") == "CONFIRMED")
+              if len(records) == 2:
+                  a, b = records["control"], records["treatment"]
+                  check("both runs: identical model, interface, settings, prompt, workspace, config and OpenCode install",
+                        all(a.get(k) is not None and a.get(k) == b.get(k) for k in SAME))
+                  sa, sb = sessions["control"], sessions["treatment"]
+                  check("both runs: identical session settings (model, variant, agent, title)",
+                        all(sa.get(k) is not None and sa.get(k) == sb.get(k) for k in ("model", "agent", "title")))
+              check("evaluator directory still empty after both runs", os.path.isdir(evaluator) and not os.listdir(evaluator))
+
+
+          def main():
+              schedule_path, captures, evaluator, out = sys.argv[1:5]
+              try:
+                  run(schedule_path, captures, evaluator)
+              except Exception as exc:  # report the type only: messages could quote data
+                  check(f"checker completed (failed with {type(exc).__name__})", False)
+              ok = bool(checks) and all(c["ok"] for c in checks)
+              with open(out, "w", encoding="utf-8") as handle:
+                  json.dump({"all_passed": ok, "checks": checks}, handle, indent=2)
+              for c in checks:
+                  print(("PASS  " if c["ok"] else "FAIL  ") + c["check"])
+              sys.exit(0 if ok else 1)
+
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          cat >"$CI/bin/bundle.py" <<'EOF'
+          """Build the results tar.gz from an allowlist of operator files, after a
+          credential scan. A file that is not a regular UTF-8 text file, is too large,
+          or shows any representation of the API key the scan can recognise is
+          WITHHELD whole (never redacted and kept). Prints counts only."""
+          import base64, binascii, bz2, hashlib, html, io, json, lzma, os, re, sys, tarfile, time, urllib.parse, zlib
+
+          OPS = os.environ["AQD_OPERATOR"]
+          CI = os.path.join(os.environ["RUNNER_TEMP"], "aqd")
+          KEY = os.environ.get("AQD_SCAN_KEY", "")
+          MAX_FILE, MAX_TOTAL, MAX_OUT = 25 * 2**20, 300 * 2**20, 50 * 2**20
+          CAPTURE_FILES = {
+              "run-status.json", "run-record.json", "api-checks.json", "export-checks.json", "verify-pre.json",
+              "verify-post.json", "pristine-check.json", "home-config-listing.pre.txt", "home-config-listing.txt",
+              "debug-paths.txt", "launcher.log", "server-info.json", "serve.log", "diff.patch", "cli-export.json",
+              "cli-export.err", "cli-export.exit", "hidden-score.json",
+          }
+          CAPTURE_DIRS = ("driver", "project-final")  # never opencode-data (database, server logs)
+          SEALED_FILES = {
+              "schedule.json", "preflight.json", "preflight-catalog-anthropic.json", "preflight-serve-anthropic.log",
+              "opencode-install.json", "activation-mode", "sandbox-tests.log", "pristine-extra.sha256", "STOP",
+          }
+
+          WINDOW = 16 if len(KEY) >= 16 else len(KEY)
+          W = {KEY[i:i + WINDOW] for i in range(len(KEY) - WINDOW + 1)} if KEY else set()
+          WB = {w.encode() for w in W}
+          WHEX = {w.encode().hex().encode() for w in W}
+          W16 = {w.encode("utf-16-le") for w in W}
+          GENERIC = re.compile(r"sk-ant-[A-Za-z0-9_-]{6,}")
+          GENERIC_B = re.compile(rb"sk-ant-[A-Za-z0-9_-]{6,}")
+          B64_RUN = re.compile(r"[A-Za-z0-9+/_-]{20,}")
+          HEX_RUN = re.compile(r"[0-9A-Fa-f]{32,}")
+          JOIN_NOISE = re.compile(r"[\s\"'`+,\\]")
+
+
+          def hit_bytes(b):
+              if GENERIC_B.search(b) or any(w in b for w in WB) or any(w in b for w in W16):
+                  return True
+              low = b.lower()
+              return any(h in low for h in WHEX)
+
+
+          def hit_text(t):
+              return GENERIC.search(t) is not None or any(w in t for w in W)
+
+
+          def text_views(t):
+              yield t
+              u = t
+              for _ in range(3):
+                  u = urllib.parse.unquote(u)
+              yield u
+              yield html.unescape(t)
+              e = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), t)
+              e = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), e).replace("\\/", "/")
+              yield e
+              yield JOIN_NOISE.sub("", e)  # split, concatenated or wrapped strings
+              yield t[::-1]
+
+
+          def decompressed(b):
+              try:
+                  if b[:2] == b"\x1f\x8b" or b[:1] == b"\x78":
+                      return [zlib.decompressobj(47).decompress(b, MAX_OUT)]
+                  if b[:3] == b"BZh":
+                      return [bz2.BZ2Decompressor().decompress(b, MAX_OUT)]
+                  if b[:6] == b"\xfd7zXZ\x00":
+                      return [lzma.LZMADecompressor().decompress(b, MAX_OUT)]
+              except (OSError, ValueError, EOFError, zlib.error, lzma.LZMAError):
+                  pass
+              return []
+
+
+          def decoded_blobs(t):
+              for m in B64_RUN.finditer(t):
+                  s = m.group(0).translate(str.maketrans("-_", "+/"))
+                  for shift in range(4):
+                      part = s[shift:]
+                      part = part[:len(part) - len(part) % 4]
+                      if len(part) < 16:
+                          continue
+                      try:
+                          yield base64.b64decode(part, validate=True)
+                      except (binascii.Error, ValueError):
+                          pass
+              for m in HEX_RUN.finditer(t):
+                  for shift in (0, 1):
+                      part = m.group(0)[shift:]
+                      part = part[:len(part) - len(part) % 2]
+                      try:
+                          yield bytes.fromhex(part)
+                      except ValueError:
+                          pass
+
+
+          def credential_found(data):
+              if hit_bytes(data):
+                  return True
+              for blob in decompressed(data):
+                  if hit_bytes(blob):
+                      return True
+              text = data.decode("utf-8")
+              if any(hit_text(view) for view in text_views(text)):
+                  return True
+              for blob in decoded_blobs(text):
+                  if hit_bytes(blob) or any(hit_bytes(inner) for inner in decompressed(blob)):
+                      return True
+              return False
+
+
+          def walk(root, arc_prefix, keep):
+              if not os.path.isdir(root) or os.path.islink(root):
+                  return
+              for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                  dirnames.sort()
+                  for name in sorted(filenames) + sorted(d for d in dirnames if os.path.islink(os.path.join(dirpath, d))):
+                      path = os.path.join(dirpath, name)
+                      rel = os.path.relpath(path, root).replace(os.sep, "/")
+                      if keep(rel):
+                          yield path, f"{arc_prefix}/{rel}"
+
+
+          def sources():
+              captures = os.path.join(OPS, "captures")
+              if os.path.isdir(captures):
+                  for run in sorted(os.listdir(captures)):
+                      if re.fullmatch(r"r-[0-9a-f]{10}", run):
+                          yield from walk(os.path.join(captures, run), f"captures/{run}",
+                                          lambda rel: rel in CAPTURE_FILES or rel.split("/")[0] in CAPTURE_DIRS)
+              yield from walk(os.path.join(OPS, "sealed"), "sealed",
+                              lambda rel: rel in SEALED_FILES or re.fullmatch(r"pristine-[A-Z0-9-]+\.json", rel) is not None)
+              yield from walk(os.path.join(CI, "logs"), "logs", lambda rel: True)
+              yield from walk(os.path.join(CI, "status"), "status", lambda rel: rel != "bundle.txt")
+
+
+          def main():
+              out = sys.argv[1]
+              included, withheld, total = [], [], 0
+              accepted = []
+              for path, arc in sources():
+                  if hit_text(arc) or any(hit_text(v) for v in text_views(arc)):
+                      withheld.append({"path": "<name withheld>", "reason": "credential"})
+                      continue
+                  st = os.lstat(path)
+                  if not os.path.isfile(path) or os.path.islink(path):
+                      withheld.append({"path": arc, "reason": "not-regular"})
+                      continue
+                  if st.st_size > MAX_FILE or total + st.st_size > MAX_TOTAL:
+                      withheld.append({"path": arc, "reason": "too-large"})
+                      continue
+                  with open(path, "rb") as handle:
+                      data = handle.read(MAX_FILE + 1)
+                  try:
+                      data.decode("utf-8")
+                  except UnicodeDecodeError:
+                      withheld.append({"path": arc, "reason": "binary"})
+                      continue
+                  if credential_found(data):
+                      withheld.append({"path": arc, "reason": "credential"})
+                      continue
+                  total += len(data)
+                  accepted.append((arc, data))
+                  included.append({"path": arc, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+              manifest = {"created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "included": included,
+                          "withheld": withheld,
+                          "scan": {"key_supplied": bool(KEY), "window": WINDOW, "windows": len(W),
+                                   "representations": ["raw", "utf-16le", "hex", "url-decoded", "html-unescaped",
+                                                       "json/py escapes", "joined (whitespace, quotes, +, commas removed)",
+                                                       "reversed", "base64/base64url runs", "hex runs",
+                                                       "gzip/zlib/bz2/xz inside raw or decoded data"],
+                                   "not_detectable": "encryption, ciphers, other encodings, fragments under the window length"}}
+              mdata = json.dumps(manifest, indent=2).encode()
+              mtime = int(time.time())
+              old = os.umask(0o077)
+              try:
+                  with tarfile.open(out, "w:gz") as tar:
+                      for arc, data in [("MANIFEST.json", mdata)] + accepted:
+                          info = tarfile.TarInfo(arc)
+                          info.size, info.mode, info.mtime, info.uid, info.gid = len(data), 0o600, mtime, 0, 0
+                          tar.addfile(info, io.BytesIO(data))
+              finally:
+                  os.umask(old)
+              reasons = {}
+              for w in withheld:
+                  reasons[w["reason"]] = reasons.get(w["reason"], 0) + 1
+              print(f"bundle: {len(included)} files included, {len(withheld)} withheld {json.dumps(reasons, sort_keys=True)}")
+              if reasons.get("credential"):
+                  print(f"::warning::credential-like content in {reasons['credential']} file(s); withheld from the bundle")
+
+
+          if __name__ == "__main__":
+              main()
+          EOF
+          echo "helpers written to the runner's temporary directory"
+
+      - name: Check revision, trigger and inputs (secrets are tested, never printed)
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AQD_HIDDEN_B64: ${{ secrets.AQD_NEW02_HIDDEN_B64 }}
+          AQD_PASS: ${{ secrets.AQD_RESULTS_PASSPHRASE }}
+        run: |
+          source "$RUNNER_TEMP/aqd/env.sh"
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main ]] \
+              || die "must be dispatched manually from main"
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]] || die "re-runs are refused; a retry is a new, separately approved dispatch"
+          [[ "$CONFIRM" == RUN-NEW02-AB ]] || die "confirmation input does not match"
+          head="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
+          branch="$(git -C "$GITHUB_WORKSPACE" rev-parse --abbrev-ref HEAD)"
+          [[ "$head" == "$AQD_TEST_SHA" && "$branch" == "$AQD_TEST_BRANCH" ]] || die "checkout is not $AQD_TEST_BRANCH at $AQD_TEST_SHA"
+          [[ -z "$(git -C "$GITHUB_WORKSPACE" status --porcelain)" ]] || die "checkout is not clean"
+          [[ "${#ANTHROPIC_API_KEY}" -ge 20 && "$ANTHROPIC_API_KEY" =~ ^[A-Za-z0-9_-]+$ ]] \
+              || die "secret ANTHROPIC_API_KEY is missing or has unexpected characters"
+          [[ "${#AQD_PASS}" -ge 32 ]] || die "secret AQD_RESULTS_PASSPHRASE is missing or shorter than 32 characters"
+          python3 "$BIN/hidden_pack.py" verify || die "hidden-test pack secret failed verification"
+          node_real="$(readlink -f "$(command -v node)")"
+          [[ "$node_real" != /home/* ]] || die "node resolves under /home; agent users could not run it"
+          mark checkout "$AQD_TEST_BRANCH at $AQD_TEST_SHA, clean"
+          note "inputs OK: revision pinned, confirmation given, three secrets present, hidden pack verified in memory"
+
+      - name: Host setup (users, operator store, pinned OpenCode, sandbox image; no model request)
+        run: |
+          source "$RUNNER_TEMP/aqd/env.sh"
+          # sudo would otherwise log every agent command line, API key included, to the system journal.
+          printf 'Defaults !syslog\n' >"$PRIV/sudoers-aqd"
+          sudo install -o root -g root -m 0440 "$PRIV/sudoers-aqd" /etc/sudoers.d/zz-aqd-no-syslog
+          if ! sudo visudo -c >"$LOGS/visudo.log" 2>&1; then
+              sudo rm -f /etc/sudoers.d/zz-aqd-no-syslog
+              die "sudoers drop-in rejected by visudo"
+          fi
+          if ! command -v setfacl >/dev/null; then
+              sudo apt-get update -qq >"$LOGS/apt.log" 2>&1 && sudo apt-get install -y -qq acl >>"$LOGS/apt.log" 2>&1 || die "acl install failed"
+          fi
+          bash "$H/setup-host.sh" >"$LOGS/setup-host.log" 2>&1 || die "setup-host.sh failed"
+          bash "$H/install-opencode.sh" >"$LOGS/install-opencode.log" 2>&1 || die "install-opencode.sh failed"
+          docker pull -q "$AQD_SANDBOX_IMAGE" >"$LOGS/docker-pull.log" 2>&1 || die "sandbox image pull failed"
+          rc=0
+          python3 -m unittest discover -s "$GITHUB_WORKSPACE/evaluations/phase-3.2/tests" -p test_sandbox.py -v \
+              >"$LOGS/sandbox-precheck.log" 2>&1 || rc=$?
+          [[ "$rc" == 0 ]] && ! grep -q skipped "$LOGS/sandbox-precheck.log" \
+              || die "scoring sandbox tests failed or skipped before the runs (nothing spent)"
+          [[ "$(stat -c '%a %U' "$HOME")" == "700 runner" ]] || die "operator HOME is not 0700 runner"
+          [[ "$(stat -c '%a %U' "$AQD_OPERATOR")" == "700 runner" ]] || die "operator store is not 0700 runner"
+          for u in $AGENTS; do
+              [[ "$(id -nG "$u")" == "$u" ]] || die "agent user has supplementary groups"
+          done
+          mark setup ok
+          note "host ready: agent users, operator store 0700, OpenCode 2.3.2, sandbox image pinned and tested"
+
+      - name: Agent network (loopback and Anthropic API only) and live isolation checks
+        run: |
+          source "$RUNNER_TEMP/aqd/env.sh"
+          for t in iptables ip6tables; do
+              sudo "$t" -N AQD_AGENT_EGRESS
+              sudo "$t" -A AQD_AGENT_EGRESS -o lo -j ACCEPT
+          done
+          # Anthropic's published API addresses (platform.claude.com/docs/en/api/ip-addresses, 2026-11-21).
+          for net in 160.79.104.0/23 153.61.224.0/22; do
+              sudo iptables -A AQD_AGENT_EGRESS -d "$net" -p tcp --dport 443 -j ACCEPT
+          done
+          sudo ip6tables -A AQD_AGENT_EGRESS -d 2607:6bc0::/48 -p tcp --dport 443 -j ACCEPT
+          for t in iptables ip6tables; do
+              sudo "$t" -A AQD_AGENT_EGRESS -j REJECT
+              for u in $AGENTS; do sudo "$t" -I OUTPUT 1 -m owner --uid-owner "$u" -j AQD_AGENT_EGRESS; done
+          done
+          { sudo iptables -S; sudo ip6tables -S; } | sha256sum | cut -d' ' -f1 >"$STATUS/egress-rules.sha256"
+          curl -sS --max-time 15 -o /dev/null https://example.com || die "runner itself has no network"
+          for u in aqd-a aqd-b; do
+              (cd / && sudo -u "$u" env -i PATH=/usr/bin:/bin /usr/bin/python3 -) <<'PY' || die "agent network is not limited to the Anthropic API"
+          import ipaddress, socket, sys
+          allowed = [ipaddress.ip_network(n) for n in ("160.79.104.0/23", "153.61.224.0/22", "2607:6bc0::/48")]
+          bad = []
+          try:
+              addrs = {ai[4][0] for ai in socket.getaddrinfo("api.anthropic.com", 443, proto=socket.IPPROTO_TCP)}
+          except OSError:
+              addrs = set()
+          if not addrs or any(not any(ipaddress.ip_address(a) in n for n in allowed) for a in addrs):
+              bad.append("api.anthropic.com resolves outside the allowed ranges")
+          def connects(host):
+              try:
+                  socket.create_connection((host, 443), timeout=8).close()
+                  return True
+              except OSError:
+                  return False
+          if not connects("api.anthropic.com"):
+              bad.append("api.anthropic.com:443 unreachable")
+          for host in ("example.com", "github.com", "registry.npmjs.org", "models.dev"):
+              if connects(host):
+                  bad.append(f"{host}:443 reachable")
+          print("agent egress: " + ("; ".join(bad) or "Anthropic API only"))
+          sys.exit(1 if bad else 0)
+          PY
+          done
+          denied() { if (cd / && sudo -u "$1" env -i PATH=/usr/bin:/bin sh -c "$2") >/dev/null 2>&1; then return 1; fi; }
+          for u in aqd-a aqd-b; do
+              denied "$u" "ls $AQD_OPERATOR"          || die "$u can list the operator store"
+              denied "$u" "ls $EVALUATOR"             || die "$u can list the evaluator directory"
+              denied "$u" "ls $GITHUB_WORKSPACE"      || die "$u can list the checkout"
+              denied "$u" "ls $RUNNER_TEMP"           || die "$u can list the runner temp directory"
+              denied "$u" "ls /home/runner"           || die "$u can list the operator HOME"
+              denied "$u" "test -w /var/run/docker.sock" || die "$u can use the Docker socket"
+              denied "$u" "sudo -n true"              || die "$u has sudo"
+          done
+          [[ -z "$(ls -A "$EVALUATOR")" ]] || die "evaluator directory is not empty"
+          mark egress "loopback + Anthropic API (tcp/443) only, for aqd-a, aqd-b, aqd-eval"
+          note "agent network limited to the Anthropic API; operator store, checkout, runner files and Docker unreadable to agents"
+
+      - name: Seal the 2-run schedule, write credentials, preflight (no model request)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          source "$RUNNER_TEMP/aqd/env.sh"
+          python3 "$H/schedule.py" create --out "$SEALED/schedule.json" \
+              --models "$AQD_MODEL" --tasks NEW-02 --repetitions 1 >"$LOGS/schedule.log" 2>&1 || die "schedule.py create failed"
+          python3 - "$SEALED/schedule.json" <<'PY' || die "schedule is not exactly one control and one treatment run"
+          import json, sys
+          runs = json.load(open(sys.argv[1], encoding="utf-8"))["runs"]
+          ok = len(runs) == 2 and sorted(r["group"] for r in runs) == ["control", "treatment"]
+          sys.exit(0 if ok else 1)
+          PY
+          install -m 0600 /dev/null "$SEALED/credentials.env"
+          printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY" >>"$SEALED/credentials.env"
+          unset ANTHROPIC_API_KEY
+          rc=0; bash "$H/preflight.sh" >"$LOGS/preflight.log" 2>&1 || rc=$?
+          mark preflight_exit "$rc"
+          [[ "$rc" == 0 ]] || die "preflight.sh exit $rc (20 = BLOCKED: key, model or variant); no model request was sent"
+          note "schedule sealed (2 runs, random order); preflight passed; no model request so far"
+
+      - name: The two scored runs (REAL MODEL REQUESTS)
+        id: runs
+        timeout-minutes: 125
+        run: |
+          source "$RUNNER_TEMP/aqd/env.sh"
+          note "starting run-all.sh: 2 runs, at most 45 minutes of agent time each"
+          rc=0; bash "$H/run-all.sh" >"$LOGS/run-all.log" 2>&1 || rc=$?
+          mark run_all_exit "$rc"
+          crc=0
+          python3 "$BIN/check_runs.py" "$SEALED/schedule.json" "$CAPTURES" "$EVALUATOR" "$STATUS/runs-check.json" \
+              >"$STATUS/runs-check.txt" 2>&1 || crc=$?
+          cat "$STATUS/runs-check.txt"
+          now="$({ sudo iptables -S; sudo ip6tables -S; } | sha256sum | cut -d' ' -f1)"
+          rules_ok=false; [[ "$now" == "$(cat "$STATUS/egress-rules.sha256")" ]] && rules_ok=true
+          extra=false; [[ -e "$AQD_OPERATOR/smoke" ]] && extra=true
+          mark egress_rules_unchanged "$rules_ok"
+          if [[ "$rc" == 0 && "$crc" == 0 && "$rules_ok" == true && "$extra" == false ]]; then
+              echo "both_valid=true" >>"$GITHUB_OUTPUT"
+              mark both_valid true
+              note "both runs VALID; control without and treatment with code-discipline confirmed"
+          else
+              mark both_valid false
+              die "not both runs valid (run-all exit $rc, checks exit $crc, egress rules unchanged $rules_ok); no scoring, no rerun"
+          fi
+
+      - name: Lock the agent accounts and delete the credentials file
+        id: lockdown
+        if: always()
+        run: |
+          [[ -f "$RUNNER_TEMP/aqd/env.sh" ]] || exit 0
+          source "$RUNNER_TEMP/aqd/env.sh"
+          for u in $AGENTS; do
+              id "$u" >/dev/null 2>&1 || continue
+              sudo crontab -r -u "$u" >/dev/null 2>&1 || true
+              sudo pkill -KILL -u "$u" >/dev/null 2>&1 || true
+              sudo usermod -L "$u" >/dev/null
+          done
+          sudo find /var/spool/cron /var/spool/at -xdev \( -user aqd-a -o -user aqd-b -o -user aqd-eval \) -delete 2>/dev/null || true
+          sleep 2
+          for u in $AGENTS; do
+              id "$u" >/dev/null 2>&1 || continue
+              ! pgrep -u "$u" >/dev/null || die "processes of $u survived"
+          done
+          if [[ -f "$SEALED/credentials.env" ]]; then shred -u "$SEALED/credentials.env"; fi
+          mark lockdown ok
+          note "agent accounts locked, no agent process left, credentials file shredded"
+
+      - name: Decode the hidden tests (operator-only, after both runs)
+        id: decode
+        if: steps.runs.outputs.both_valid == 'true' && steps.lockdown.outcome == 'success'
+        env:
+          AQD_HIDDEN_B64: ${{ secrets.AQD_NEW02_HIDDEN_B64 }}
+        run: |
+          source "$RUNNER_TEMP/aqd/env.sh"
+          [[ -d "$EVALUATOR" && -z "$(ls -A "$EVALUATOR")" ]] || die "evaluator directory missing or not empty"
+          for d in "$HOME" "$AQD_OPERATOR" "$EVALUATOR"; do
+              [[ "$(stat -c '%a %U' "$d")" == "700 runner" ]] || die "an evaluator ancestor is not 0700 runner"
+              [[ -z "$(getfacl -cp "$d" 2>/dev/null | grep -E '^(user|group):[^:]+:' || true)" ]] || die "named ACL entry on an evaluator ancestor"
+          done
+          for u in $AGENTS; do
+              ! pgrep -u "$u" >/dev/null || die "agent process running"
+              [[ "$(sudo passwd -S "$u" | awk '{print $2}')" == L ]] || die "agent account not locked"
+          done
+          python3 "$BIN/hidden_pack.py" extract "$EVALUATOR" || die "hidden pack extraction failed"
+          [[ -z "$(find "$EVALUATOR" \( ! -user runner -o \( -type f ! -perm 600 \) -o \( -type d ! -perm 700 \) -o -type l \) -print -quit)" ]] \
+              || die "hidden files have unexpected owner, mode or type"
+          mark hidden_tests "decoded into the operator-only evaluator directory after both runs"
+          note "hidden tests decoded (operator-only, 0600/0700) after both runs and the account lock"
+
+      - name: Hidden scoring in the Docker sandbox (no network)
+        id: score
+        if: steps.decode.outcome == 'success'
+        timeout-minutes: 45
+        run: |
+          source "$RUNNER_TEMP/aqd/env.sh"
+          rc=0; bash "$H/score-all.sh" >"$LOGS/score-all.log" 2>&1 || rc=$?
+          mark score_all_exit "$rc"
+          [[ "$rc" == 0 ]] || die "score-all.sh exit $rc; no comparison"
+          python3 - "$SEALED/schedule.json" "$CAPTURES" "$STATUS/scoring-check.json" <<'PY' || die "an evaluation is invalid; the comparison is INCOMPLETE"
+          import json, os, sys
+          schedule, captures, out = sys.argv[1:4]
+          result = {}
+          for run in json.load(open(schedule, encoding="utf-8"))["runs"]:
+              try:
+                  score = json.load(open(os.path.join(captures, run["run_id"], "hidden-score.json"), encoding="utf-8"))
+                  ok = score.get("evaluation_status") == "valid" and score.get("sandbox") == "docker"
+              except (OSError, ValueError):
+                  ok = False
+              result[run["group"]] = ok
+              print(f"{run['group']}: hidden evaluation {'VALID' if ok else 'INVALID'}")
+          json.dump(result, open(out, "w", encoding="utf-8"))
+          sys.exit(0 if sorted(result) == ["control", "treatment"] and all(result.values()) else 1)
+          PY
+          echo "scored_valid=true" >>"$GITHUB_OUTPUT"
+          mark scored_valid true
+          note "both runs scored in the sandbox; scores are only in the encrypted bundle"
+
+      - name: Remove the hidden tests and any scoring container
+        if: always()
+        run: |
+          [[ -f "$RUNNER_TEMP/aqd/env.sh" ]] || exit 0
+          source "$RUNNER_TEMP/aqd/env.sh"
+          ids="$(docker ps -aq --filter name=aqd-score- 2>/dev/null || true)"
+          if [[ -n "$ids" ]]; then docker rm -f $ids >/dev/null 2>&1 || true; fi
+          if [[ -d "$EVALUATOR" ]]; then
+              find "$EVALUATOR" -type f -exec shred -u {} + 2>/dev/null || true
+              find "$EVALUATOR" -mindepth 1 -delete 2>/dev/null || true
+          fi
+          note "hidden tests removed from the runner"
+
+      - name: Package results (credential scan, then AES-256 encryption on the runner)
+        id: pack
+        if: always()
+        env:
+          AQD_SCAN_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AQD_PASS: ${{ secrets.AQD_RESULTS_PASSPHRASE }}
+        run: |
+          [[ -f "$RUNNER_TEMP/aqd/env.sh" ]] || exit 0
+          source "$RUNNER_TEMP/aqd/env.sh"
+          TAR="$PRIV/results.tar.gz"; TMP="$PRIV/results.tar.gz.gpg.partial"; PF="$PRIV/passphrase"; GH="$PRIV/gnupg"
+          OUT="$UP/aqd-ab-results.tar.gz.gpg"
+          cleanup() {
+              for f in "$TAR" "$TMP" "$PF"; do if [[ -f "$f" ]]; then shred -u "$f" 2>/dev/null || rm -f "$f"; fi; done
+              gpgconf --homedir "$GH" --kill all >/dev/null 2>&1 || true
+              rm -rf "$GH"
+          }
+          trap cleanup EXIT
+          rm -f "$OUT"
+          [[ "${#AQD_PASS}" -ge 32 ]] || die "no usable passphrase: nothing is packaged or uploaded"
+          printf '%s' "$AQD_PASS" >"$PF"
+          unset AQD_PASS
+          python3 "$BIN/bundle.py" "$TAR" >"$STATUS/bundle.txt" 2>&1 || die "bundle build failed; nothing uploaded"
+          unset AQD_SCAN_KEY
+          cat "$STATUS/bundle.txt"
+          install -d -m 0700 "$GH"
+          gpg --homedir "$GH" --batch --yes --quiet --no-symkey-cache --pinentry-mode loopback --passphrase-file "$PF" \
+              --symmetric --cipher-algo AES256 --s2k-mode 3 --s2k-digest-algo SHA512 --s2k-count 65011712 \
+              --compress-algo none --output "$TMP" "$TAR" || die "encryption failed; nothing uploaded"
+          python3 - "$TMP" <<'PY' || die "encrypted file does not start with an OpenPGP symmetric-key packet"
+          import sys
+          head = open(sys.argv[1], "rb").read(2)
+          sys.exit(0 if head[:1] in (b"\x8c", b"\xc3") and head != b"\x1f\x8b" else 1)
+          PY
+          want="$(sha256sum "$TAR" | cut -d' ' -f1)"
+          got="$(gpg --homedir "$GH" --batch --quiet --no-symkey-cache --pinentry-mode loopback --passphrase-file "$PF" \
+              --decrypt "$TMP" | sha256sum | cut -d' ' -f1)"
+          [[ -n "$want" && "$want" == "$got" ]] || die "decryption round trip failed; nothing uploaded"
+          mv "$TMP" "$OUT"
+          sha="$(sha256sum "$OUT" | cut -d' ' -f1)"
+          mark encrypted_sha256 "$sha"
+          echo "sha256=$sha" >>"$GITHUB_OUTPUT"
+          echo "encrypted=true" >>"$GITHUB_OUTPUT"
+          note "results encrypted on the runner (AES-256); encrypted file SHA-256 $sha"
+
+      - name: Upload the encrypted results only (1-day retention)
+        id: upload
+        if: always() && steps.pack.outputs.encrypted == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aqd-ab-results-encrypted
+          path: ${{ runner.temp }}/aqd/upload/aqd-ab-results.tar.gz.gpg
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Public summary (status only; no scores)
+        if: always()
+        env:
+          S_RUNS: ${{ steps.runs.outcome }}
+          S_LOCK: ${{ steps.lockdown.outcome }}
+          S_DECODE: ${{ steps.decode.outcome }}
+          S_SCORE: ${{ steps.score.outcome }}
+          S_PACK: ${{ steps.pack.outcome }}
+          S_UPLOAD: ${{ steps.upload.outcome }}
+          BOTH_VALID: ${{ steps.runs.outputs.both_valid }}
+          SCORED_VALID: ${{ steps.score.outputs.scored_valid }}
+          ENC_SHA: ${{ steps.pack.outputs.sha256 }}
+        run: |
+          S="$RUNNER_TEMP/aqd/summary.md"
+          {
+              echo "## Phase 3.2 NEW-02 A/B run"
+              echo
+              echo "Tested: $AQD_TEST_BRANCH at $AQD_TEST_SHA; model $AQD_MODEL; mode $AQD_ACTIVATION_MODE."
+              echo
+              echo "| Item | Result |"
+              echo "|---|---|"
+              echo "| Two scored runs (step) | ${S_RUNS:-not run} |"
+              echo "| Both runs valid, skill only in treatment | ${BOTH_VALID:-false} |"
+              echo "| Agent accounts locked | ${S_LOCK:-not run} |"
+              echo "| Hidden tests decoded after the runs | ${S_DECODE:-skipped} |"
+              echo "| Hidden scoring (step) | ${S_SCORE:-skipped} |"
+              echo "| Both evaluations valid | ${SCORED_VALID:-false} |"
+              echo "| Results encrypted on the runner | ${S_PACK:-not run} |"
+              echo "| Encrypted artifact uploaded (1 day) | ${S_UPLOAD:-skipped} |"
+              echo "| Encrypted file SHA-256 | ${ENC_SHA:-none} |"
+              echo
+              echo "Scores, transcripts, diffs and logs are only inside the encrypted artifact."
+              echo "This repository is public: anyone with read access can download the encrypted artifact;"
+              echo "only a holder of the passphrase can decrypt it. No run is repeated automatically."
+              if [[ -f "$RUNNER_TEMP/aqd/status/public.log" ]]; then
+                  echo; echo '```'; cat "$RUNNER_TEMP/aqd/status/public.log"; echo '```'
+              fi
+          } >"$S"
+          cat "$S" | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$BOTH_VALID" == true && "$SCORED_VALID" == true && "$S_UPLOAD" == success ]]
