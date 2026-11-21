@@ -1,0 +1,4 @@
+# Python bytecode written by the harness and its tests. preflight.sh refuses a
+# checkout with untracked files, and running the documented steps creates these.
+__pycache__/
+*.py[co]

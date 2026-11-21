@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "status": "pilot-fixtures",
+  "tasks": {
+    "CD-01": {"skill": "code-discipline", "path": "code/CD-01", "baseline": "python -m unittest discover -s tests -v", "expected_baseline": "pass"},
+    "CD-02": {"skill": "code-discipline", "path": "code/CD-02", "baseline": "python -m unittest discover -s tests -v", "expected_baseline": "pass"},
+    "CD-03": {"skill": "code-discipline", "path": "code/CD-03", "baseline": "python -m unittest discover -s tests -v", "expected_baseline": "fail: empty timezone regression and known unrelated legacy test"},
+    "WS-01": {"skill": "writing-specificity", "path": "writing/WS-01/input.md"},
+    "WS-02": {"skill": "writing-specificity", "path": "writing/WS-02/input.md"},
+    "WS-03": {"skill": "writing-specificity", "path": "writing/WS-03/input.md"},
+    "SV-01": {"skill": "source-verification", "path": "source/SV-01/evidence.md"},
+    "SV-02": {"skill": "source-verification", "path": "source/SV-02/evidence.md"},
+    "SV-03": {"skill": "source-verification", "path": "source/SV-03/evidence.md"},
+    "PH-01": {"skill": "pr-hygiene", "path": "pr/PH-01"},
+    "PH-02": {"skill": "pr-hygiene", "path": "pr/PH-02"},
+    "PH-03": {"skill": "pr-hygiene", "path": "pr/PH-03"}
+  }
+}

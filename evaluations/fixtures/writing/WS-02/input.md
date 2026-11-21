@@ -1,0 +1,1 @@
+I built this because apparently booking an appointment still requires three phone calls, a spreadsheet, and a small sacrifice to the calendar gods. It sends reminders and lets clients book online. Not magic, just less admin.
