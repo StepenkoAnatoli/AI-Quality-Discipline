@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # Execute ONE scheduled run of the Phase 3.2 pilot. Run as the operator inside
-# the benchmark Codespace, only after the user has authorised execution and
+# the benchmark host, only after the user has authorised execution and
 # preflight.sh has passed.
 #
 # Usage: launch-run.sh RUN_ID
-#        launch-run.sh --smoke control|treatment
+#        launch-run.sh --smoke control|treatment MODEL_REF
+#
+# MODEL_REF is provider/model[#variant]; for scheduled runs it comes from the
+# sealed schedule. The run record (run-record.json) names the exact model,
+# interface version, activation mode and the hashes of prompt, project and skill.
 #
 # --smoke runs the never-scored SMOKE task through the identical procedure
 # (same users, HOME layout, config, activation mode) to verify the runtime
-# gates in SPECIFICATION.md §18. Smoke evidence goes to $AQD_OPERATOR/smoke.
+# gates in PROMPT-SMOKE-TEST.md. Smoke evidence goes to $AQD_OPERATOR/smoke.
 #
 # The same script serves all three tasks and both groups; everything that
 # differs comes from the sealed schedule:
@@ -28,7 +32,9 @@ SCHEDULE="$AQD_SEALED/schedule.json"
 CAPTURE_BASE="$AQD_CAPTURES"
 if [[ "${1:-}" == "--smoke" ]]; then
     GROUP="${2:-}"
-    [[ "$GROUP" =~ ^(control|treatment)$ ]] || { echo "usage: launch-run.sh --smoke control|treatment" >&2; exit 2; }
+    MODEL_REF="${3:-}"
+    [[ "$GROUP" =~ ^(control|treatment)$ && -n "$MODEL_REF" ]] \
+        || { echo "usage: launch-run.sh --smoke control|treatment MODEL_REF" >&2; exit 2; }
     TASK="SMOKE"
     RUN_ID="r-$("$PY" -c 'import secrets; print(secrets.token_hex(5))')"
     ENV_LABEL="$(json_get "$SCHEDULE" env_for_group | "$PY" -c "import json, sys; print(json.load(sys.stdin)['$GROUP'])")"
@@ -37,12 +43,14 @@ if [[ "${1:-}" == "--smoke" ]]; then
 else
     RUN_ID="${1:-}"
     [[ "$RUN_ID" =~ ^r-[0-9a-f]{10}$ ]] || { echo "usage: launch-run.sh RUN_ID (r-<10 hex>)" >&2; exit 2; }
-    [[ -f "$AQD_SEALED/runtime-gates.json" ]] || { log "runtime gates not confirmed (run --smoke first, see §18)"; exit 2; }
+    [[ -f "$AQD_SEALED/runtime-gates.json" ]] || { log "runtime gates not confirmed (run --smoke first, see PROMPT-SMOKE-TEST.md)"; exit 2; }
     sched() { "$PY" "$AQD_HARNESS/schedule.py" get --schedule "$SCHEDULE" --run-id "$RUN_ID" --key "$1"; }
     TASK="$(sched task)"
     GROUP="$(sched group)"
     ENV_LABEL="$(sched env)"
+    MODEL_REF="$(sched model)"
 fi
+parse_model_ref "$MODEL_REF"
 [[ -f "$AQD_SEALED/preflight.ok" ]] || { log "preflight has not passed"; exit 2; }
 [[ ! -f "$AQD_SEALED/STOP" ]] || { log "benchmark stopped: $(cat "$AQD_SEALED/STOP")"; exit 2; }
 [[ "$AQD_ACTIVATION_MODE" =~ ^(api-attachment|cli-mention)$ ]] || { log "unknown activation mode"; exit 2; }
@@ -94,7 +102,7 @@ finish() {
 }
 trap finish EXIT
 
-log "run $RUN_ID: task $TASK, environment $ENV_LABEL, mode $AQD_ACTIVATION_MODE"
+log "run $RUN_ID: task $TASK, model $MODEL_REF, environment $ENV_LABEL, mode $AQD_ACTIVATION_MODE"
 
 STEP="preconditions"
 for env in "${AQD_ENVS[@]}"; do assert_no_processes "${AQD_USER_FOR_ENV[$env]}"; done
@@ -146,6 +154,19 @@ sudo find "$RUN_HOME/.config" -mindepth 1 -printf '%P\n' | sort >"$CAP/home-conf
 STEP="agent-env"
 PASSWORD="$(random_secret)"
 make_agent_env "$RUN_ROOT" "$PASSWORD"
+add_provider_credential "$MODEL_PROVIDER"
+"$PY" - "$CAP/run-record.json" "$RUN_ID" "$TASK" "$GROUP" "$MODEL_REF" "$AQD_ACTIVATION_MODE" "$MESSAGE_FILE" "$MANIFEST" \
+    "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$("$AQD_OPENCODE_BIN" --version 2>/dev/null | tr -d '[:space:]')" <<'PY'
+import datetime, hashlib, json, sys
+out, run_id, task, group, model, mode, prompt, manifest, skill, version = sys.argv[1:11]
+sha = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
+json.dump({"run_id": run_id, "task": task, "group": group, "model": model,
+           "interface": f"opencode {version}", "activation_mode": mode,
+           "skill": {"installed": group == "treatment", "sha256": sha(skill) if group == "treatment" else None},
+           "prompt_sha256": sha(prompt), "workspace_sha256": json.load(open(manifest, encoding="utf-8"))["workspace_sha256"],
+           "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+          open(out, "w", encoding="utf-8"), indent=2)
+PY
 if [[ "$TASK" == "SMOKE" && "${AQD_DEBUG_LOG:-0}" == "1" ]]; then
     AGENT_ENV+=("OPENCODE_LOG_LEVEL=DEBUG")   # runtime gate R4 only; never in scored runs
 fi
@@ -175,7 +196,7 @@ done
 STEP="api-checks"
 set +e
 OPENCODE_PASSWORD="$PASSWORD" "$PY" "$AQD_HARNESS/api_checks.py" --server "$SERVER" --directory "$PROJECT" \
-    --group "$GROUP" --allowed-root "$RUN_ROOT" --allowed-root "$AQD_OPENCODE_PREFIX" --out "$CAP/api-checks.json"
+    --group "$GROUP" --model "$MODEL_REF" --allowed-root "$RUN_ROOT" --allowed-root "$AQD_OPENCODE_PREFIX" --out "$CAP/api-checks.json"
 API_EXIT=$?
 set -e
 case "$API_EXIT" in
@@ -191,9 +212,11 @@ set +e
 if [[ "$AQD_ACTIVATION_MODE" == "api-attachment" ]]; then
     ATTACH=()
     [[ "$GROUP" == "treatment" ]] && ATTACH=(--attach-skill "$AQD_SKILL_ID")
+    VARIANT_ARGS=()
+    [[ -n "$MODEL_VARIANT" ]] && VARIANT_ARGS=(--variant "$MODEL_VARIANT")
     OPENCODE_PASSWORD="$PASSWORD" timeout --kill-after=60 "$((AQD_RUN_TIMEOUT_SECONDS + 600))" \
         "$PY" "$AQD_HARNESS/drive_session.py" --server "$SERVER" --directory "$PROJECT" \
-        --message-file "$MESSAGE_FILE" --provider "$AQD_PROVIDER" --model "$AQD_MODEL" --variant "$AQD_VARIANT" \
+        --message-file "$MESSAGE_FILE" --provider "$MODEL_PROVIDER" --model "$MODEL_ID" "${VARIANT_ARGS[@]}" \
         --agent "$AQD_AGENT" --timeout "$AQD_RUN_TIMEOUT_SECONDS" --out-dir "$CAP/driver" "${ATTACH[@]}"
     DRIVER_EXIT=$?
 else
@@ -204,7 +227,7 @@ else
         { printf '@%s\n\n' "$AQD_SKILL_ID"; cat "$MESSAGE_FILE"; } >"$CAP/message.txt"
     fi
     as_agent "$AGENT_USER" "$PROJECT" timeout --kill-after=60 "$AQD_RUN_TIMEOUT_SECONDS" "$AQD_OPENCODE_BIN" run \
-        --server "$SERVER" --model "$AQD_PROVIDER/$AQD_MODEL#$AQD_VARIANT" --agent "$AQD_AGENT" --format json --auto \
+        --server "$SERVER" --model "$MODEL_REF" --agent "$AQD_AGENT" --format json --auto \
         "$(cat "$CAP/message.txt")" >"$CAP/run-events.ndjson" 2>"$CAP/run.stderr"
     RUN_EXIT=$?
     OPENCODE_PASSWORD="$PASSWORD" "$PY" "$AQD_HARNESS/drive_session.py" --server "$SERVER" --export-existing \
@@ -250,7 +273,7 @@ diff -ruN -x __pycache__ -x '*.pyc' -x .pytest_cache "$PRISTINE/project" "$CAP/p
 [[ $? -le 1 ]] || log "diff reported an error"
 EXPORT="$CAP/driver/export.json"
 [[ -s "$EXPORT" ]] || EXPORT="$CAP/cli-export.json"
-"$PY" "$AQD_HARNESS/export_checks.py" --export "$EXPORT" --group "$GROUP" --out "$CAP/export-checks.json"
+"$PY" "$AQD_HARNESS/export_checks.py" --export "$EXPORT" --group "$GROUP" --model "$MODEL_REF" --out "$CAP/export-checks.json"
 set -e
 
 STEP="done"

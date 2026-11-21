@@ -1,27 +1,28 @@
-# Phase 3.2 — OpenCode pilot for `code-discipline`
+# Phase 3.2 — Does `code-discipline` make Claude and Grok build better working software?
 
-Controlled, exploratory pilot: does the `code-discipline` skill change OpenCode outcomes on three synthetic coding tasks? 18 runs: 3 tasks × 3 repetitions × {control, treatment}.
+A controlled comparison of the same coding agent with and without the `code-discipline` skill, run separately for Claude and for Grok, on three synthetic tasks. The primary outcome is objective: hidden tests run against the code each agent leaves behind.
 
-**Status: specification and preparation only. Nothing here has been executed.** Readiness: *conditionally ready — blockers remain* (see [SPECIFICATION.md §21](SPECIFICATION.md#21-readiness)).
+**Status: NOT READY for a pilot.** The scoring code has been corrected and tested offline. The scoring sandbox, the run launcher and every live model run have **not** been executed. See [SPECIFICATION.md §1 and §10](SPECIFICATION.md#1-status).
 
 | File | Purpose |
 |---|---|
-| [SPECIFICATION.md](SPECIFICATION.md) | Final Specification v2 (normative) |
-| [VALIDATION-CHECKLIST.md](VALIDATION-CHECKLIST.md) | Every critical requirement with its verification status |
-| [RISK-REGISTER.md](RISK-REGISTER.md) | Remaining risks and mitigations |
-| [CHANGE-REPORT.md](CHANGE-REPORT.md) | What changed from the earlier drafts, and every file touched |
+| [SPECIFICATION.md](SPECIFICATION.md) | Specification v3 (normative): design, interface, contamination controls, scoring, security, readiness |
+| [PROMPT-SMOKE-TEST.md](PROMPT-SMOKE-TEST.md) | Procedure for the 2 models × 2 conditions smoke test (not yet run) |
+| [VALIDATION-CHECKLIST.md](VALIDATION-CHECKLIST.md) | Each requirement and how it was verified, or that it was not |
+| [RISK-REGISTER.md](RISK-REGISTER.md) | Remaining risks |
+| [CHANGE-REPORT.md](CHANGE-REPORT.md) | What changed from v2 and why |
 | `allowlist.json` | The only files that may enter an agent workspace |
-| `config/` | OpenCode project and global configuration (identical for both groups) |
-| `tasks/NEW-01..03/project/` | Synthetic task projects; `TASK.md` is the exact prompt text |
-| `tasks/SMOKE/project/` | Never-scored task for runtime gate checks |
-| `harness/` | Setup, preflight, launcher, driver, checks, scoring, blinding, analysis, teardown |
-| `tests/test_harness.py` | Local tests; no OpenCode, no network |
+| `tasks/NEW-01..03/project/` | Task projects; `TASK.md` is the exact prompt text |
+| `harness/` | Launcher (OpenCode), fail-closed scoring, blind packets, analysis |
+| `tests/` | `test_harness.py`, `test_scoring.py` (offline); `test_sandbox.py` (needs Docker) |
 
-Hidden tests, reference solutions and the NEW-task scoring key are deliberately **not** in this repository (SPECIFICATION.md §13.4).
+Hidden tests, reference solutions, mutants, test inventories and the scoring key are deliberately **not** in this repository.
 
-Local verification:
+Local verification (no network, no model):
 
 ```sh
 python evaluations/phase-3.2/harness/manifest.py check-sources --phase-root evaluations/phase-3.2
-python -m unittest discover -s evaluations/phase-3.2/tests -v
+python -m unittest discover -s evaluations/phase-3.2/tests -p "test_harness.py" -v
+python -m unittest discover -s evaluations/phase-3.2/tests -p "test_scoring.py" -v
+AQD_SANDBOX_IMAGE=python:3.12-slim@sha256:... python -m unittest discover -s evaluations/phase-3.2/tests -p "test_sandbox.py" -v   # Linux + Docker
 ```

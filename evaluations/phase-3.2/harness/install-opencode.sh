@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the pinned OpenCode V2 CLI into a dedicated root-owned prefix inside
-# the benchmark Codespace. This installs software and downloads packages, so
+# the benchmark host. This installs software and downloads packages, so
 # it may only be run after the user has authorised benchmark execution.
 #
 # Usage: install-opencode.sh

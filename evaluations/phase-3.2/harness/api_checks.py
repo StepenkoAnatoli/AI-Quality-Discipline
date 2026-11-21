@@ -2,6 +2,7 @@
 """Pre-run checks against a private `opencode serve` instance. No model request.
 
     api_checks.py --server URL --directory PROJECT --group control|treatment \
+                  --model PROVIDER/MODEL[#VARIANT] \
                   --allowed-root DIR [--allowed-root DIR ...] --out FILE
 
 Queries (official V2 API reference): GET /api/provider, GET /api/model,
@@ -9,9 +10,9 @@ GET /api/skill, GET /api/config, each with location[directory]=PROJECT.
 
 Exit codes:
   0  all checks passed
-  10 BLOCKED: provider "opencode" absent (signed-out / authentication blocker)
+  10 BLOCKED: the run's provider is absent (credentials missing or rejected)
   11 BLOCKED: model absent or disabled
-  12 BLOCKED: variant "xhigh" not offered for the model
+  12 BLOCKED: the requested variant is not offered for the model
   13 ISOLATION FAILURE: skill or config visible where it must not be
   2  API or usage error
 """
@@ -39,15 +40,15 @@ def _abs_paths(value, found):
     return found
 
 
-def check_provider(providers):
+def check_provider(providers, provider_id):
     ids = sorted(p.get("id") for p in providers if isinstance(p, dict))
-    return {"ok": c.PROVIDER_ID in ids, "provider_ids": ids}
+    return {"ok": provider_id in ids, "provider_ids": ids}
 
 
-def check_model(models):
+def check_model(models, provider_id, model_id, variant):
     target = None
     for m in models:
-        if isinstance(m, dict) and m.get("providerID") == c.PROVIDER_ID and c.MODEL_ID in (m.get("id"), m.get("modelID")):
+        if isinstance(m, dict) and m.get("providerID") == provider_id and model_id in (m.get("id"), m.get("modelID")):
             target = m
             break
     if target is None:
@@ -55,7 +56,7 @@ def check_model(models):
     variants = sorted(v.get("id") for v in target.get("variants", []) if isinstance(v, dict))
     if target.get("enabled") is False:
         return {"ok": False, "reason": "model_disabled", "model": target, "variants": variants}
-    if c.VARIANT not in variants:
+    if variant is not None and variant not in variants:
         return {"ok": False, "reason": "variant_absent", "model": target, "variants": variants}
     return {"ok": True, "reason": None, "model": target, "variants": variants,
             "model_sha256": c.sha256_text(json.dumps(target, sort_keys=True))}
@@ -100,13 +101,14 @@ def check_config(config_entries, allowed_roots, exists=os.path.exists):
     return {"ok": not outside, "paths": paths, "outside_allowed_roots": outside}
 
 
-def run(client, directory, group, allowed_roots):
+def run(client, directory, group, allowed_roots, model_ref):
+    provider_id, model_id, variant = c.parse_model(model_ref)
     loc = {"location[directory]": directory}
-    report = {"directory": directory, "group": group, "allowed_roots": allowed_roots}
-    report["provider"] = check_provider(unwrap(client.request("GET", "/api/provider", query=loc)[1]) or [])
+    report = {"directory": directory, "group": group, "allowed_roots": allowed_roots, "model_ref": model_ref}
+    report["provider"] = check_provider(unwrap(client.request("GET", "/api/provider", query=loc)[1]) or [], provider_id)
     if not report["provider"]["ok"]:
         return report, 10
-    report["model"] = check_model(unwrap(client.request("GET", "/api/model", query=loc)[1]) or [])
+    report["model"] = check_model(unwrap(client.request("GET", "/api/model", query=loc)[1]) or [], provider_id, model_id, variant)
     if not report["model"]["ok"]:
         return report, 11 if report["model"]["reason"] in ("model_absent", "model_disabled") else 12
     report["skills"] = check_skills(unwrap(client.request("GET", "/api/skill", query=loc)[1]) or [], group, allowed_roots)
@@ -120,6 +122,7 @@ def main(argv=None):
     p.add_argument("--password-env", default="OPENCODE_PASSWORD")
     p.add_argument("--directory", required=True)
     p.add_argument("--group", choices=("control", "treatment"), required=True)
+    p.add_argument("--model", required=True, help="provider/model[#variant]")
     p.add_argument("--allowed-root", action="append", required=True)
     p.add_argument("--out", required=True)
     args = p.parse_args(argv)
@@ -128,8 +131,8 @@ def main(argv=None):
         print(f"api_checks.py: {args.password_env} is not set", file=sys.stderr)
         return 2
     try:
-        report, code = run(Client(args.server, password), args.directory, args.group, args.allowed_root)
-    except ApiError as exc:
+        report, code = run(Client(args.server, password), args.directory, args.group, args.allowed_root, args.model)
+    except (ApiError, ValueError) as exc:
         print(f"api_checks.py: {exc}", file=sys.stderr)
         return 2
     report["exit_code"] = code

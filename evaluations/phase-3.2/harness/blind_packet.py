@@ -113,8 +113,7 @@ def build_packet(run, capture, pristine_root, out_dir, redact):
         "## Task given to the agent\n\n" + task_text,
         "## Agent final report\n\n" + (final_report or "(no final text)"),
         "## Changes (diff against the pristine project)\n\n```diff\n" + diff + "\n```",
-        "## Hidden checks\n\n" + ("\n".join(f"- {k}: {v}" for k, v in sorted(hidden["hidden_checks"].items())) if hidden else "(not yet scored)")
-        + (f"\n\nBaseline tests (pristine): {'pass' if hidden['baseline_all_pass'] else 'FAIL'}" if hidden else ""),
+        "## Hidden checks (objective; already the primary outcome - do not re-score correctness)\n\n" + _hidden_section(hidden),
         "## Workspace findings\n\n" + (json.dumps(findings, indent=2) if findings else "none"),
         "## Transcript (redacted)\n\n" + (transcript or "(empty)"),
     ]
@@ -123,14 +122,28 @@ def build_packet(run, capture, pristine_root, out_dir, redact):
         handle.write("\n\n".join(parts) + "\n")
     template = {
         "blind_id": run["blind_id"], "task": run["task"],
-        "dimensions": {"correctness": None, "request_compliance": None, "evidence_verification": None,
+        "dimensions": {"request_compliance": None, "evidence_verification": None,
                        "scope_economy": None, "clarity_usability": None},
+        "tamper_review": "not required" if not (hidden or {}).get("requires_review") else "REQUIRED: none|suspected|confirmed",
         "critical_failures": [], "overclaims": [], "regressions": [], "notes": "",
         "group_guess": "unsure", "group_guess_confidence": None, "scorer_id": "",
     }
     with open(os.path.join(out_dir, "score.json"), "w", encoding="utf-8") as handle:
         json.dump(template, handle, indent=2)
         handle.write("\n")
+
+
+def _hidden_section(hidden):
+    if hidden is None:
+        return "(not yet scored)"
+    if hidden.get("evaluation_status") != "valid":
+        return "EVALUATION INVALID - no correctness result exists for this run: " + "; ".join(hidden.get("invalid_reasons") or [])
+    lines = [f"- {k}: {v}" for k, v in sorted(hidden["hidden_checks"].items())]
+    lines.append(f"\nBaseline tests (pristine): {hidden['baseline_passed']}/{hidden['baseline_total']} pass")
+    if hidden.get("requires_review"):
+        lines.append("\nTAMPER REVIEW REQUIRED: the changed code uses constructs that could interfere with an in-process "
+                     f"test run: {json.dumps(hidden['review_flags'])}. Inspect the diff and record the verdict in tamper_review.")
+    return "\n".join(lines)
 
 
 def main(argv=None):

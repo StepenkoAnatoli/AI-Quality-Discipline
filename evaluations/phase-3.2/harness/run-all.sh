@@ -30,7 +30,7 @@ while (( done_count < MAX )); do
     case "$RC" in
         0)  done_count=$((done_count + 1)) ;;
         1)  log "run $RUN_ID is INVALID. Review $AQD_CAPTURES/$RUN_ID/run-status.json."
-            log "If the cause qualifies for a rerun under SPECIFICATION.md §12.3:"
+            log "If the cause qualifies for a rerun under SPECIFICATION.md section 6.2:"
             log "  python3 $AQD_HARNESS/schedule.py rerun --schedule $AQD_SEALED/schedule.json --run-id $RUN_ID --reason '...'"
             exit 1 ;;
         20) log "BENCHMARK BLOCKED (provider/model/variant). A user decision is required."; exit 20 ;;

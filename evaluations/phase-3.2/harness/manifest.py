@@ -124,6 +124,12 @@ def check_sources(phase_root):
     return problems
 
 
+def workspace_sha256(files):
+    """Stable hash of a starting workspace: sha256 over sorted "path\\0sha256\\n" lines."""
+    lines = "".join(f"{f['path']}\0{f['sha256']}\n" for f in sorted(files, key=lambda f: f["path"]))
+    return hashlib.sha256(lines.encode("utf-8")).hexdigest()
+
+
 def build(phase_root, task, source_commit=None):
     allowlist, allowlist_hash = load_allowlist(phase_root)
     files = []
@@ -134,6 +140,7 @@ def build(phase_root, task, source_commit=None):
         files.append({"path": dest, "sha256": sha256_file(path), "size": os.path.getsize(path), "category": category, "source": source})
     directories = sorted({"/".join(f["path"].split("/")[:i]) for f in files for i in range(1, len(f["path"].split("/")))})
     return {
+        "workspace_sha256": workspace_sha256(files),
         "schema_version": SCHEMA_VERSION,
         "kind": "aqd-phase-3.2-project-manifest",
         "task": task,

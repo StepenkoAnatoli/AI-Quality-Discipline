@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # Run the hidden checks for every valid run, after ALL agent runs are finished.
-# Hidden tests are uploaded to $AQD_EVALUATOR only now, never earlier. Agent
-# code is executed as the unprivileged $AQD_EVAL_USER in a scratch directory
-# that contains only that run's code, the pristine task and that task's hidden
-# tests.
 #
-# Usage: score-all.sh
-# Expects $AQD_EVALUATOR/hidden_tests/<TASK>/hidden_tests/ for NEW-01..03.
+# Trust boundary: score_run.py (scoring logic, inventory, validation) runs as
+# the operator and is never visible to candidate code. Only the test process
+# runs inside a fresh Docker container per test: no network, read-only code,
+# non-root, no host environment (see score_run.py and tests/test_sandbox.py).
+# Hidden tests are uploaded to $AQD_EVALUATOR only now, never earlier.
+#
+# Usage: AQD_SANDBOX_IMAGE=python:3.12-slim@sha256:... score-all.sh
+# Expects $AQD_EVALUATOR/hidden_tests/<TASK>/hidden_tests/ and
+#         $AQD_EVALUATOR/inventory/<TASK>.json for every scheduled task.
+# A run whose evaluation is INVALID gets a hidden-score.json with
+# evaluation_status "invalid" and no primary outcome; analyze.py reports it.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 PY="$(python_bin)"
+IMAGE="${AQD_SANDBOX_IMAGE:-}"
+[[ "$IMAGE" == *@sha256:* ]] || die "set AQD_SANDBOX_IMAGE to an image pinned by digest"
+require_cmd docker
 set +e
 "$PY" "$AQD_HARNESS/schedule.py" next --schedule "$AQD_SEALED/schedule.json" --captures "$AQD_CAPTURES" >/dev/null
 [[ $? == 3 ]] || die "scheduled runs remain; score only after every run has finished"
@@ -21,41 +29,34 @@ for env in "${AQD_ENVS[@]}"; do
     assert_no_processes "$user"
     sudo usermod -L "$user" >/dev/null
 done
-for task in NEW-01 NEW-02 NEW-03; do
-    [[ -d "$AQD_EVALUATOR/hidden_tests/$task/hidden_tests" ]] || die "hidden tests for $task not uploaded"
-done
+# Demonstrate the boundary on this host before trusting it.
+set +e
+SANDBOX_LOG="$(AQD_SANDBOX_IMAGE="$IMAGE" "$PY" -m unittest discover -s "$AQD_PHASE_ROOT/tests" -p test_sandbox.py -v 2>&1)"
+SANDBOX_RC=$?
+set -e
+printf '%s\n' "$SANDBOX_LOG" >"$AQD_SEALED/sandbox-tests.log"
+[[ "$SANDBOX_RC" == 0 ]] || die "sandbox isolation tests failed on this host (see sandbox-tests.log)"
+grep -q "skipped" <<<"$SANDBOX_LOG" && die "sandbox isolation tests were skipped; the boundary is not demonstrated"
 
-SCORE_ROOT="$AQD_ROOT/score"
-sudo install -d -o root -g root -m 0711 "$SCORE_ROOT"
 while IFS= read -r RUN_ID; do
     CAP="$AQD_CAPTURES/$RUN_ID"
     [[ -f "$CAP/run-status.json" ]] || continue
-    [[ "$(json_get "$CAP/run-status.json" valid)" == "True" ]] || { log "skip invalid $RUN_ID"; continue; }
+    [[ "$(json_get "$CAP/run-status.json" valid)" == "True" ]] || { log "skip invalid run $RUN_ID"; continue; }
     [[ -f "$CAP/hidden-score.json" ]] && { log "already scored $RUN_ID"; continue; }
     TASK="$("$PY" "$AQD_HARNESS/schedule.py" get --schedule "$AQD_SEALED/schedule.json" --run-id "$RUN_ID" --key task)"
-    WORK="$SCORE_ROOT/$RUN_ID"
-    sudo install -d -o "$AQD_EVAL_USER" -g "$AQD_EVAL_USER" -m 0700 "$WORK" "$WORK/tmp" "$WORK/phase" "$WORK/phase/harness"
-    stage() { sudo tar -C "$1" -cf - . | sudo -u "$AQD_EVAL_USER" tar -C "$2" -xf - --no-same-owner; }
-    sudo -u "$AQD_EVAL_USER" mkdir -p "$WORK/agent" "$WORK/pristine" "$WORK/hidden"
-    stage "$CAP/project-final" "$WORK/agent"
-    stage "$AQD_PRISTINE/$TASK/project" "$WORK/pristine"
-    stage "$AQD_EVALUATOR/hidden_tests/$TASK" "$WORK/hidden"
-    sudo install -o "$AQD_EVAL_USER" -g "$AQD_EVAL_USER" -m 0600 "$AQD_PHASE_ROOT/allowlist.json" "$WORK/phase/allowlist.json"
-    for f in score_run.py run_checks.py manifest.py; do
-        sudo install -o "$AQD_EVAL_USER" -g "$AQD_EVAL_USER" -m 0600 "$AQD_HARNESS/$f" "$WORK/phase/harness/$f"
-    done
+    [[ -d "$AQD_EVALUATOR/hidden_tests/$TASK/hidden_tests" ]] || die "hidden tests for $TASK not uploaded"
+    [[ -f "$AQD_EVALUATOR/inventory/$TASK.json" ]] || die "inventory for $TASK not uploaded"
     set +e
-    (cd / && sudo -u "$AQD_EVAL_USER" env -i HOME="$WORK" TMPDIR="$WORK/tmp" PATH="$(agent_path)" LANG=C.UTF-8 \
-        python3 "$WORK/phase/harness/score_run.py" --phase-root "$WORK/phase" --task "$TASK" \
-        --pristine "$WORK/pristine" --agent "$WORK/agent" --hidden "$WORK/hidden" --out "$WORK/hidden-score.json")
+    "$PY" "$AQD_HARNESS/score_run.py" score --phase-root "$AQD_PHASE_ROOT" --task "$TASK" \
+        --pristine "$AQD_PRISTINE/$TASK/project" --agent "$CAP/project-final" \
+        --hidden "$AQD_EVALUATOR/hidden_tests/$TASK" --inventory "$AQD_EVALUATOR/inventory/$TASK.json" \
+        --sandbox docker --image "$IMAGE" --out "$CAP/hidden-score.json"
     RC=$?
     set -e
-    if [[ "$RC" == 0 ]]; then
-        sudo cat "$WORK/hidden-score.json" >"$CAP/hidden-score.json"
-    else
-        log "scoring failed for $RUN_ID (exit $RC)"
-    fi
-    kill_user_processes "$AQD_EVAL_USER"
-    sudo rm -rf --one-file-system "$WORK"
+    case "$RC" in
+        0) ;;
+        3) log "EVALUATION INVALID for $RUN_ID (see hidden-score.json); it will be reported, never scored" ;;
+        *) rm -f "$CAP/hidden-score.json"; die "score_run.py failed for $RUN_ID (exit $RC)" ;;
+    esac
 done < <("$PY" -c 'import json, sys; [print(r["run_id"]) for r in json.load(open(sys.argv[1]))["runs"]]' "$AQD_SEALED/schedule.json")
 log "hidden scoring complete; next: blind_packet.py"

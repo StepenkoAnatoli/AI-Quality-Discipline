@@ -31,6 +31,10 @@ import export_checks  # noqa: E402
 import manifest  # noqa: E402
 import run_status  # noqa: E402
 import schedule  # noqa: E402
+import score_run  # noqa: E402
+
+CLAUDE = "anthropic/claude-sonnet-5-5"
+GROK = "xai/grok-test#high"
 
 SKILL_MD = open(os.path.join(REPO, "skills", "code-discipline", "SKILL.md"), encoding="utf-8").read()
 SKILL_BODY = aqd_common.skill_body(SKILL_MD)
@@ -151,6 +155,31 @@ class ManifestTests(TempDirTest):
             manifest._safe_rel("../outside")
 
 
+class PreregisteredInputsTests(unittest.TestCase):
+    """The prompts and starting workspaces are frozen; changing one must be a recorded decision."""
+
+    EXPECTED = {
+        "NEW-01": ("c64501497fc0a83d2d5236685dd26425ba92deb5f5b4bf5dadd5f06e70c9875c", "48a0081713b1dd9824f6960d43e6f958dc1ac532c47653f247deafadb2da3287"),
+        "NEW-02": ("9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f", "cf0fea1a45be98860c0121b5e3b9d6b066bcf6530128140eef85e7067b2d2ed5"),
+        "NEW-03": ("a5764db416e9848f7b6d51f06948b5110a6785013903260892942d3a042f649b", "4fd45747f8cc96cbbe7ebd20f0410f42930e5df8f9978bb389696606ab4740c4"),
+    }
+
+    def test_prompt_and_workspace_hashes(self):
+        for task, (prompt, workspace) in self.EXPECTED.items():
+            with self.subTest(task=task):
+                data = manifest.build(PHASE, task)
+                self.assertEqual(next(f["sha256"] for f in data["files"] if f["path"] == "TASK.md"), prompt)
+                self.assertEqual(data["workspace_sha256"], workspace)
+
+    def test_prompts_do_not_leak_evaluator_material_or_interface(self):
+        for task in self.EXPECTED:
+            with open(os.path.join(PHASE, "tasks", task, "project", "TASK.md"), encoding="utf-8") as h:
+                text = h.read()
+            for leak in ("hidden", "H0", "H1", "mutant", "reference solution", "opencode", "code-discipline", "skill",
+                         "strict=True", "BEGIN IMMEDIATE", "threading.Lock"):
+                self.assertNotIn(leak.lower(), text.lower(), f"{task} mentions {leak!r}")
+
+
 class FixtureBaselineTests(TempDirTest):
     def test_baseline_tests_pass_on_every_fixture(self):
         for task in ("NEW-01", "NEW-02", "NEW-03"):
@@ -187,35 +216,56 @@ class ScoreRunTests(TempDirTest):
                 "    def test_H02_bom(self):\n        self.assertEqual(import_contacts(b'\\xef\\xbb\\xbfemail,name\\nx@y.io,A\\n').contacts[0].email, 'x@y.io')\n"
             )
         out = os.path.join(self.tmp, "score.json")
-        proc = subprocess.run([sys.executable, os.path.join(HARNESS, "score_run.py"), "--phase-root", PHASE, "--task", "NEW-03",
-                               "--pristine", pristine, "--agent", agent, "--hidden", os.path.dirname(hidden), "--out", out, "--timeout", "120"],
+        inventory = os.path.join(self.tmp, "inventory.json")
+        with open(inventory, "w", encoding="utf-8") as h:
+            json.dump(score_run.build_inventory(PHASE, "NEW-03", pristine, os.path.dirname(hidden)), h)
+        proc = subprocess.run([sys.executable, os.path.join(HARNESS, "score_run.py"), "score", "--phase-root", PHASE, "--task", "NEW-03",
+                               "--pristine", pristine, "--agent", agent, "--hidden", os.path.dirname(hidden), "--inventory", inventory,
+                               "--out", out, "--timeout", "120", "--sandbox", "none", "--trusted-code"],
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         self.assertEqual(proc.returncode, 0, proc.stdout)
         with open(out, encoding="utf-8") as h:
             report = json.load(h)
         # The fixture raises on a BOM header, which unittest reports as an error.
+        self.assertEqual(report["evaluation_status"], "valid")
         self.assertEqual(report["hidden_checks"], {"H01": "pass", "H02": "error"})
         self.assertEqual((report["hidden_passed"], report["hidden_total"]), (1, 2))
-        self.assertTrue(report["baseline_all_pass"])
+        self.assertEqual((report["baseline_passed"], report["baseline_total"]), (4, 4))
         self.assertIn("importer/csv_import.py", report["taken_from_agent"])
 
 
 class ScheduleTests(TempDirTest):
     def test_blocked_balanced_and_deterministic(self):
-        a, b = schedule.make_schedule("ab" * 16), schedule.make_schedule("ab" * 16)
+        a, b = schedule.make_schedule("ab" * 16, [CLAUDE, GROK]), schedule.make_schedule("ab" * 16, [CLAUDE, GROK])
         self.assertEqual([r["run_id"] for r in a["runs"]], [r["run_id"] for r in b["runs"]])
         self.assertEqual(schedule.validate(a), [])
-        for block in range(1, 10):
-            groups = sorted(r["group"] for r in a["runs"] if r["block"] == block)
-            tasks = {r["task"] for r in a["runs"] if r["block"] == block}
-            self.assertEqual(groups, ["control", "treatment"])
-            self.assertEqual(len(tasks), 1)
+        self.assertEqual(len(a["runs"]), 36)
+        for block in range(1, 19):
+            members = [r for r in a["runs"] if r["block"] == block]
+            self.assertEqual(sorted(r["group"] for r in members), ["control", "treatment"])
+            self.assertEqual(len({(r["model"], r["task"]) for r in members}), 1)
         for r in a["runs"]:
             self.assertRegex(r["run_id"], r"^r-[0-9a-f]{10}$")
             self.assertRegex(r["blind_id"], r"^b-[0-9a-f]{8}$")
 
+    def test_smoke_pilot_is_a_2x2(self):
+        s = schedule.make_schedule("cd" * 16, [CLAUDE, GROK], ["NEW-02"], 1)
+        self.assertEqual(schedule.validate(s), [])
+        self.assertEqual(sorted((r["model"], r["group"]) for r in s["runs"]),
+                         sorted((m, g) for m in (CLAUDE, GROK) for g in ("control", "treatment")))
+
+    def test_out_of_scope_or_malformed_models_rejected(self):
+        for bad in (["opencode/nemotron-3.5-super-vl-free#xhigh"], ["claude"], [CLAUDE, CLAUDE], []):
+            with self.assertRaises(ValueError):
+                schedule.make_schedule("ab" * 16, bad)
+
+    def test_validate_detects_mixed_blocks(self):
+        s = schedule.make_schedule("ab" * 16, [CLAUDE, GROK], ["NEW-01"], 1)
+        s["runs"][0]["model"] = GROK if s["runs"][0]["model"] == CLAUDE else CLAUDE
+        self.assertTrue(schedule.validate(s))
+
     def test_rerun_appends_once_per_slot_and_next_skips_finished(self):
-        s = schedule.make_schedule("01" * 16)
+        s = schedule.make_schedule("01" * 16, [CLAUDE])
         first = s["runs"][0]["run_id"]
         entry = schedule.add_rerun(s, first, "gateway 503 before first tool call")
         self.assertEqual((entry["task"], entry["group"], entry["replaces_run"]), (s["runs"][0]["task"], s["runs"][0]["group"], first))
@@ -258,12 +308,14 @@ class ApiCheckTests(unittest.TestCase):
         self.assertFalse(api_checks.check_skills([leaked], "treatment", self.ROOTS)["ok"])
 
     def test_model_variant_and_provider(self):
-        model = {"providerID": "opencode", "id": "nemotron-3.5-super-vl-free", "enabled": True,
-                 "variants": [{"id": v} for v in ("none", "low", "high", "xhigh")]}
-        self.assertTrue(api_checks.check_model([model])["ok"])
-        self.assertEqual(api_checks.check_model([dict(model, variants=[{"id": "high"}])])["reason"], "variant_absent")
-        self.assertEqual(api_checks.check_model([])["reason"], "model_absent")
-        self.assertFalse(api_checks.check_provider([{"id": "anthropic"}])["ok"])
+        model = {"providerID": "xai", "id": "grok-test", "enabled": True,
+                 "variants": [{"id": v} for v in ("low", "high")]}
+        self.assertTrue(api_checks.check_model([model], "xai", "grok-test", "high")["ok"])
+        self.assertTrue(api_checks.check_model([model], "xai", "grok-test", None)["ok"])
+        self.assertEqual(api_checks.check_model([model], "xai", "grok-test", "max")["reason"], "variant_absent")
+        self.assertEqual(api_checks.check_model([model], "anthropic", "grok-test", None)["reason"], "model_absent")
+        self.assertTrue(api_checks.check_provider([{"id": "anthropic"}], "anthropic")["ok"])
+        self.assertFalse(api_checks.check_provider([{"id": "anthropic"}], "xai")["ok"])
 
     def test_config_paths_must_stay_inside_run(self):
         entries = [{"path": "/aqd/env-a/runs/r-0123456789/project/opencode.jsonc"}, {"path": "/etc/opencode/opencode.json"}]
@@ -321,8 +373,8 @@ class DriveSessionTests(TempDirTest):
             message = os.path.join(PHASE, "tasks", "NEW-01", "project", "TASK.md")
             out = os.path.join(self.tmp, "attach" if attach else "plain")
             args = drive_session.parse_args(["--server", f"http://127.0.0.1:{server.server_address[1]}", "--directory", "/aqd/env-a/runs/r-0/project",
-                                             "--message-file", message, "--provider", "opencode", "--model", "nemotron-3.5-super-vl-free",
-                                             "--variant", "xhigh", "--poll", "0", "--out-dir", out] + (["--attach-skill", "code-discipline"] if attach else []))
+                                             "--message-file", message, "--provider", "xai", "--model", "grok-test",
+                                             "--variant", "high", "--poll", "0", "--out-dir", out] + (["--attach-skill", "code-discipline"] if attach else []))
             result = drive_session.drive(args, drive_session.Client(args.server, "pw"), sleep=lambda s: None)
         finally:
             server.shutdown()
@@ -341,15 +393,19 @@ class DriveSessionTests(TempDirTest):
         self.assertNotIn("skills", prompt(control_requests))
         self.assertEqual(prompt(treatment_requests)["skills"], [{"id": "code-discipline"}])
         self.assertEqual(create(control_requests), create(treatment_requests))
-        self.assertEqual(create(control_requests)["model"], {"providerID": "opencode", "id": "nemotron-3.5-super-vl-free", "variant": "xhigh"})
+        self.assertEqual(create(control_requests)["model"], {"providerID": "xai", "id": "grok-test", "variant": "high"})
         self.assertTrue(all(auth and auth.startswith("Basic ") for *_, auth in control_requests))
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "plain", "export.json")))
 
 
-def assistant(text="done", variant="xhigh", tools=(), reasoning=5):
+def analyse_export(export, group, model=GROK):
+    return export_checks.analyse(export, group, model)
+
+
+def assistant(text="done", variant="high", tools=(), reasoning=5):
     content = [{"type": "text", "text": text}] + list(tools)
     return {"type": "assistant", "id": "m", "time": {"created": 1}, "agent": "build",
-            "model": {"providerID": "opencode", "id": "nemotron-3.5-super-vl-free", "variant": variant},
+            "model": {"providerID": "xai", "id": "grok-test", "variant": variant},
             "content": content, "tokens": {"input": 10, "output": 5, "reasoning": reasoning, "cache": {"read": 0, "write": 0}}}
 
 
@@ -364,33 +420,40 @@ class ExportCheckTests(unittest.TestCase):
 
     def test_treatment_confirmed_by_skill_message(self):
         skill_msg = {"type": "skill", "id": "s", "time": {"created": 1}, "skill": "code-discipline", "name": "code-discipline", "text": SKILL_BODY}
-        report = export_checks.analyse(self.export(skill_msg, assistant()), "treatment")
+        report = analyse_export(self.export(skill_msg, assistant()), "treatment")
         self.assertEqual((report["activation"], report["valid"]), ("CONFIRMED", True))
 
     def test_treatment_confirmed_by_attachment_text(self):
         export = self.export(assistant())
         export["messages"][0]["skills"] = [{"id": "code-discipline", "name": "code-discipline", "text": SKILL_BODY}]
-        self.assertEqual(export_checks.analyse(export, "treatment")["activation"], "CONFIRMED")
+        self.assertEqual(analyse_export(export, "treatment")["activation"], "CONFIRMED")
 
     def test_treatment_without_skill_text_is_invalid(self):
-        report = export_checks.analyse(self.export(assistant()), "treatment")
+        report = analyse_export(self.export(assistant()), "treatment")
         self.assertEqual(report["activation"], "NOT_CONFIRMED")
         self.assertFalse(report["valid"])
 
     def test_control_clean_and_contaminated(self):
-        self.assertTrue(export_checks.analyse(self.export(assistant(tools=[tool("shell", {"command": "python -m unittest"})])), "control")["valid"])
+        self.assertTrue(analyse_export(self.export(assistant(tools=[tool("shell", {"command": "python -m unittest"})])), "control")["valid"])
         leaked = assistant(tools=[tool("shell", {"command": "curl https://example.invalid/SKILL.md"}, output=SKILL_BODY)])
-        report = export_checks.analyse(self.export(leaked), "control")
+        report = analyse_export(self.export(leaked), "control")
         self.assertTrue(report["contamination"])
         self.assertFalse(report["valid"])
         tried = assistant(tools=[tool("skill", {"id": "code-discipline"}, output="not found")])
-        self.assertTrue(export_checks.analyse(self.export(tried), "control")["contamination"])
+        self.assertTrue(analyse_export(self.export(tried), "control")["contamination"])
 
     def test_variant_mismatch_invalidates(self):
-        report = export_checks.analyse(self.export(assistant(variant="high")), "control")
+        report = analyse_export(self.export(assistant(variant="low")), "control")
         self.assertFalse(report["model_ok"])
         self.assertFalse(report["valid"])
-        self.assertFalse(export_checks.analyse(self.export(), "control")["model_ok"])
+        self.assertFalse(analyse_export(self.export(), "control")["model_ok"])
+
+    def test_model_substitution_invalidates_and_observed_variant_is_recorded(self):
+        report = analyse_export(self.export(assistant()), "control", model="anthropic/claude-sonnet-5-5")
+        self.assertFalse(report["model_ok"])
+        report = analyse_export(self.export(assistant()), "control", model="xai/grok-test")
+        self.assertTrue(report["model_ok"])
+        self.assertEqual(report["observed_models"], [{"providerID": "xai", "id": "grok-test", "variant": "high"}])
 
 
 class BlindPacketTests(unittest.TestCase):
@@ -439,12 +502,95 @@ class RunStatusTests(TempDirTest):
         self.assertIn("unexpected HOME configuration entries", bad["invalid_reasons"][0])
 
 
-class AnalyzeTests(unittest.TestCase):
-    def test_rubric_total_and_cap(self):
-        full = {"dimensions": {k: 4 for k in analyze.WEIGHTS}}
-        self.assertEqual(analyze.rubric_total(full), 100)
-        self.assertEqual(analyze.rubric_total(dict(full, critical_failures=["fabricated test run"])), 49)
-        self.assertIsNone(analyze.rubric_total({"dimensions": {}}))
+class AnalyzeTests(TempDirTest):
+    def setUp(self):
+        super().setUp()
+        self.sched = schedule.make_schedule("ef" * 16, [CLAUDE, GROK], ["NEW-02"], 1)
+        self.caps = os.path.join(self.tmp, "caps")
+        self.scores = os.path.join(self.tmp, "scores")
+
+    def put(self, run, valid=True, evaluation="valid", fraction=1.0, score=None):
+        cap = os.path.join(self.caps, run["run_id"])
+        os.makedirs(cap, exist_ok=True)
+        with open(os.path.join(cap, "run-status.json"), "w", encoding="utf-8") as h:
+            json.dump({"valid": valid, "invalid_reasons": [] if valid else ["gateway error"]}, h)
+        if evaluation is not None:
+            hidden = {"task": run["task"], "evaluation_status": evaluation, "invalid_reasons": [] if evaluation == "valid" else ["no result file"],
+                      "primary": {"hidden_pass_fraction": fraction, "fully_correct": fraction == 1.0} if evaluation == "valid" else None}
+            with open(os.path.join(cap, "hidden-score.json"), "w", encoding="utf-8") as h:
+                json.dump(hidden, h)
+        if score is not None:
+            os.makedirs(os.path.join(self.scores, run["blind_id"]), exist_ok=True)
+            with open(os.path.join(self.scores, run["blind_id"], "score.json"), "w", encoding="utf-8") as h:
+                json.dump(score, h)
+
+    def resolve(self):
+        return analyze.resolve_slots(self.sched, self.caps, self.scores)
+
+    def test_complete_pilot_effects_are_within_model(self):
+        for run in self.sched["runs"]:
+            self.put(run, fraction=1.0 if run["group"] == "treatment" else 0.5)
+        rows, problems = self.resolve()
+        self.assertEqual(problems, [])
+        report = analyze.analyse(rows, problems)
+        self.assertEqual(report["status"], "COMPLETE")
+        for model in (CLAUDE, GROK):
+            self.assertEqual(report["primary"]["hidden_pass_fraction"][model]["difference_by_task"], {"NEW-02": 0.5})
+
+    def test_missing_invalid_and_unevaluated_runs_make_the_report_incomplete(self):
+        runs = self.sched["runs"]
+        self.put(runs[0], valid=False)
+        self.put(runs[1], evaluation="invalid")
+        self.put(runs[2], evaluation=None)
+        rows, problems = self.resolve()
+        self.assertEqual(len(rows), 0)
+        self.assertEqual(sorted(p["problem"].split(":")[0] for p in problems),
+                         ["evaluation invalid", "evaluation missing", "run invalid", "run missing"])
+        self.assertEqual(analyze.analyse(rows, problems)["status"], "INCOMPLETE")
+        out = os.path.join(self.tmp, "report.json")
+        path = os.path.join(self.tmp, "s.json")
+        with open(path, "w", encoding="utf-8") as h:
+            json.dump(self.sched, h)
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(analyze.main(["--schedule", path, "--captures", self.caps, "--scores", self.scores, "--out", out]), 3)
+            self.assertEqual(analyze.main(["--schedule", path, "--captures", self.caps, "--scores", self.scores, "--out", out,
+                                           "--allow-incomplete"]), 0)
+
+    def test_two_valid_runs_in_one_slot_is_an_error(self):
+        first = self.sched["runs"][0]
+        rerun = schedule.add_rerun(self.sched, first["run_id"], "test")
+        self.put(first)
+        self.put(rerun)
+        with self.assertRaises(analyze.AnalysisError):
+            self.resolve()
+
+    def test_rerun_replaces_an_invalid_attempt(self):
+        first = self.sched["runs"][0]
+        rerun = schedule.add_rerun(self.sched, first["run_id"], "gateway 503")
+        self.put(first, valid=False)
+        self.put(rerun, fraction=0.25)
+        rows, _ = self.resolve()
+        self.assertEqual([(r["run_id"], r["hidden_pass_fraction"]) for r in rows], [(rerun["run_id"], 0.25)])
+
+    def test_documentation_scores_never_enter_the_primary_outcome(self):
+        excellent = {"dimensions": {k: 4 for k in analyze.SECONDARY_DIMENSIONS}, "group_guess": "control"}
+        for run in self.sched["runs"]:
+            self.put(run, fraction=0.0, score=excellent)
+        rows, problems = self.resolve()
+        report = analyze.analyse(rows, problems)
+        for model in (CLAUDE, GROK):
+            cells = report["primary"]["hidden_pass_fraction"][model]["by_task"]["NEW-02"]
+            self.assertEqual({g: c["mean"] for g, c in cells.items()}, {"control": 0.0, "treatment": 0.0})
+            self.assertEqual(report["primary"]["fully_correct"][model]["by_task"]["NEW-02"]["treatment"]["mean"], 0.0)
+        self.assertNotIn("correctness", analyze.SECONDARY_DIMENSIONS)
+
+    def test_task_mismatch_is_an_error(self):
+        run = self.sched["runs"][0]
+        self.put(run)
+        with open(os.path.join(self.caps, run["run_id"], "hidden-score.json"), "w", encoding="utf-8") as h:
+            json.dump({"task": "NEW-01", "evaluation_status": "valid", "primary": {"hidden_pass_fraction": 1.0}}, h)
+        with self.assertRaises(analyze.AnalysisError):
+            self.resolve()
 
     def test_permutation_exact_for_perfect_separation(self):
         by_task = {t: {"control": [0.0, 0.0, 0.0], "treatment": [1.0, 1.0, 1.0]} for t in ("A", "B", "C")}

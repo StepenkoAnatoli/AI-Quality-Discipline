@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Remove everything the harness created inside the Codespace, except the
+# Remove everything the harness created on the benchmark host, except the
 # operator store, which holds the evidence. Run only after the evidence has
-# been downloaded and checked (see SPECIFICATION.md §16).
+# been downloaded and checked (see PROMPT-SMOKE-TEST.md).
 #
 # Usage: teardown.sh --evidence-downloaded [--purge-operator-store]
 # Deleting the Codespace itself is done from the user's machine with

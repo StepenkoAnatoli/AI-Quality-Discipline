@@ -4,11 +4,24 @@ import hashlib
 import re
 
 SKILL_ID = "code-discipline"
-PROVIDER_ID = "opencode"
-MODEL_ID = "nemotron-3.5-super-vl-free"
-VARIANT = "xhigh"
 AGENT = "build"
 RUN_TIMEOUT_SECONDS = 2700  # 45 minutes of agent time per run
+
+# Models are not constants: every scheduled run names its model as
+# "provider/model" or "provider/model#variant" (OpenCode's selector syntax).
+# Only Claude (provider "anthropic") and Grok (provider "xai") are in scope.
+ALLOWED_PROVIDERS = ("anthropic", "xai")
+_MODEL_REF = re.compile(r"^(?P<provider>[a-z0-9-]+)/(?P<model>[A-Za-z0-9._:-]+)(?:#(?P<variant>[A-Za-z0-9._-]+))?$")
+
+
+def parse_model(ref):
+    """Return (provider, model, variant or None). Raises ValueError for anything else."""
+    match = _MODEL_REF.match(ref or "")
+    if not match:
+        raise ValueError(f"model reference must be provider/model[#variant], got {ref!r}")
+    if match.group("provider") not in ALLOWED_PROVIDERS:
+        raise ValueError(f"provider {match.group('provider')!r} is out of scope; allowed: {ALLOWED_PROVIDERS}")
+    return match.group("provider"), match.group("model"), match.group("variant")
 
 # Distinctive lines of skills/code-discipline/SKILL.md. Their presence in a
 # transcript is activation evidence (treatment) or contamination (control).

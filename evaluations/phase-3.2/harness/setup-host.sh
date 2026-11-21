@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time host setup inside the benchmark Codespace. Run as the operator.
+# One-time setup of the disposable benchmark host. Run as the operator.
 # Creates OS users, the root-owned /aqd tree, the operator-only store and the
 # sealed schedule. Copies ONLY allowlisted files (allowlist.json) from the
 # checkout; nothing else of the repository ever reaches an agent directory.
@@ -37,7 +37,7 @@ for user in "${AQD_USER_FOR_ENV[@]}" "$AQD_EVAL_USER"; do
 done
 
 # Deny agent users any access to /workspaces where ACLs are available.
-if command -v setfacl >/dev/null 2>&1; then
+if command -v setfacl >/dev/null 2>&1 && [[ -d /workspaces ]]; then
     for user in "${AQD_USER_FOR_ENV[@]}" "$AQD_EVAL_USER"; do
         sudo setfacl -m "u:$user:---" /workspaces || log "WARNING: setfacl on /workspaces failed for $user"
     done
@@ -77,8 +77,6 @@ cp "$AQD_PHASE_ROOT/config/global-opencode.jsonc" "$AQD_PRISTINE/config/global-o
 sha256sum "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$AQD_PRISTINE/config/global-opencode.jsonc" \
     >"$AQD_SEALED/pristine-extra.sha256"
 
-# Sealed schedule (refuses to overwrite an existing one).
-if [[ ! -f "$AQD_SEALED/schedule.json" ]]; then
-    "$(python_bin)" "$AQD_HARNESS/schedule.py" create --out "$AQD_SEALED/schedule.json"
-fi
-log "setup complete. Next: install-opencode.sh, fill $AQD_SEALED/billing-confirmation.json, preflight.sh"
+log "setup complete. Next: install-opencode.sh, then create the sealed schedule with the exact model IDs:"
+log "  python3 $AQD_HARNESS/schedule.py create --out $AQD_SEALED/schedule.json --models anthropic/<id>,xai/<id> ..."
+log "then write $AQD_CREDENTIALS (mode 0600) and run preflight.sh (see PROMPT-SMOKE-TEST.md)"

@@ -11,7 +11,7 @@ This directory contains reproducible, skill-specific evaluations. A benchmark re
 - `fixtures/` — synthetic task inputs and baseline checks.
 - `run-record-template.json` — per-run metadata and blinded scoring record.
 - `results/` — raw run records and analyzed results.
-- `phase-3.2/` — specification, synthetic tasks (NEW-01/02/03) and harness for the 18-run OpenCode with/without `code-discipline` pilot. Specification and preparation only; nothing has been run. Start with `phase-3.2/README.md`.
+- `phase-3.2/` — specification v3, synthetic tasks (NEW-01/02/03), fail-closed scoring and harness for the Claude/Grok with/without `code-discipline` experiment. Tested offline only; no model run yet. Start with `phase-3.2/README.md`.
 
 ## Pilot status
 

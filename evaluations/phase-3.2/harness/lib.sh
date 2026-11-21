@@ -3,8 +3,9 @@
 # not execute it. Every value here is part of the pre-registered protocol.
 #
 # Assumptions (verified by preflight.sh before any run):
-#   * Linux GitHub Codespace from the default (universal) image, operator user
-#     with passwordless sudo, bash >= 4, python3 >= 3.10, curl, tar, diff.
+#   * A disposable Linux host (a VM or a GitHub Codespace), operator user with
+#     passwordless sudo, bash >= 4, python3 >= 3.10, curl, tar, diff; Docker
+#     for scoring (score-all.sh).
 #   * The repository is checked out at the branch under test; this file lives
 #     in <checkout>/evaluations/phase-3.2/harness/.
 
@@ -34,15 +35,19 @@ AQD_OPENCODE_VERSION="2.3.2"
 AQD_OPENCODE_PREFIX="/opt/aqd-opencode"
 AQD_OPENCODE_BIN="$AQD_OPENCODE_PREFIX/bin/opencode"
 
-# Pre-registered model selection (also in aqd_common.py).
-AQD_PROVIDER="opencode"
-AQD_MODEL="nemotron-3.5-super-vl-free"
-AQD_VARIANT="xhigh"
+# The model is NOT a constant: each scheduled run names it as
+# provider/model[#variant] (schedule.py; providers anthropic and xai only).
+# API keys live only in this operator file, one KEY=value per line:
+#   ANTHROPIC_API_KEY=...   XAI_API_KEY=...
+# Only the key of the run's provider is passed to that run. The agent's shell
+# can read it (it runs as the same user as the OpenCode server): use dedicated,
+# spend-capped keys and revoke them after the pilot.
+AQD_CREDENTIALS="${AQD_CREDENTIALS:-$AQD_SEALED/credentials.env}"
 AQD_AGENT="build"
 AQD_SKILL_ID="code-discipline"
 AQD_RUN_TIMEOUT_SECONDS=2700
 
-# Activation mode, fixed for all 18 runs before run 1 (see SPECIFICATION.md §7):
+# Activation mode, fixed for every run of a schedule (see SPECIFICATION.md section 4):
 #   api-attachment  identical prompt text; treatment adds skills:[{id}] (default)
 #   cli-mention     `opencode run`; treatment text is prefixed "@code-discipline"
 #                   (requires explicit user approval: it changes the prompt text)
@@ -114,6 +119,34 @@ as_agent() {
     local user="$1" dir="$2"
     shift 2
     (cd / && sudo -u "$user" env -i "${AGENT_ENV[@]}" /bin/sh -c 'cd "$1" || exit 97; shift; exec "$@"' sh "$dir" "$@")
+}
+
+# Split provider/model[#variant] into MODEL_PROVIDER, MODEL_ID, MODEL_VARIANT.
+parse_model_ref() {
+    local ref="$1"
+    [[ "$ref" =~ ^(anthropic|xai)/([A-Za-z0-9._:-]+)(#([A-Za-z0-9._-]+))?$ ]] \
+        || die "model reference must be anthropic|xai/<model>[#variant], got '$ref'"
+    MODEL_PROVIDER="${BASH_REMATCH[1]}"
+    MODEL_ID="${BASH_REMATCH[2]}"
+    MODEL_VARIANT="${BASH_REMATCH[4]:-}"
+}
+
+provider_key_var() {
+    case "$1" in
+        anthropic) echo ANTHROPIC_API_KEY ;;
+        xai) echo XAI_API_KEY ;;
+        *) die "no credential variable for provider $1" ;;
+    esac
+}
+
+# Append the run's provider key (and nothing else) to AGENT_ENV. Never echoed.
+add_provider_credential() {
+    local var value
+    var="$(provider_key_var "$1")"
+    [[ -f "$AQD_CREDENTIALS" ]] || die "credentials file $AQD_CREDENTIALS missing"
+    value="$(sed -n "s/^${var}=//p" "$AQD_CREDENTIALS" | head -n 1)"
+    [[ -n "$value" ]] || die "$var not set in $AQD_CREDENTIALS"
+    AGENT_ENV+=("$var=$value")
 }
 
 json_get() {  # json_get FILE KEY  -> prints top-level value

@@ -35,7 +35,27 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_validators.py' -v
       - name: Check code fixture baseline outcomes
         run: python evaluations/fixtures/check_fixtures.py
-      - name: Phase 3.2 allowlist, fixtures and harness tests (no OpenCode, no network)
+      - name: Phase 3.2 allowlist, fixtures, harness and fail-closed scoring tests (no OpenCode, no network)
         run: |
           python evaluations/phase-3.2/harness/manifest.py check-sources --phase-root evaluations/phase-3.2
-          python -m unittest discover -s evaluations/phase-3.2/tests -v
+          python -m unittest discover -s evaluations/phase-3.2/tests -p "test_harness.py" -v
+          python -m unittest discover -s evaluations/phase-3.2/tests -p "test_scoring.py" -v
+
+  phase-3-2-scoring-sandbox:
+    # Demonstrates the Docker isolation boundary used for hidden scoring. Fails
+    # if the tests are skipped, because a skipped test demonstrates nothing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Pin the sandbox image by digest
+        run: |
+          docker pull python:3.12-slim
+          echo "AQD_SANDBOX_IMAGE=$(docker inspect --format '{{index .RepoDigests 0}}' python:3.12-slim)" >> "$GITHUB_ENV"
+      - name: Sandbox isolation tests
+        run: |
+          python -m unittest discover -s evaluations/phase-3.2/tests -p "test_sandbox.py" -v 2>&1 | tee sandbox.log
+          test "${PIPESTATUS[0]}" -eq 0
+          ! grep -q "skipped" sandbox.log

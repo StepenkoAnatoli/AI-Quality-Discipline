@@ -4,7 +4,7 @@
     run_status.py --capture DIR --group control|treatment --started EPOCH \
                   --ended EPOCH --api-exit N --driver-exit N --step TEXT
 
-Pre-registered validity rules (SPECIFICATION.md §12). A run is VALID only if:
+Pre-registered validity rules (SPECIFICATION.md section 6.2). A run is VALID only if:
   * api_checks exited 0 (provider/model/variant available; skill isolation);
   * the driver reached idle (status "idle") or the pre-registered timeout
     ("timeout" is a valid outcome, scored on what exists); a pending

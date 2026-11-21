@@ -73,10 +73,13 @@ def unwrap(payload):
 
 
 def build_create_body(args):
+    model = {"providerID": args.provider, "id": args.model}
+    if args.variant:
+        model["variant"] = args.variant
     return {
         "title": args.title,
         "agent": args.agent,
-        "model": {"providerID": args.provider, "id": args.model, "variant": args.variant},
+        "model": model,
         "location": {"directory": args.directory},
     }
 
@@ -214,7 +217,7 @@ def main(argv=None):
         print(f"drive_session.py: {args.password_env} is not set", file=sys.stderr)
         return 2
     if not args.export_existing:
-        missing = [n for n in ("directory", "message_file", "provider", "model", "variant") if not getattr(args, n)]
+        missing = [n for n in ("directory", "message_file", "provider", "model") if not getattr(args, n)]
         if missing:
             print(f"drive_session.py: missing --{', --'.join(m.replace('_', '-') for m in missing)}", file=sys.stderr)
             return 2

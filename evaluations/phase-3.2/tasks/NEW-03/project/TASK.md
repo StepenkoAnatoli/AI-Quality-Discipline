@@ -2,7 +2,7 @@
 
 Customers report that contact imports fail or produce wrong data for files exported from spreadsheet tools and other CRMs: semicolon-separated files with a byte-order mark, quoted names containing commas or line breaks, and columns in a different order. Two of the reported files are in `sample_data/`. Rewrite `importer/csv_import.py` so that `import_contacts(data: bytes) -> ImportResult` implements the contract below exactly.
 
-The code is in the current directory; see `README.md` for the layout and the test command. Work without asking questions: if something is ambiguous, make the most conservative reasonable assumption and state it in your final report.
+The code is in the current directory; `README.md` describes the layout and how to run the tests. Work without asking questions: if something is ambiguous, make the most conservative reasonable assumption and state it in your final report.
 
 ## Import contract
 
@@ -20,7 +20,7 @@ Error codes are the constants in `importer/models.py`. A **file-level error** ra
 
 ### Parsing
 
-5. Records follow RFC 4180 with `"` as the quote character: a quoted field may contain the delimiter and line breaks, and `""` inside a quoted field is one `"`. A `"` inside an unquoted field is kept as a literal character. Python's `csv` module with `strict=True` implements exactly these rules.
+5. Records follow RFC 4180 with `"` as the quote character: a quoted field may contain the delimiter and line breaks, and `""` inside a quoted field is one `"`. A `"` inside an unquoted field is kept as a literal character.
 6. Malformed quoting — a closing quote followed by anything other than the delimiter or a line break, or a quoted field still open at the end of the input — raises a file-level `malformed_csv` error whose `line` is the line number where that record starts.
 7. Line numbers are 1-based physical line numbers in the decoded text; the header is line 1. A record's line is the line where it starts. A quoted line break inside a record moves the start line of every later record.
 
@@ -50,8 +50,7 @@ Error codes are the constants in `importer/models.py`. A **file-level error** ra
 
 ## Constraints
 
-- Change only `importer/csv_import.py`. Add any new tests under `tests/additive/`.
-- Do not modify `importer/models.py`, anything in `sample_data/`, this file, `README.md`, `opencode.jsonc`, or anything under `tests/baseline/`.
+- Change only `importer/csv_import.py`. You may add new test files under `tests/additive/`. Do not modify any other file.
 - Use the Python standard library only.
 - Keep the public signature `import_contacts(data) -> ImportResult`.
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Post-run checks on an exported session (operator-only; output is sealed).
 
-    export_checks.py --export export.json --group control|treatment --out FILE
+    export_checks.py --export export.json --group control|treatment \
+                     --model PROVIDER/MODEL[#VARIANT] --out FILE
 
 The export shape follows SessionTransfer.Data in the official OpenAPI
 reference: {"info": Session.Info, "messages": [Session.Message.Info]}.
@@ -10,7 +11,9 @@ Message types used: "user" (text, skills[]), "skill" (skill, text),
 tokens, error, finish), "model-switched".
 
 Verdicts:
-  model_ok         every assistant message used opencode/<model>#xhigh
+  model_ok         every assistant message used the run's provider/model, and
+                   its variant when the run names one (observed variants are
+                   recorded either way)
   activation       treatment: CONFIRMED when the canonical skill text is in
                    the session (skill message, attached text, or completed
                    skill tool output); control: NOT_APPLICABLE
@@ -46,12 +49,16 @@ def _tool_parts(message):
             yield part
 
 
-def analyse(export, group):
+def analyse(export, group, model_ref):
+    provider_id, model_id, variant = c.parse_model(model_ref)
     messages = export["messages"]
-    report = {"group": group, "message_count": len(messages), "assistant_messages": 0, "model_mismatches": [],
-              "errors": [], "tool_counts": {}, "tokens": {"input": 0, "output": 0, "reasoning": 0},
+    report = {"group": group, "model_ref": model_ref, "message_count": len(messages), "assistant_messages": 0,
+              "model_mismatches": [], "observed_models": [], "errors": [], "tool_counts": {},
+              "tokens": {"input": 0, "output": 0, "reasoning": 0},
               "skill_messages": [], "user_skill_attachments": [], "skill_tool_calls": []}
-    expected = {"providerID": c.PROVIDER_ID, "id": c.MODEL_ID, "variant": c.VARIANT}
+    expected = {"providerID": provider_id, "id": model_id}
+    if variant is not None:
+        expected["variant"] = variant
     for index, msg in enumerate(messages):
         if not isinstance(msg, dict):
             continue
@@ -59,6 +66,9 @@ def analyse(export, group):
         if kind == "assistant":
             report["assistant_messages"] += 1
             model = msg.get("model") or {}
+            observed = {k: model.get(k) for k in ("providerID", "id", "variant")}
+            if observed not in report["observed_models"]:
+                report["observed_models"].append(observed)
             actual = {k: model.get(k) for k in expected}
             if actual != expected:
                 report["model_mismatches"].append({"index": index, "model": actual})
@@ -113,7 +123,7 @@ def analyse(export, group):
     report["valid"] = report["model_ok"] and not report["contamination"] and report["activation"] in ("CONFIRMED", "NOT_APPLICABLE")
     reasons = []
     if not report["model_ok"]:
-        reasons.append("model/variant not as pre-registered (or no assistant message)")
+        reasons.append("model/variant differs from the run's model (or no assistant message)")
     if report["contamination"]:
         reasons.append("control session contains code-discipline content")
     if report["activation"] == "NOT_CONFIRMED":
@@ -126,10 +136,11 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--export", required=True)
     p.add_argument("--group", choices=("control", "treatment"), required=True)
+    p.add_argument("--model", required=True, help="provider/model[#variant]")
     p.add_argument("--out", required=True)
     args = p.parse_args(argv)
     try:
-        report = analyse(load_export(args.export), args.group)
+        report = analyse(load_export(args.export), args.group, args.model)
     except (OSError, ValueError) as exc:
         print(f"export_checks.py: {exc}", file=sys.stderr)
         return 2

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Phase 3.2 preflight. Run as the Codespace operator after setup-host.sh and
-# install-opencode.sh. Sends NO model request: the catalog probe only asks a
-# private, credential-free OpenCode server which providers, models and
-# variants it offers.
+# Phase 3.2 preflight. Run as the operator after setup-host.sh,
+# install-opencode.sh and schedule.py create. Sends NO model request: for each
+# scheduled model, a private OpenCode server holding only that provider's key
+# is asked which providers, models and variants it offers.
 #
 # Usage: preflight.sh
 # Writes $AQD_SEALED/preflight.json and, only when every gate passes,
@@ -17,7 +17,7 @@ gate() { GATES+=("$1=$2"); log "gate $1: $2"; }
 
 require_cmd sudo python3 curl tar diff pgrep pkill sha256sum git
 sudo -n true 2>/dev/null || die "passwordless sudo is required for the operator"
-[[ "${CODESPACES:-}" == "true" ]] || log "WARNING: CODESPACES is not 'true'; the protocol assumes a GitHub Codespace"
+[[ "${CODESPACES:-}" == "true" ]] || log "note: not a GitHub Codespace; use a disposable host that holds nothing but this checkout"
 [[ -d "$AQD_SEALED" && -d "$AQD_PRISTINE" ]] || die "run setup-host.sh first"
 rm -f "$AQD_SEALED/preflight.ok"
 
@@ -101,10 +101,11 @@ CANON_SHA="$(sha256sum "$AQD_CHECKOUT/skills/$AQD_SKILL_ID/SKILL.md" | cut -d' '
 [[ "$SKILL_SHA" == "$CANON_SHA" ]] || die "pristine skill differs from the committed canonical skill"
 gate pristine ok
 
-# 5. Billing and quota confirmation, filled in by the user from
-#    https://github.com/settings/billing (cannot be read from inside a Codespace).
+# 5. Only on a GitHub Codespace: billing and quota confirmation, filled in by
+#    the user from https://github.com/settings/billing.
 BILLING="$AQD_SEALED/billing-confirmation.json"
-[[ -f "$BILLING" ]] || die "missing $BILLING (see SPECIFICATION.md §15 preflight checklist)"
+if [[ "${CODESPACES:-}" == "true" ]]; then
+[[ -f "$BILLING" ]] || die "missing $BILLING (see SPECIFICATION.md, execution host)"
 "$(python_bin)" - "$BILLING" <<'PY' || die "billing confirmation incomplete or unsafe"
 import json, sys
 b = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -121,36 +122,51 @@ if float(b["compute_core_hours_remaining"]) < 40:
     sys.exit("fewer than 40 core-hours remain; the plan needs up to about 36 on a 2-core machine")
 PY
 gate billing confirmed
+else
+gate billing "not a Codespace; host cost is the user's responsibility"
+fi
 
-# 6. Catalog probe with a credential-free, signed-out HOME (no model request).
-PROBE="$AQD_ROOT/env-a/preflight-$(date -u +%s)"
+# 6. Catalog probe for every model in the sealed schedule, with only that
+#    provider's key (no model request is sent).
+SCHEDULE="$AQD_SEALED/schedule.json"
+[[ -f "$SCHEDULE" ]] || die "create the sealed schedule first (schedule.py create --models ...)"
+[[ -f "$AQD_CREDENTIALS" ]] || die "credentials file $AQD_CREDENTIALS missing"
+[[ "$(stat -c %a "$AQD_CREDENTIALS")" == "600" ]] || die "$AQD_CREDENTIALS must be mode 0600"
 PROBE_USER="${AQD_USER_FOR_ENV[env-a]}"
-sudo install -d -o "$PROBE_USER" -g "$PROBE_USER" -m 0700 "$PROBE" "$PROBE/home" "$PROBE/project" "$PROBE/tmp"
-PORT="$(free_port)"; PW="$(random_secret)"
-cleanup_probe() { kill "${SERVE_PID:-0}" 2>/dev/null || true; kill_user_processes "$PROBE_USER"; sudo rm -rf "$PROBE"; }
+cleanup_probe() { kill "${SERVE_PID:-0}" 2>/dev/null || true; kill_user_processes "$PROBE_USER"; sudo rm -rf "${PROBE:-/nonexistent}"; }
 trap cleanup_probe EXIT
-make_agent_env "$PROBE" "$PW"
-assert_clean_ancestors "$PROBE/project"
-as_agent "$PROBE_USER" "$PROBE/project" "$AQD_OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" \
-    >"$AQD_SEALED/preflight-serve.log" 2>&1 &
-SERVE_PID=$!
-for _ in $(seq 1 60); do
-    curl -fsS -u "opencode:$PW" "http://127.0.0.1:$PORT/api/info" >/dev/null 2>&1 && break
-    sleep 1
-done
-set +e
-OPENCODE_PASSWORD="$PW" "$(python_bin)" "$AQD_HARNESS/api_checks.py" --server "http://127.0.0.1:$PORT" \
-    --directory "$PROBE/project" --group control --allowed-root "$PROBE" --allowed-root "$AQD_OPENCODE_PREFIX" \
-    --out "$AQD_SEALED/preflight-catalog.json"
-PROBE_CODE=$?
-set -e
-case "$PROBE_CODE" in
-    0)  gate catalog "provider, model and variant available signed out" ;;
-    10) gate catalog "BLOCKED: provider '$AQD_PROVIDER' absent without credentials" ;;
-    11) gate catalog "BLOCKED: model $AQD_MODEL absent or disabled" ;;
-    12) gate catalog "BLOCKED: variant $AQD_VARIANT not offered" ;;
-    *)  gate catalog "FAILED (exit $PROBE_CODE)" ;;
-esac
+PROBE_CODE=0
+while IFS= read -r MODEL_REF; do
+    parse_model_ref "$MODEL_REF"
+    PROBE="$AQD_ROOT/env-a/preflight-$(date -u +%s)-$RANDOM"
+    sudo install -d -o "$PROBE_USER" -g "$PROBE_USER" -m 0700 "$PROBE" "$PROBE/home" "$PROBE/project" "$PROBE/tmp"
+    PORT="$(free_port)"; PW="$(random_secret)"
+    make_agent_env "$PROBE" "$PW"
+    add_provider_credential "$MODEL_PROVIDER"
+    assert_clean_ancestors "$PROBE/project"
+    as_agent "$PROBE_USER" "$PROBE/project" "$AQD_OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" \
+        >"$AQD_SEALED/preflight-serve-$MODEL_PROVIDER.log" 2>&1 &
+    SERVE_PID=$!
+    for _ in $(seq 1 60); do
+        curl -fsS -u "opencode:$PW" "http://127.0.0.1:$PORT/api/info" >/dev/null 2>&1 && break
+        sleep 1
+    done
+    set +e
+    OPENCODE_PASSWORD="$PW" "$(python_bin)" "$AQD_HARNESS/api_checks.py" --server "http://127.0.0.1:$PORT" \
+        --directory "$PROBE/project" --group control --model "$MODEL_REF" --allowed-root "$PROBE" \
+        --allowed-root "$AQD_OPENCODE_PREFIX" --out "$AQD_SEALED/preflight-catalog-$MODEL_PROVIDER.json"
+    CODE=$?
+    set -e
+    case "$CODE" in
+        0)  gate "catalog:$MODEL_REF" "available" ;;
+        10) gate "catalog:$MODEL_REF" "BLOCKED: provider absent (key missing or rejected)" ;;
+        11) gate "catalog:$MODEL_REF" "BLOCKED: model absent or disabled" ;;
+        12) gate "catalog:$MODEL_REF" "BLOCKED: variant not offered" ;;
+        *)  gate "catalog:$MODEL_REF" "FAILED (exit $CODE)" ;;
+    esac
+    [[ "$CODE" == 0 ]] || PROBE_CODE="$CODE"
+    cleanup_probe
+done < <("$(python_bin)" -c 'import json, sys; [print(m) for m in json.load(open(sys.argv[1]))["design"]["models"]]' "$SCHEDULE")
 
 "$(python_bin)" - "$REPORT" "$PROBE_CODE" "${GATES[@]}" <<'PY'
 import datetime, json, sys
@@ -162,7 +178,7 @@ PY
 
 if [[ "$PROBE_CODE" == "0" ]]; then
     cp "$REPORT" "$AQD_SEALED/preflight.ok"
-    log "PREFLIGHT PASSED. Runtime gates R1-R6 (SPECIFICATION.md §18) still require the authorised smoke run."
+    log "PREFLIGHT PASSED. Runtime gates (SPECIFICATION.md) still require the authorised smoke runs."
     exit 0
 elif [[ "$PROBE_CODE" =~ ^1[012]$ ]]; then
     log "PREFLIGHT BLOCKED: a user decision is required. Do not add credentials or change the model without approval."
