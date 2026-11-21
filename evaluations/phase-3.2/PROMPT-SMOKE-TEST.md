@@ -97,7 +97,7 @@ bash $H/preflight.sh          # exit 0 required; 20 = BLOCKED (key missing, mode
 bash $H/run-all.sh      # sealed random order; stops at the first invalid run for review
 ```
 
-Each agent receives exactly the bytes of `tasks/NEW-02/project/TASK.md` (SHA-256 `9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f`) in a workspace with SHA-256 `cf0fea1a45be98860c0121b5e3b9d6b066bcf6530128140eef85e7067b2d2ed5`.
+Each agent receives exactly the bytes of `tasks/NEW-02/project/TASK.md` (SHA-256 `9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f`) in a workspace with SHA-256 `ae420d1d9c621e4ad259dd1e2837245cd7f720a55bce08b74e1e21163eb96d58`.
 
 For each run, `$AQD_OPERATOR/captures/<run>/run-status.json` must say `"valid": true`. It is computed from:
 

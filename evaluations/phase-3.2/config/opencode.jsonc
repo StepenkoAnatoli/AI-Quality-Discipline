@@ -1,10 +1,8 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  // Byte-identical in every control and treatment run. The skill rules only
-  // have an effect where a skill named code-discipline is installed.
+  // Byte-identical in every control and treatment run.
   "permissions": [
     { "action": "skill", "resource": "*", "effect": "deny" },
-    { "action": "skill", "resource": "code-discipline", "effect": "allow" },
     { "action": "question", "resource": "*", "effect": "deny" },
     { "action": "subagent", "resource": "*", "effect": "deny" },
     { "action": "webfetch", "resource": "*", "effect": "deny" },

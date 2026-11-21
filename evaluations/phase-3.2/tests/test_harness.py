@@ -63,7 +63,9 @@ class ConfigTests(unittest.TestCase):
             self.assertIn(rule["effect"], ("allow", "deny", "ask"))
         self.assertNotIn("ask", [r["effect"] for r in config["permissions"]], "an ask rule would stall a non-interactive run")
         skill_rules = [(r["resource"], r["effect"]) for r in config["permissions"] if r["action"] == "skill"]
-        self.assertEqual(skill_rules, [("*", "deny"), ("code-discipline", "allow")])
+        self.assertEqual(skill_rules, [("*", "deny")])
+        # The control agent reads this file: it must not name the skill under test.
+        self.assertNotIn("discipline", json.dumps(config).lower())
 
     def test_global_config_shape(self):
         with open(os.path.join(PHASE, "config", "global-opencode.jsonc"), encoding="utf-8") as h:
@@ -159,9 +161,9 @@ class PreregisteredInputsTests(unittest.TestCase):
     """The prompts and starting workspaces are frozen; changing one must be a recorded decision."""
 
     EXPECTED = {
-        "NEW-01": ("c64501497fc0a83d2d5236685dd26425ba92deb5f5b4bf5dadd5f06e70c9875c", "48a0081713b1dd9824f6960d43e6f958dc1ac532c47653f247deafadb2da3287"),
-        "NEW-02": ("9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f", "cf0fea1a45be98860c0121b5e3b9d6b066bcf6530128140eef85e7067b2d2ed5"),
-        "NEW-03": ("a5764db416e9848f7b6d51f06948b5110a6785013903260892942d3a042f649b", "4fd45747f8cc96cbbe7ebd20f0410f42930e5df8f9978bb389696606ab4740c4"),
+        "NEW-01": ("c64501497fc0a83d2d5236685dd26425ba92deb5f5b4bf5dadd5f06e70c9875c", "f14175ed14d5086a770b98b4bfd7b4e309b94d9d8a16a5a7aad4307550ae3f65"),
+        "NEW-02": ("9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f", "ae420d1d9c621e4ad259dd1e2837245cd7f720a55bce08b74e1e21163eb96d58"),
+        "NEW-03": ("a5764db416e9848f7b6d51f06948b5110a6785013903260892942d3a042f649b", "cd61f2a29fd90040dc048b44fa424dd6fe8368f6cd7dac491b8ccdf917b4cf04"),
     }
 
     def test_prompt_and_workspace_hashes(self):
