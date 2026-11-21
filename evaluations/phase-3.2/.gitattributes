@@ -1,0 +1,5 @@
+# Fixture sample files are byte-exact test inputs (BOM, CRLF): never convert.
+tasks/**/sample_data/*.csv -text
+# Scripts run on Linux in the Codespace.
+*.sh text eol=lf
+*.py text eol=lf

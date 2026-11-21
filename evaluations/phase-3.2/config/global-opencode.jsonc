@@ -1,0 +1,6 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Installed as $XDG_CONFIG_HOME/opencode/opencode.jsonc inside every per-run
+  // HOME, identically for both groups. update is only honoured globally.
+  "update": "disable"
+}
