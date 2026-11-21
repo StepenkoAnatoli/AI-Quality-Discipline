@@ -503,7 +503,7 @@ jobs:
           # sudo would otherwise log every agent command line, API key included, to the system journal.
           printf 'Defaults !syslog\n' >"$PRIV/sudoers-aqd"
           sudo install -o root -g root -m 0440 "$PRIV/sudoers-aqd" /etc/sudoers.d/zz-aqd-no-syslog
-          if ! sudo visudo -c >"$LOGS/visudo.log" 2>&1; then
+          if ! sudo visudo -c -f /etc/sudoers.d/zz-aqd-no-syslog >"$LOGS/visudo.log" 2>&1; then
               sudo rm -f /etc/sudoers.d/zz-aqd-no-syslog
               die "sudoers drop-in rejected by visudo"
           fi
