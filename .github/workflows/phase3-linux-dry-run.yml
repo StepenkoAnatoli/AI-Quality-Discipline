@@ -1,0 +1,749 @@
+name: Phase 3.2 Linux dry run (no model calls)
+
+# Manual only, no inputs. Tests exactly branch phase-3/benchmark-foundation at
+# commit aaf3e25bb186a3de85973f5132c45137fd188c32 and stops if either differs.
+#
+# Runs the Phase 3.2 host setup, the pinned OpenCode install, the preflight and
+# the run launcher on a disposable GitHub-hosted Ubuntu VM, and stops every run
+# at the model-prompt boundary. No model request can be sent:
+#   1. a guard installed as the operator's python3 refuses to start
+#      drive_session.py, the only harness program that sends a prompt
+#      (launch-run.sh step "session" runs it in the operator's process);
+#   2. the agent users (aqd-a, aqd-b, aqd-eval) have no outbound network except
+#      loopback (iptables/ip6tables owner rules);
+#   3. api.anthropic.com and api.x.ai resolve to loopback on this VM;
+#   4. the provider keys are placeholders; no secret is referenced.
+#
+# Evidence: the full operator store (captures, sealed files, OpenCode data and
+# server logs) is NOT copied off the runner and is discarded with it. A
+# sanitised dry-run report (allowlisted files only, scanned for credentials)
+# is uploaded as an artifact. teardown.sh is therefore never told
+# --evidence-downloaded; only its refusal without that confirmation is tested.
+#
+# Every check is recorded as PASS or FAIL; expected checks that never ran are
+# reported as NOT VERIFIED. The job fails unless every expected check passed.
+#
+# The file lives on the default branch because workflow_dispatch only works
+# there.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase3-linux-dry-run
+  cancel-in-progress: false
+
+env:
+  AQD_TEST_BRANCH: phase-3/benchmark-foundation
+  AQD_TEST_SHA: aaf3e25bb186a3de85973f5132c45137fd188c32
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out phase-3/benchmark-foundation (no credentials persisted)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: phase-3/benchmark-foundation
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: "1 Verify the revision under test and record the environment"
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/aqd"
+          cat >"$RUNNER_TEMP/aqd/ci.sh" <<'EOF'
+          # Helpers for this workflow only (generated at run time, not a repository file).
+          set -euo pipefail
+          export PATH=/usr/local/aqd-guard/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          export AQD_OPERATOR=/home/runner/aqd-operator
+          export AQD_ACTIVATION_MODE=api-attachment
+          unset AQD_EXTRA_MODEL_CALL_APPROVED AQD_DEBUG_LOG AQD_DRYRUN_HOLD AQD_DRYRUN_HOLD_SECONDS ANTHROPIC_API_KEY XAI_API_KEY || true
+          CI_DIR="$RUNNER_TEMP/aqd"
+          RESULTS="$CI_DIR/results.tsv"
+          H="$GITHUB_WORKSPACE/evaluations/phase-3.2/harness"
+          SEALED="$AQD_OPERATOR/sealed"
+          SCHEDULE="$SEALED/schedule.json"
+          GUARD=/usr/local/aqd-guard/bin/python3
+          GUARD_DIR=/var/log/aqd-guard
+          OC=/opt/aqd-opencode/bin/opencode
+          PLACEHOLDER=aqd-dry-run-placeholder-not-a-real-key
+          STEP_FAILED=0
+          record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >>"$RESULTS"; }
+          pass() { record "$1" PASS "$2"; echo "PASS $1: $2"; }
+          fail() { record "$1" FAIL "$2"; echo "::error::FAIL $1: $2"; STEP_FAILED=1; }
+          # end_step: stop the job (later steps are skipped and reported NOT VERIFIED) if this step failed.
+          end_step() { if [[ "$STEP_FAILED" != 0 ]]; then echo "::error::a check failed in this step; later steps will not run"; exit 1; fi; }
+          # expect_rc ID DESC WANT CMD...: pass when CMD exits with WANT (a number, or "nonzero").
+          expect_rc() {
+              local id="$1" desc="$2" want="$3" rc=0; shift 3
+              "$@" >"$CI_DIR/$id.out" 2>&1 || rc=$?
+              sed -e 's/^/    /' "$CI_DIR/$id.out" | grep -vi 'password' | tail -n 40 || true
+              if [[ "$want" == nonzero && "$rc" != 0 ]] || [[ "$want" == "$rc" ]]; then pass "$id" "$desc (exit $rc)"; else fail "$id" "$desc: expected exit $want, got $rc"; fi
+          }
+          # as_user USER CMD: run a shell snippet as USER with an empty environment, from /.
+          as_user() { (cd / && sudo -u "$1" env -i PATH=/usr/bin:/bin HOME=/nonexistent sh -c "$2"); }
+          denied() { if as_user "$1" "$2" >/dev/null 2>&1; then return 1; else return 0; fi; }
+          allowed() { as_user "$1" "$2" >/dev/null 2>&1; }
+          json() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {'d': d}))" "$@"; }
+          # guard_records KIND [find predicates...]: guard records (hit.* or holding.*), read as root.
+          guard_records() { local kind="$1"; shift; sudo find "$GUARD_DIR" -maxdepth 1 -type f -name "$kind.*" "$@"; }
+          EOF
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          : >"$RESULTS"
+
+          HEAD_SHA="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
+          BRANCH="$(git -C "$GITHUB_WORKSPACE" rev-parse --abbrev-ref HEAD)"
+          DIRTY="$(git -C "$GITHUB_WORKSPACE" status --porcelain)"
+          echo "workflow ref: $GITHUB_REF (workflow commit ${GITHUB_WORKFLOW_SHA:-unknown}); tested: $BRANCH at $HEAD_SHA"
+          if [[ "$GITHUB_REF" == refs/heads/main && "$HEAD_SHA" == "$AQD_TEST_SHA" && "$BRANCH" == "$AQD_TEST_BRANCH" && -z "$DIRTY" ]]; then
+              pass REPO-01 "workflow from main; checkout is $AQD_TEST_BRANCH at $AQD_TEST_SHA, working tree clean"
+          else
+              fail REPO-01 "refused: workflow ref $GITHUB_REF (must be refs/heads/main), HEAD $HEAD_SHA (must be $AQD_TEST_SHA), branch $BRANCH (must be $AQD_TEST_BRANCH), dirty=[${DIRTY}]"
+          fi
+          end_step
+
+          stat -c '%a' "$HOME" >"$CI_DIR/home-mode-before"
+          stat -c '%a' "$GITHUB_WORKSPACE" >"$CI_DIR/checkout-mode-before"
+          NODE_REAL="$(readlink -f "$(command -v node)")"
+          {
+              echo "os:      $(. /etc/os-release && echo "$PRETTY_NAME")"
+              echo "kernel:  $(uname -srm)"
+              echo "cpu:     $(nproc) vCPU, $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ //'), avx2=$(grep -qw avx2 /proc/cpuinfo && echo yes || echo no)"
+              echo "memory:  $(free -m | awk '/^Mem:/ {print $2 " MiB total, " $7 " MiB available"}')"
+              echo "python3: $(command -v python3) $(python3 --version 2>&1)"
+              echo "node:    $NODE_REAL $(node --version)  npm $(npm --version)"
+              echo "docker:  $(docker --version)"
+              echo "git:     $(git --version)"
+              echo "iptables: $(sudo iptables --version)"
+              echo "user:    $(id)"
+              echo "sudo:    $(sudo -n true && echo passwordless)"
+              echo "resolv:  $(grep -E '^nameserver' /etc/resolv.conf | tr '\n' ' ')"
+          } | tee "$CI_DIR/environment.txt"
+          case "$NODE_REAL" in /home/*) fail ENV-01 "node resolves under /home ($NODE_REAL); agent users could not run it";; *) pass ENV-01 "environment recorded (see log)";; esac
+          end_step
+
+      - name: "2 Test suites on Linux (before any host change; skips count as failures)"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          cd "$GITHUB_WORKSPACE"
+          run_plain() { local id="$1" desc="$2" rc=0; shift 2; "$@" >"$CI_DIR/$id.log" 2>&1 || rc=$?; cat "$CI_DIR/$id.log"
+              if [[ "$rc" == 0 ]]; then pass "$id" "$desc"; else fail "$id" "$desc: exit $rc"; fi; }
+          run_unittest() { local id="$1" desc="$2" rc=0; shift 2; "$@" >"$CI_DIR/$id.log" 2>&1 || rc=$?; cat "$CI_DIR/$id.log"
+              local ran; ran="$(grep -E '^Ran [0-9]+ tests?' "$CI_DIR/$id.log" | tail -n 1 || true)"
+              if [[ "$rc" != 0 ]]; then fail "$id" "$desc: exit $rc"
+              elif grep -qE '\.\.\. skipped|skipped=|expected failure|unexpected success' "$CI_DIR/$id.log"; then fail "$id" "$desc: skipped or expected-failure tests reported"
+              elif [[ -z "$ran" || "$ran" =~ ^Ran\ 0\  ]]; then fail "$id" "$desc: no tests ran"
+              else pass "$id" "$desc: $ran, no skips"; fi; }
+          run_plain    TEST-01 "validate_skills.py" python3 scripts/validate_skills.py
+          run_unittest TEST-02 "test_validators.py" python3 -m unittest discover -s tests -p test_validators.py -v
+          run_plain    TEST-03 "check_fixtures.py" python3 evaluations/fixtures/check_fixtures.py
+          run_plain    TEST-04 "manifest.py check-sources" python3 evaluations/phase-3.2/harness/manifest.py check-sources --phase-root evaluations/phase-3.2
+          run_unittest TEST-05 "test_harness.py" python3 -m unittest discover -s evaluations/phase-3.2/tests -p test_harness.py -v
+          run_unittest TEST-06 "test_scoring.py" python3 -m unittest discover -s evaluations/phase-3.2/tests -p test_scoring.py -v
+          docker pull -q python:3.12-slim
+          export AQD_SANDBOX_IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' python:3.12-slim)"
+          echo "sandbox image: $AQD_SANDBOX_IMAGE"
+          run_unittest TEST-07 "test_sandbox.py (Docker, $AQD_SANDBOX_IMAGE)" python3 -m unittest discover -s evaluations/phase-3.2/tests -p test_sandbox.py -v
+          SH_BAD=""
+          while IFS= read -r f; do bash -n "$f" || SH_BAD="$SH_BAD $f"; done < <(git ls-files '*.sh')
+          if [[ -z "$SH_BAD" ]]; then pass TEST-08 "bash -n on $(git ls-files '*.sh' | wc -l) shell scripts"; else fail TEST-08 "syntax errors:$SH_BAD"; fi
+          DIRTY="$(git status --porcelain)"
+          if [[ -z "$DIRTY" ]]; then pass TEST-09 "working tree still clean after the tests"; else fail TEST-09 "tests left changes: $DIRTY"; fi
+          end_step
+
+      - name: "3 setup-host.sh (users, /aqd tree, operator store, pristine store)"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          if ! command -v setfacl >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y -qq acl; fi
+          rc=0; bash "$H/setup-host.sh" 2>&1 | tee "$CI_DIR/setup.log" || rc=$?
+          if [[ "$rc" == 0 ]]; then pass SETUP-01 "setup-host.sh exit 0"; else fail SETUP-01 "setup-host.sh exit $rc"; end_step; fi
+
+          bad=""
+          for u in aqd-a aqd-b aqd-eval; do
+              IFS=: read -r _ _ uid _ _ home shell < <(getent passwd "$u") || { bad="$bad $u:missing"; continue; }
+              [[ "$shell" == /usr/sbin/nologin && "$home" == /nonexistent && "$uid" -lt 1000 ]] || bad="$bad $u:shell=$shell,home=$home,uid=$uid"
+              [[ "$(id -nG "$u")" == "$u" ]] || bad="$bad $u:groups=$(id -nG "$u")"
+              [[ "$(sudo passwd -S "$u" | awk '{print $2}')" == L ]] || bad="$bad $u:password-not-locked"
+              if sudo -l -U "$u" 2>/dev/null | grep -q '(ALL'; then bad="$bad $u:has-sudo"; fi
+          done
+          if [[ -z "$bad" ]]; then pass SETUP-02 "aqd-a, aqd-b, aqd-eval: system users, nologin, home /nonexistent, locked, own group only, no sudo"; else fail SETUP-02 "$bad"; fi
+
+          want="755 root:root /aqd
+          700 aqd-a:aqd-a /aqd/env-a
+          711 root:root /aqd/env-a/runs
+          700 aqd-b:aqd-b /aqd/env-b
+          711 root:root /aqd/env-b/runs"
+          got="$(sudo stat -c '%a %U:%G %n' /aqd /aqd/env-a /aqd/env-a/runs /aqd/env-b /aqd/env-b/runs)"
+          echo "$got"
+          if [[ "$got" == "$(echo "$want" | sed 's/^ *//')" ]]; then pass SETUP-03 "/aqd tree owners and modes as in setup-host.sh"; else fail SETUP-03 "/aqd tree differs from setup-host.sh"; fi
+
+          got="$(stat -c '%a %U %n' "$AQD_OPERATOR" "$AQD_OPERATOR"/{pristine,sealed,captures,evaluator} "$HOME")"
+          echo "$got"
+          co_mode="$(stat -c '%a' "$GITHUB_WORKSPACE")"
+          if ! echo "$got" | grep -qv '^700 runner '; then
+              if [[ "${co_mode:1}" == 00 ]]; then pass SETUP-04 "operator store, its subdirectories and HOME are 0700 runner; checkout mode $co_mode"; else fail SETUP-04 "checkout mode $co_mode keeps group/other access"; fi
+          else fail SETUP-04 "operator store or HOME not 0700 runner"; fi
+
+          bad=""
+          for t in SMOKE NEW-01 NEW-02 NEW-03; do
+              python3 "$H/manifest.py" verify --manifest "$AQD_OPERATOR/pristine/$t/manifest.json" --tree "$AQD_OPERATOR/pristine/$t/project" \
+                  --phase pre --out "$CI_DIR/pristine-$t.json" >/dev/null || bad="$bad $t"
+          done
+          cmp -s "$AQD_OPERATOR/pristine/skill/code-discipline/SKILL.md" "$GITHUB_WORKSPACE/skills/code-discipline/SKILL.md" || bad="$bad skill"
+          if [[ -z "$bad" ]]; then pass SETUP-05 "pristine store matches its manifests for SMOKE, NEW-01..03; skill identical to the canonical file"; else fail SETUP-05 "pristine store mismatch:$bad"; fi
+
+          # A re-run writes verification receipts (sealed/pristine-*.json); they are not host state.
+          snap() { sudo find /aqd "$AQD_OPERATOR" ! -path "$SEALED/pristine-*.json" -printf '%m %u %g %p\n' | sort; sha256sum "$AQD_OPERATOR"/pristine/*/manifest.json "$SEALED/restore-modes.txt"; }
+          snap >"$CI_DIR/setup-snap1"
+          rc=0; bash "$H/setup-host.sh" >"$CI_DIR/setup2.log" 2>&1 || rc=$?
+          snap >"$CI_DIR/setup-snap2"
+          if [[ "$rc" == 0 ]] && cmp -s "$CI_DIR/setup-snap1" "$CI_DIR/setup-snap2"; then pass SETUP-06 "second setup-host.sh run exit 0 and changed nothing"; else fail SETUP-06 "re-run exit $rc or changed the host"; diff "$CI_DIR/setup-snap1" "$CI_DIR/setup-snap2" || true; fi
+          end_step
+
+      - name: "4 Install the model-prompt guards and test them as the operator and as both agent users"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          for host in api.anthropic.com api.x.ai; do
+              printf '127.0.0.1 %s\n::1 %s\n' "$host" "$host" | sudo tee -a /etc/hosts >/dev/null
+          done
+          bad=""
+          for host in api.anthropic.com api.x.ai; do
+              addrs="$( { getent ahosts "$host" || true; } | awk '{print $1}' | sort -u | tr '\n' ' ')"
+              echo "$host -> $addrs"
+              [[ "$addrs" == "127.0.0.1 ::1 " || "$addrs" == "127.0.0.1 " ]] || bad="$bad $host:$addrs"
+          done
+          if [[ -z "$bad" ]]; then pass GUARD-02 "provider API hosts resolve to loopback only"; else fail GUARD-02 "provider hosts resolve elsewhere:$bad"; fi
+
+          for t in iptables ip6tables; do
+              sudo "$t" -N AQD_AGENT_EGRESS
+              sudo "$t" -A AQD_AGENT_EGRESS -o lo -j ACCEPT
+              sudo "$t" -A AQD_AGENT_EGRESS -j LOG --log-prefix "AQD-AGENT-EGRESS " --log-uid
+              sudo "$t" -A AQD_AGENT_EGRESS -j REJECT
+              for u in aqd-a aqd-b aqd-eval; do sudo "$t" -I OUTPUT 1 -m owner --uid-owner "$u" -j AQD_AGENT_EGRESS; done
+              sudo "$t" -S OUTPUT | grep AQD_AGENT_EGRESS
+              sudo "$t" -S AQD_AGENT_EGRESS
+          done
+          sudo iptables -S >"$CI_DIR/iptables-v4.rules"; sudo ip6tables -S >"$CI_DIR/iptables-v6.rules"
+          runner_ok=0; curl -sS --max-time 15 -o /dev/null https://example.com && runner_ok=1
+          agent_blocked=1
+          for u in aqd-a aqd-b; do
+              for url in https://example.com https://models.dev/api.json https://registry.npmjs.org/; do
+                  if as_user "$u" "curl -sS --max-time 10 -o /dev/null $url" 2>/dev/null; then agent_blocked=0; echo "$u reached $url"; fi
+              done
+          done
+          if [[ "$runner_ok" == 1 && "$agent_blocked" == 1 ]]; then pass GUARD-01 "agent users have no outbound network (runner reaches example.com; aqd-a and aqd-b reach neither example.com, models.dev nor npm)"
+          else fail GUARD-01 "egress guard not effective (runner_ok=$runner_ok, agent_blocked=$agent_blocked)"; fi
+
+          # Guard records live in a root-owned drop directory, mode 1733: any user can
+          # create a new file (mktemp, mode 0600, owned by the caller) but nobody except
+          # root can list the directory, read another user's record, or delete/rename it
+          # (sticky bit). The record's owner is kernel evidence of which UID hit the guard.
+          sudo install -d -o root -g root -m 1733 "$GUARD_DIR"
+          sudo install -d -o root -g root -m 0755 /usr/local/aqd-guard/bin
+          cat >"$CI_DIR/python3-guard" <<'EOF'
+          #!/bin/bash
+          # Dry-run guard: refuses to start drive_session.py, the only Phase 3.2
+          # program that sends a prompt; records each refusal; never fails open.
+          for arg in "$@"; do
+              if [[ "${arg##*/}" == drive_session.py ]]; then
+                  rec="$(mktemp /var/log/aqd-guard/hit.XXXXXXXXXX 2>/dev/null)" \
+                      && printf '%s uid=%s pid=%s args=%s\n' "$(date -u +%FT%TZ)" "$(id -u)" "$$" "$*" >"$rec"
+                  if [[ "${AQD_DRYRUN_HOLD:-}" == 1 ]]; then
+                      secs="${AQD_DRYRUN_HOLD_SECONDS:-600}"; [[ "$secs" =~ ^[0-9]{1,4}$ ]] || secs=600
+                      hold="$(mktemp /var/log/aqd-guard/holding.XXXXXXXXXX 2>/dev/null)" && printf '%s\n' "$$" >"$hold"
+                      sleep "$secs"
+                  fi
+                  echo "AQD DRY RUN: stopped at the model-prompt boundary; drive_session.py was not started" >&2
+                  exit 86
+              fi
+          done
+          exec /usr/bin/python3 "$@"
+          EOF
+          sudo install -o root -g root -m 0755 "$CI_DIR/python3-guard" "$GUARD"
+          echo "$(sudo stat -c '%a %U:%G %n' "$GUARD_DIR" "$GUARD")"
+
+          # GUARD-03: operator path (this is the UID launch-run.sh uses for drive_session.py).
+          rc=0; python3 /nonexistent/drive_session.py --self-test >/dev/null 2>&1 || rc=$?
+          op_hits="$(guard_records hit -user runner | wc -l)"
+          if [[ "$(command -v python3)" == "$GUARD" && "$rc" == 86 && "$op_hits" == 1 && "$(python3 -c 'print(6*7)')" == 42 ]]; then
+              pass GUARD-03 "operator: python3 resolves to the guard; drive_session.py refused (exit 86) and recorded once (owner runner); other scripts run normally"
+          else fail GUARD-03 "operator guard: python3=$(command -v python3), rc=$rc, records=$op_hits"; fi
+          OP_HIT="$(guard_records hit -user runner -print -quit)"
+          [[ -n "$OP_HIT" ]] || { fail GUARD-05 "no operator guard record to protect; agent-UID tests not run"; end_step; }
+          OP_HIT_SHA="$(sudo sha256sum "$OP_HIT" | cut -d' ' -f1)"
+
+          # GUARD-05: the same guard executed by the real agent UIDs.
+          bad=""
+          for u in aqd-a aqd-b; do
+              rc=0; (cd / && sudo -u "$u" env -i PATH=/usr/bin:/bin "$GUARD" /nonexistent/drive_session.py --agent-test) >/dev/null 2>&1 || rc=$?
+              [[ "$rc" == 86 ]] || bad="$bad $u:exit-$rc"
+              [[ "$(guard_records hit -user "$u" | wc -l)" == 1 ]] || bad="$bad $u:hit-record-not-written"
+              [[ "$(as_user "$u" "$GUARD -c 'print(6*7)'" 2>/dev/null)" == 42 ]] || bad="$bad $u:python-passthrough"
+          done
+          rc=0; (cd / && sudo -u aqd-a env -i PATH=/usr/bin:/bin AQD_DRYRUN_HOLD=1 AQD_DRYRUN_HOLD_SECONDS=2 "$GUARD" /nonexistent/drive_session.py --hold-test) >/dev/null 2>&1 || rc=$?
+          [[ "$rc" == 86 ]] || bad="$bad hold:exit-$rc"
+          [[ "$(guard_records holding -user aqd-a | wc -l)" == 1 ]] || bad="$bad hold:marker-not-written"
+          A_HIT="$(guard_records hit -user aqd-a -print -quit)"
+          denied aqd-a "ls $GUARD_DIR"                 || bad="$bad aqd-a:lists-guard-dir"
+          denied aqd-a "cat $OP_HIT"                   || bad="$bad aqd-a:reads-operator-record"
+          denied aqd-a "echo x >> $OP_HIT"             || bad="$bad aqd-a:appends-operator-record"
+          denied aqd-a "echo x > $OP_HIT"              || bad="$bad aqd-a:overwrites-operator-record"
+          denied aqd-a "rm -f $OP_HIT"                 || bad="$bad aqd-a:deletes-operator-record"
+          denied aqd-a "mv -f $OP_HIT $GUARD_DIR/moved" || bad="$bad aqd-a:renames-operator-record"
+          denied aqd-b "cat $A_HIT"                    || bad="$bad aqd-b:reads-aqd-a-record"
+          denied aqd-b "rm -f $A_HIT"                  || bad="$bad aqd-b:deletes-aqd-a-record"
+          denied aqd-a "echo x >> $GUARD"              || bad="$bad aqd-a:modifies-guard"
+          denied aqd-a "ls $AQD_OPERATOR"              || bad="$bad aqd-a:reads-operator-store"
+          [[ "$(sudo sha256sum "$OP_HIT" | cut -d' ' -f1)" == "$OP_HIT_SHA" ]] || bad="$bad operator-record-changed"
+          if [[ -z "$bad" ]]; then pass GUARD-05 "aqd-a and aqd-b: guard refuses drive_session.py (exit 86) and writes a record owned by that UID; hold marker written by aqd-a; agents cannot list the guard directory, read, change, delete or rename another UID's record, change the guard or read the operator store"
+          else fail GUARD-05 "agent-UID guard tests failed:$bad"; fi
+
+          # Clear the test records so later counts contain only launcher hits.
+          sudo find "$GUARD_DIR" -mindepth 1 -delete
+          [[ -z "$(sudo find "$GUARD_DIR" -mindepth 1 -print -quit)" ]] || fail GUARD-05 "could not clear test records"
+          end_step
+
+      - name: "5 install-opencode.sh (pinned @opencode/cli 2.3.2 from the npm registry)"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          rc=0; bash "$H/install-opencode.sh" 2>&1 | tee "$CI_DIR/install.log" || rc=$?
+          if [[ "$rc" == 0 ]]; then pass INSTALL-01 "install-opencode.sh exit 0"; else fail INSTALL-01 "install-opencode.sh exit $rc"; end_step; fi
+          T="$(mktemp -d)"; v="$(env -i PATH=/usr/bin:/bin HOME="$T" "$OC" --version 2>&1 || true)"; rm -rf "$T"
+          pkgs="$( { ls /opt/aqd-opencode/lib/node_modules/@opencode/ 2>/dev/null || true; } | tr '\n' ' ')"
+          w="$(sudo find /opt/aqd-opencode ! -type l \( -perm -g+w -o -perm -o+w -o ! -user root \) -print | sed -n '1,5p')"
+          echo "version: $v; packages: $pkgs"
+          if [[ "$v" == *2.3.2* && -z "$w" ]]; then pass INSTALL-02 "opencode --version: $v; packages: $pkgs; all files root-owned, no group/other write"
+          else fail INSTALL-02 "version '$v' or writable/non-root files: $w"; fi
+          if [[ "$(json "$SEALED/opencode-install.json" 'd["version"]')" == 2.3.2 ]]; then pass INSTALL-03 "opencode-install.json records 2.3.2, tree $(json "$SEALED/opencode-install.json" 'd["tree_sha256"]')"
+          else fail INSTALL-03 "opencode-install.json missing or wrong version"; fi
+          tree1="$(json "$SEALED/opencode-install.json" 'd["tree_sha256"]')"
+          rc=0; bash "$H/install-opencode.sh" >"$CI_DIR/install2.log" 2>&1 || rc=$?
+          tree2="$(json "$SEALED/opencode-install.json" 'd["tree_sha256"]')"
+          if [[ "$rc" == 0 && "$tree1" == "$tree2" ]] && grep -q 'already installed' "$CI_DIR/install2.log"; then pass INSTALL-04 "second install run: already installed, tree unchanged"
+          else fail INSTALL-04 "second install run exit $rc, tree $tree1 -> $tree2"; fi
+          T="$(mktemp -d)"
+          env -i PATH=/usr/bin:/bin HOME="$T" XDG_CONFIG_HOME="$T/c" XDG_DATA_HOME="$T/d" XDG_STATE_HOME="$T/s" XDG_CACHE_HOME="$T/k" \
+              OPENCODE_DISABLE_CLAUDE_CODE=1 ANTHROPIC_API_KEY="$PLACEHOLDER" XAI_API_KEY="$PLACEHOLDER" \
+              "$OC" models --standalone >"$CI_DIR/models.txt" 2>"$CI_DIR/models.err" || true
+          rm -rf "$T"
+          found="$(grep -E '^(anthropic/claude-opus-5-5|xai/grok-4\.7)$' "$CI_DIR/models.txt" | sort | tr '\n' ' ')"
+          if [[ "$found" == "anthropic/claude-opus-5-5 xai/grok-4.7 " ]]; then pass INSTALL-05 "documented catalog listing (operator, placeholder keys, no request) shows both model references"
+          else fail INSTALL-05 "catalog listing found [$found]"; tail -n 20 "$CI_DIR/models.err" || true; fi
+          end_step
+
+      - name: "6 Sealed schedule and preflight.sh (fail-closed paths, then a passing run with placeholder keys)"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          python3 "$H/schedule.py" create --out "$SCHEDULE" \
+              --models 'anthropic/claude-opus-5-5#medium,xai/grok-4.7#medium' --tasks NEW-02 --repetitions 1
+          no_vhome() { [[ -z "$(sudo find /aqd/env-a /aqd/env-b -maxdepth 1 -name 'preflight-*' -print -quit)" ]]; }
+
+          expect_rc PRE-01 "preflight without a credentials file fails closed" nonzero bash "$H/preflight.sh"
+          if grep -q 'credentials file' "$CI_DIR/PRE-01.out" && [[ ! -f "$SEALED/preflight.ok" ]] && no_vhome; then :; else fail PRE-01 "wrong failure reason, preflight.ok present or temporary HOME left"; fi
+
+          install -m 0600 /dev/null "$SEALED/credentials.env"
+          printf 'ANTHROPIC_API_KEY=%s\nXAI_API_KEY=%s\n' "$PLACEHOLDER" "$PLACEHOLDER" >>"$SEALED/credentials.env"
+          chmod 0644 "$SEALED/credentials.env"
+          expect_rc PRE-02 "preflight with a group/world-readable credentials file fails closed" nonzero bash "$H/preflight.sh"
+          grep -q 'must be mode 0600' "$CI_DIR/PRE-02.out" || fail PRE-02 "wrong failure reason"
+          chmod 0600 "$SEALED/credentials.env"
+
+          sudo setfacl -m u:aqd-a:--- /opt/aqd-opencode
+          expect_rc PRE-03 "preflight fails when an agent user cannot run OpenCode" nonzero bash "$H/preflight.sh"
+          sudo setfacl -x u:aqd-a /opt/aqd-opencode
+          if grep -q 'aqd-a cannot execute' "$CI_DIR/PRE-03.out" && no_vhome; then pass PRE-03b "temporary HOME removed after the failing version check"
+          else fail PRE-03b "wrong failure reason or temporary HOME left behind"; sudo find /aqd -maxdepth 2 -name 'preflight-*'; fi
+
+          rc=0; bash "$H/preflight.sh" >"$CI_DIR/preflight.log" 2>&1 || rc=$?
+          grep -vi password "$CI_DIR/preflight.log"
+          cat "$SEALED/preflight.json" || true
+          if [[ "$rc" == 0 && -f "$SEALED/preflight.ok" ]]; then pass PRE-04 "preflight.sh exit 0 with placeholder keys and no agent network; preflight.ok written"
+          else
+              fail PRE-04 "preflight.sh exit $rc (20 = BLOCKED); launcher checks cannot run"
+              for f in "$SEALED"/preflight-catalog-*.json; do [[ -f "$f" ]] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sys.argv[1], d.get("exit_code"), d.get("provider"), (d.get("model") or {}).get("reason"))' "$f"; done
+              for f in "$SEALED"/preflight-serve-*.log; do [[ -f "$f" ]] && grep -iE 'error|warn|models' "$f" | grep -vi password | tail -n 20; done
+          fi
+          procs="$(pgrep -a -u aqd-a,aqd-b || true)"
+          if no_vhome && [[ -z "$procs" ]] && grep -q '"opencode_tree": "identical"' "$SEALED/preflight.json"; then pass PRE-05 "after preflight: no temporary HOME or probe directory, no agent process, OpenCode tree identical"
+          else fail PRE-05 "leftovers after preflight: procs=[$procs]"; fi
+          end_step
+
+      - name: "7 OpenCode API checks against a real 2.3.2 server (no prompt)"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          source "$H/lib.sh"
+          PROBE="/aqd/env-a/ci-api-probe"
+          sudo install -d -o aqd-a -g aqd-a -m 0700 "$PROBE" "$PROBE/home" "$PROBE/project" "$PROBE/tmp"
+          PORT="$(free_port)"; PW="$(random_secret)"
+          make_agent_env "$PROBE" "$PW"
+          add_provider_credential anthropic
+          as_agent aqd-a "$PROBE/project" "$OC" serve --hostname 127.0.0.1 --port "$PORT" >"$CI_DIR/api-serve.log" 2>&1 &
+          SERVE_PID=$!
+          cleanup_probe() { kill "$SERVE_PID" 2>/dev/null || true; kill_user_processes aqd-a; sudo rm -rf --one-file-system "$PROBE"; }
+          trap cleanup_probe EXIT
+          for _ in $(seq 1 90); do curl -fsS -u "opencode:$PW" "http://127.0.0.1:$PORT/api/info" -o /dev/null 2>/dev/null && break; sleep 1; done
+          AC=(python3 "$H/api_checks.py" --directory "$PROBE/project" --model 'anthropic/claude-opus-5-5#medium' --allowed-root "$PROBE" --allowed-root /opt/aqd-opencode)
+
+          expect_rc API-01 "api_checks against an unavailable server fails closed (URLError -> ApiError -> exit 2)" 2 env OPENCODE_PASSWORD=x "${AC[@]}" --server http://127.0.0.1:1 --group control --out "$CI_DIR/api-01.json"
+          expect_rc API-02 "api_checks with a wrong server password fails closed (HTTP 401 -> ApiError -> exit 2)" 2 env OPENCODE_PASSWORD=wrong-password "${AC[@]}" --server "http://127.0.0.1:$PORT" --group control --out "$CI_DIR/api-02.json"
+          [[ ! -e "$CI_DIR/api-01.json" && ! -e "$CI_DIR/api-02.json" ]] || fail API-01 "a report was written for a failed API call"
+
+          bad=""
+          for ep in provider model skill config; do
+              curl -fsS -G -u "opencode:$PW" --data-urlencode "location[directory]=$PROBE/project" "http://127.0.0.1:$PORT/api/$ep" -o "$CI_DIR/raw-$ep.json" || bad="$bad $ep:http"
+              python3 - "$H" "$CI_DIR/raw-$ep.json" "$ep" <<'PY' || bad="$bad $ep:shape"
+          import json, sys
+          sys.path.insert(0, sys.argv[1])
+          from drive_session import unwrap
+          payload = json.load(open(sys.argv[2], encoding="utf-8"))
+          items = unwrap(payload)
+          top = sorted(payload) if isinstance(payload, dict) else type(payload).__name__
+          print(f"/api/{sys.argv[3]}: top-level {top}; unwrap -> {type(items).__name__} of {len(items) if isinstance(items, list) else '?'}")
+          sys.exit(0 if isinstance(items, list) else 1)
+          PY
+          done
+          if [[ -z "$bad" ]]; then pass API-03 "real 2.3.2 responses of /api/provider, /api/model, /api/skill, /api/config unwrap to lists with the harness's unwrap()"; else fail API-03 "unexpected responses:$bad"; fi
+
+          expect_rc API-04 "api_checks control group passes on a clean server" 0 env OPENCODE_PASSWORD="$PW" "${AC[@]}" --server "http://127.0.0.1:$PORT" --group control --out "$CI_DIR/api-04.json"
+          [[ "$(json "$CI_DIR/api-04.json" 'd["skills"]["code_discipline"]')" == None ]] || fail API-04 "control server offers code-discipline"
+          expect_rc API-05 "api_checks treatment group fails closed when the skill is absent (exit 13)" 13 env OPENCODE_PASSWORD="$PW" "${AC[@]}" --server "http://127.0.0.1:$PORT" --group treatment --out "$CI_DIR/api-05.json"
+          cleanup_probe; trap - EXIT
+          if sudo test -e "$PROBE" || pgrep -u aqd-a >/dev/null; then fail API-06 "probe directory or aqd-a processes left"; else pass API-06 "probe server stopped and its directory removed"; fi
+          end_step
+
+      - name: "8 Launcher refuses to start without its preconditions"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          R1="$(python3 -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))["runs"], key=lambda r: r["order"])[0]["run_id"])' "$SCHEDULE")"
+          untouched() { [[ ! -e "$AQD_OPERATOR/captures/$R1" && ! -e "$SEALED/activation-mode" ]] && ! sudo find /aqd -maxdepth 3 -name "$R1" | grep -q .; }
+          mv "$SEALED/preflight.ok" "$SEALED/preflight.ok.held"
+          expect_rc LAUNCH-01a "launch-run.sh refuses without preflight.ok" 2 bash "$H/launch-run.sh" "$R1"
+          mv "$SEALED/preflight.ok.held" "$SEALED/preflight.ok"
+          grep -q 'preflight has not passed' "$CI_DIR/LAUNCH-01a.out" && untouched || fail LAUNCH-01a "wrong reason or run state created"
+          echo "dry-run refusal test" >"$SEALED/STOP"
+          expect_rc LAUNCH-01b "launch-run.sh refuses after a STOP marker" 2 bash "$H/launch-run.sh" "$R1"
+          rm -f "$SEALED/STOP"
+          grep -q 'benchmark stopped' "$CI_DIR/LAUNCH-01b.out" && untouched || fail LAUNCH-01b "wrong reason or run state created"
+          expect_rc LAUNCH-01c "launch-run.sh --smoke refuses without the extra-call approval" 2 bash "$H/launch-run.sh" --smoke control 'anthropic/claude-opus-5-5#medium'
+          grep -q 'AQD_EXTRA_MODEL_CALL_APPROVED=yes' "$CI_DIR/LAUNCH-01c.out" && [[ ! -e "$AQD_OPERATOR/smoke" ]] || fail LAUNCH-01c "wrong reason or a smoke capture directory was created"
+          [[ -z "$(guard_records hit -print -quit)" ]] || fail LAUNCH-01c "a refused launch reached the prompt boundary"
+          end_step
+
+      - name: "9 Launcher: the four scheduled runs, each stopped at the model-prompt boundary"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          mapfile -t RUNS < <(python3 -c 'import json,sys; [print(r["run_id"], r["group"], r["env"], r["model"]) for r in sorted(json.load(open(sys.argv[1]))["runs"], key=lambda r: r["order"])]' "$SCHEDULE")
+          [[ "${#RUNS[@]}" == 4 ]] || { fail LAUNCH-02 "schedule has ${#RUNS[@]} runs, expected 4"; end_step; }
+          n=1
+          for line in "${RUNS[@]}"; do
+              read -r run group env model <<<"$line"
+              n=$((n + 1)); id="LAUNCH-0$n"
+              user="aqd-${env#env-}"; cap="$AQD_OPERATOR/captures/$run"
+              before="$(guard_records hit | wc -l)"
+              echo "== $id: run $run, $group, $env ($user), $model"
+              rc=0; bash "$H/launch-run.sh" "$run" >"$CI_DIR/$id.out" 2>&1 || rc=$?
+              grep -vi password "$CI_DIR/$id.out" | tail -n 40
+              after="$(guard_records hit | wc -l)"
+              # find exits 1 when grep matches nothing; that is a count of 0, not an error.
+              mine="$( { guard_records hit -user runner -exec grep -l -- "/captures/$run/driver" {} + || true; } | wc -l)"
+              problems="$(python3 - "$cap" "$group" "$run" "$env" <<'PY'
+          import json, os, sys
+          cap, group, run, env = sys.argv[1:5]
+          p = []
+          # Files launch-run.sh writes before and after the session step (export-checks.json is
+          # absent by design: export_checks.py exits 2 without writing when there is no export).
+          need = ["launcher.log", "run-record.json", "pristine-check.json", "verify-pre.json", "home-config-listing.pre.txt",
+                  "debug-paths.txt", "server-info.json", "serve.log", "api-checks.json", "verify-post.json",
+                  "home-config-listing.txt", "diff.patch", "run-status.json"]
+          p += [f"missing {f}" for f in need if not os.path.exists(os.path.join(cap, f))]
+          for f in ("driver/driver-result.json", "driver/export.json", "cli-export.json", "export-checks.json"):
+              if os.path.exists(os.path.join(cap, f)):
+                  p.append(f"{f} exists: a session or export was produced")
+          load = lambda f: json.load(open(os.path.join(cap, f), encoding="utf-8"))
+          root = f"/aqd/{env}/runs/{run}/"
+          if os.path.exists(os.path.join(cap, "api-checks.json")):
+              a = load("api-checks.json")
+              if a.get("exit_code") != 0: p.append(f"api_checks exit {a.get('exit_code')}")
+              for k in ("provider", "model", "skills", "config"):
+                  if not (a.get(k) or {}).get("ok"): p.append(f"api check {k} not ok: {(a.get(k) or {}).get('problems') or (a.get(k) or {}).get('reason')}")
+              cd = (a.get("skills") or {}).get("code_discipline")
+              if group == "control" and cd is not None: p.append("control can see code-discipline")
+              if group == "treatment" and not (cd and cd.get("has_sentinel") and str(cd.get("path", "")).startswith(root)):
+                  p.append(f"treatment skill not registered from inside the run: {cd}")
+              print(f"  api-checks: provider={a['provider']['ok']} model={a['model']['ok']} variants={a['model'].get('variants')} "
+                    f"skills={[s['id'] for s in a['skills']['skills']]} code_discipline={'present' if cd else 'absent'}", file=sys.stderr)
+          if os.path.exists(os.path.join(cap, "home-config-listing.pre.txt")):
+              listing = sorted(l.strip() for l in open(os.path.join(cap, "home-config-listing.pre.txt")) if l.strip())
+              want = ["opencode", "opencode/opencode.jsonc"] + (["opencode/skills", "opencode/skills/code-discipline", "opencode/skills/code-discipline/SKILL.md"] if group == "treatment" else [])
+              if listing != sorted(want): p.append(f"HOME config listing {listing}")
+          if os.path.exists(os.path.join(cap, "run-status.json")):
+              s = load("run-status.json")
+              print(f"  run-status: valid={s['valid']} reasons={s['invalid_reasons']}", file=sys.stderr)
+              # run_status.py lists every failed gate. Exactly these two reasons mean api checks,
+              # post-run integrity, HOME listing, run record and the "done" step all passed.
+              want = ["driver status None (exit 86)", "no export analysed"]
+              if s.get("valid") is not False or s.get("invalid_reasons") != want:
+                  p.append(f"run-status reasons {s.get('invalid_reasons')} != {want}")
+          if os.path.exists(os.path.join(cap, "driver")) and os.listdir(os.path.join(cap, "driver")):
+              p.append(f"driver directory not empty: {os.listdir(os.path.join(cap, 'driver'))}")
+          print("; ".join(p))
+          PY
+          )"
+              leftover=""
+              sudo test -e "/aqd/$env/runs/$run" && leftover="$leftover run-root"
+              pgrep -u "$user" >/dev/null && leftover="$leftover processes"
+              [[ -n "$(sudo find /tmp /var/tmp /dev/shm -xdev -user "$user" -print -quit 2>/dev/null)" ]] && leftover="$leftover tmp-files"
+              if [[ "$rc" == 1 && "$after" == $((before + 1)) && "$mine" == 1 && -z "$problems" && -z "$leftover" ]]; then
+                  pass "$id" "$group/$model: api, isolation and skill checks passed; stopped at the prompt boundary (one guard record, owner runner); run-status invalid for exactly [driver exit 86, no export]; run directory, agent processes and temporary files removed"
+              else
+                  fail "$id" "$group/$model: exit $rc, new guard records $((after - before)), records naming this run $mine, problems [$problems], leftovers [$leftover]"
+              fi
+          done
+          end_step
+
+      - name: "10 Launcher: evaluator material present -> run refused and recorded invalid"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          R2="$(python3 -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))["runs"], key=lambda r: r["order"])[1]["run_id"])' "$SCHEDULE")"
+          RR="$(python3 "$H/schedule.py" rerun --schedule "$SCHEDULE" --run-id "$R2" --reason "dry run: evaluator-directory precondition test" | tail -n 1)"
+          [[ "$RR" =~ ^r-[0-9a-f]{10}$ ]] || { fail LAUNCH-06 "could not create a rerun id ($RR)"; end_step; }
+          echo "dry-run dummy file, not evaluator material" >"$AQD_OPERATOR/evaluator/dry-run-dummy.txt"
+          before="$(guard_records hit | wc -l)"
+          rc=0; bash "$H/launch-run.sh" "$RR" >"$CI_DIR/LAUNCH-06.out" 2>&1 || rc=$?
+          rm -f "$AQD_OPERATOR/evaluator/dry-run-dummy.txt"
+          grep -vi password "$CI_DIR/LAUNCH-06.out" | tail -n 20
+          env="$(python3 "$H/schedule.py" get --schedule "$SCHEDULE" --run-id "$RR" --key env)"
+          st="$AQD_OPERATOR/captures/$RR/run-status.json"
+          if [[ "$rc" == 1 && -f "$st" ]] && [[ "$(json "$st" 'd["valid"]')" == False ]] \
+              && [[ "$(json "$st" '"launcher stopped at step '"'"'preconditions'"'"'" in d["invalid_reasons"]')" == True ]] \
+              && ! sudo test -e "/aqd/$env/runs/$RR" && [[ "$(guard_records hit | wc -l)" == "$before" ]]; then
+              pass LAUNCH-06 "non-empty evaluator directory stops the run at step preconditions, before any agent process; recorded invalid"
+          else fail LAUNCH-06 "exit $rc, run-status $( [[ -f "$st" ]] && json "$st" 'd["invalid_reasons"]' || echo missing )"; fi
+          end_step
+
+      - name: "11 Launcher: live isolation probes at the boundary, then a shutdown-style interrupt"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          R1="$(python3 -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))["runs"], key=lambda r: r["order"])[0]["run_id"])' "$SCHEDULE")"
+          RR="$(python3 "$H/schedule.py" rerun --schedule "$SCHEDULE" --run-id "$R1" --reason "dry run: isolation probes and interrupt test" | tail -n 1)"
+          [[ "$RR" =~ ^r-[0-9a-f]{10}$ ]] || { fail LAUNCH-07 "could not create a rerun id ($RR)"; end_step; }
+          echo "$RR" >"$CI_DIR/held-run-id"
+          env="$(python3 "$H/schedule.py" get --schedule "$SCHEDULE" --run-id "$RR" --key env)"
+          user="aqd-${env#env-}"; other_env=env-a; [[ "$env" == env-a ]] && other_env=env-b; other="aqd-${other_env#env-}"
+          P="/aqd/$env/runs/$RR/project"
+          AQD_DRYRUN_HOLD=1 AQD_DRYRUN_HOLD_SECONDS=600 setsid bash "$H/launch-run.sh" "$RR" >"$CI_DIR/hold.out" 2>&1 &
+          LPID=$!
+          for _ in $(seq 1 180); do [[ -n "$(guard_records holding -user runner -print -quit)" ]] && break; sleep 1; done
+          if [[ -z "$(guard_records holding -user runner -print -quit)" ]]; then
+              fail LAUNCH-07 "launcher did not reach the boundary"; grep -vi password "$CI_DIR/hold.out" | tail -n 40
+          else
+              bad=""
+              denied  "$user" "echo x >> $P/TASK.md"                                  || bad="$bad append-immutable"
+              denied  "$user" "rm -f $P/TASK.md"                                       || bad="$bad delete-immutable"
+              denied  "$user" "echo y > $P/ci-probe.tmp && mv -f $P/ci-probe.tmp $P/TASK.md" || bad="$bad replace-immutable"
+              denied  "$user" "chmod 666 $P/TASK.md"                                   || bad="$bad chmod-immutable"
+              denied  "$user" "echo x >> $P/tests/baseline/test_inventory_baseline.py" || bad="$bad modify-baseline-test"
+              denied  "$user" "touch $P/tests/baseline/ci_probe.py"                    || bad="$bad add-to-baseline"
+              allowed "$user" "touch $P/tests/additive/ci_probe.py"                    || bad="$bad cannot-add-additive"
+              allowed "$user" "test -w $P/inventory/service.py"                        || bad="$bad mutable-not-writable"
+              denied  "$user" "ls /aqd/$env/runs"                                      || bad="$bad list-runs"
+              denied  "$user" "ls /aqd/$other_env"                                     || bad="$bad read-other-env"
+              denied  "$user" "ls $AQD_OPERATOR"                                       || bad="$bad read-operator-store"
+              denied  "$user" "cat $SEALED/credentials.env"                            || bad="$bad read-credentials"
+              denied  "$user" "ls $AQD_OPERATOR/evaluator"                             || bad="$bad read-evaluator-dir"
+              denied  "$user" "ls $GITHUB_WORKSPACE"                                   || bad="$bad read-checkout"
+              denied  "$user" "ls /home/runner"                                        || bad="$bad read-operator-home"
+              denied  "$user" "ls $GUARD_DIR"                                          || bad="$bad list-guard-records"
+              denied  "$other" "ls $P"                                                 || bad="$bad other-user-enters-run"
+              denied  "$other" "cat $P/TASK.md"                                        || bad="$bad other-user-reads-run"
+              if [[ -z "$bad" ]]; then pass LAUNCH-07 "live run ($user): immutable files and tests/baseline protected; tests/additive and the mutable file writable; runs/, other environment, operator store, credentials, evaluator directory, checkout, operator HOME and guard records unreadable; $other cannot enter the run"
+              else fail LAUNCH-07 "isolation probes failed:$bad"; fi
+          fi
+          SID="$(ps -o sid= -p "$LPID" | tr -d ' ' || true)"
+          echo "interrupting launcher session $SID (SIGTERM to every process in it)"
+          [[ -n "$SID" ]] && sudo pkill -TERM -s "$SID" || true
+          running() { local s; s="$(ps -o stat= -p "$LPID" 2>/dev/null || true)"; [[ -n "$s" && "$s" != Z* ]]; }
+          for _ in $(seq 1 120); do running || break; sleep 1; done
+          killed=0; if running; then sudo pkill -KILL -s "$SID" || true; killed=1; echo "launcher did not exit within 120 s and was killed"; fi
+          wait "$LPID" 2>/dev/null || true
+          grep -vi password "$CI_DIR/hold.out" | tail -n 25
+          st="$AQD_OPERATOR/captures/$RR/run-status.json"
+          leftover=""
+          [[ "$killed" == 0 ]] || leftover="$leftover needed-SIGKILL"
+          sudo test -e "/aqd/$env/runs/$RR" && leftover="$leftover run-root"
+          pgrep -u "$user" >/dev/null && leftover="$leftover agent-processes"
+          pgrep -f "$GUARD" >/dev/null && leftover="$leftover guard-process"
+          [[ -n "$(sudo find /tmp /var/tmp /dev/shm -xdev -user "$user" -print -quit 2>/dev/null)" ]] && leftover="$leftover tmp-files"
+          if [[ -f "$st" && "$(json "$st" 'd["valid"]')" == False \
+                && "$(json "$st" '"launcher stopped at step '"'"'session'"'"'" in d["invalid_reasons"]')" == True && -z "$leftover" ]]; then
+              pass LAUNCH-08 "interrupted run recorded invalid at step session; run directory, agent processes, guard process and temporary files removed"
+          else fail LAUNCH-08 "after interrupt: run-status $( [[ -f "$st" ]] && json "$st" 'd["invalid_reasons"]' || echo missing ), leftovers [$leftover]"; fi
+          end_step
+
+      - name: "12 Guard accounting and agent network evidence"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          echo "guard records (owner, content; ports masked):"
+          guard_records hit -printf '%u %p\n' | sort
+          while IFS= read -r f; do sudo sed -E 's/(127\.0\.0\.1:)[0-9]+/\1PORT/g' "$f"; done < <(guard_records hit)
+          mapfile -t IDS < <(python3 -c 'import json,sys; [print(r["run_id"]) for r in json.load(open(sys.argv[1]))["runs"] if "replaces_slot" not in r]' "$SCHEDULE")
+          IDS+=("$(cat "$CI_DIR/held-run-id")")
+          bad=""
+          total="$(guard_records hit | wc -l)"; [[ "$total" == 5 ]] || bad="$bad total=$total(expected 5)"
+          other_owner="$(guard_records hit ! -user runner | wc -l)"; [[ "$other_owner" == 0 ]] || bad="$bad records-not-owned-by-runner=$other_owner"
+          for r in "${IDS[@]}"; do
+              c="$( { guard_records hit -exec grep -l -- "/captures/$r/driver" {} + || true; } | wc -l)"
+              [[ "$c" == 1 ]] || bad="$bad $r:$c"
+          done
+          sessions="$(find "$AQD_OPERATOR/captures" \( -name driver-result.json -o -name export.json -o -name cli-export.json -o -name export-checks.json \) | wc -l)"
+          [[ "$sessions" == 0 ]] || bad="$bad session-artifacts=$sessions"
+          if [[ -z "$bad" ]]; then pass GUARD-04 "5 boundary records, all owned by the operator, one per launched run (4 scheduled + 1 held); drive_session.py never started; no session, export or export check in any capture"
+          else fail GUARD-04 "guard accounting:$bad"; fi
+          ok=1
+          for t in iptables ip6tables; do
+              sudo "$t" -L AQD_AGENT_EGRESS -v -n -x
+              [[ "$(sudo "$t" -S OUTPUT | grep -c 'AQD_AGENT_EGRESS')" == 3 ]] || ok=0
+              diff <(sudo "$t" -S AQD_AGENT_EGRESS) <(grep -- '-A AQD_AGENT_EGRESS\|-N AQD_AGENT_EGRESS' "$CI_DIR/iptables-$([[ $t == iptables ]] && echo v4 || echo v6).rules") >/dev/null || ok=0
+          done
+          echo "blocked agent connection attempts (kernel log):"
+          sudo dmesg | grep 'AQD-AGENT-EGRESS' | grep 'DPT=' \
+              | sed -E 's/.*DST=([^ ]+).*PROTO=([^ ]+).*DPT=([0-9]+).*UID=([0-9]+).*/\1 \2\/\3 uid=\4/' \
+              | sort | uniq -c | sort -rn | head -n 30 | tee "$CI_DIR/blocked-egress.txt" || true
+          if [[ "$ok" == 1 ]]; then pass NET-01 "agent egress rules unchanged for the whole run (only loopback accepted); blocked attempts listed above"
+          else fail NET-01 "agent egress rules changed during the run"; fi
+          end_step
+
+      - name: "13 teardown.sh refusal and final repository state"
+        shell: bash
+        run: |
+          source "$RUNNER_TEMP/aqd/ci.sh"
+          # The operator store is not copied off this runner, so --evidence-downloaded would be
+          # false. Only the refusal is tested; the destructive path is not run here.
+          expect_rc TEAR-01 "teardown.sh without --evidence-downloaded refuses" 1 bash "$H/teardown.sh"
+          left=""
+          grep -q 'confirm with --evidence-downloaded' "$CI_DIR/TEAR-01.out" || left="$left wrong-reason"
+          for u in aqd-a aqd-b aqd-eval; do id "$u" >/dev/null 2>&1 || left="$left removed:$u"; done
+          for d in /aqd /opt/aqd-opencode "$AQD_OPERATOR"; do sudo test -e "$d" || left="$left removed:$d"; done
+          [[ -z "$left" ]] || fail TEAR-01 "teardown refusal changed the host or gave a wrong reason:$left"
+          HEAD_SHA="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"; DIRTY="$(git -C "$GITHUB_WORKSPACE" status --porcelain)"
+          if [[ "$HEAD_SHA" == "$AQD_TEST_SHA" && -z "$DIRTY" ]]; then pass REPO-02 "checkout unchanged at $HEAD_SHA and clean after the whole sequence"
+          else fail REPO-02 "HEAD $HEAD_SHA, dirty [$DIRTY]"; fi
+          end_step
+
+      - name: Build the sanitised dry-run report (allowlisted files only)
+        if: always()
+        shell: bash
+        run: |
+          CI_DIR="$RUNNER_TEMP/aqd"; R="$RUNNER_TEMP/aqd-report"; OPS=/home/runner/aqd-operator
+          RESULTS="$CI_DIR/results.tsv"; touch "$RESULTS"
+          rm -rf "$R"; mkdir -p "$R/checks" "$R/captures" "$R/sealed"
+          cp_if() { [[ -f "$1" ]] && cp "$1" "$2" || true; }
+          filtered() { [[ -f "$1" ]] && grep -vi password "$1" >"$2" || true; }
+          cp_if "$CI_DIR/environment.txt" "$R/"
+          for f in "$CI_DIR"/*.log "$CI_DIR"/*.out; do if [[ -f "$f" ]]; then filtered "$f" "$R/checks/$(basename "$f")"; fi; done
+          rm -f "$R/checks/api-serve.log"
+          for f in "$CI_DIR"/iptables-v4.rules "$CI_DIR"/iptables-v6.rules "$CI_DIR"/blocked-egress.txt "$CI_DIR"/models.txt; do cp_if "$f" "$R/checks/"; done
+          if [[ -d "$OPS/captures" ]]; then
+              for cap in "$OPS"/captures/r-*; do
+                  [[ -d "$cap" ]] || continue
+                  d="$R/captures/$(basename "$cap")"; mkdir -p "$d"
+                  for f in run-status.json run-record.json api-checks.json verify-pre.json verify-post.json pristine-check.json \
+                           home-config-listing.pre.txt home-config-listing.txt debug-paths.txt; do cp_if "$cap/$f" "$d/"; done
+                  filtered "$cap/launcher.log" "$d/launcher.log"
+              done
+          fi
+          for f in "$OPS"/sealed/preflight.json "$OPS"/sealed/preflight-catalog-*.json "$OPS"/sealed/opencode-install.json; do cp_if "$f" "$R/sealed/"; done
+          if sudo test -d /var/log/aqd-guard; then
+              sudo find /var/log/aqd-guard -maxdepth 1 -type f -printf '%u %f\n' | sort >"$R/guard-records-owners.txt" || true
+              sudo find /var/log/aqd-guard -maxdepth 1 -type f -name 'hit.*' -exec cat {} + 2>/dev/null \
+                  | sed -E 's/(127\.0\.0\.1:)[0-9]+/\1PORT/g' >"$R/guard-records.txt" || true
+          fi
+          # Never upload credentials, server passwords or authorisation headers.
+          hits="$(grep -rIlE 'API_KEY=|OPENCODE_PASSWORD|Authorization:|server password|not-a-real-key|BEGIN [A-Z ]*PRIVATE KEY' "$R" || true)"
+          if [[ -n "$hits" ]]; then
+              echo "::error::credential-like content found in: $hits; the report will not be uploaded"
+              rm -rf "$R"
+              printf 'REPORT-01\tFAIL\tcredential-like content found; report withheld\n' >>"$RESULTS"
+          else
+              printf 'REPORT-01\tPASS\tsanitised report built (%s files) and scanned; no credentials, server passwords, OpenCode data or serve logs included\n' "$(find "$R" -type f | wc -l)" >>"$RESULTS"
+              cp "$RESULTS" "$R/results.tsv"
+          fi
+
+      - name: Upload the sanitised dry-run report
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase3-linux-dry-run-report
+          path: ${{ runner.temp }}/aqd-report
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summary (every expected check; anything not run is NOT VERIFIED)
+        if: always()
+        shell: bash
+        env:
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          RESULTS="$RUNNER_TEMP/aqd/results.tsv"
+          touch "$RESULTS"
+          if [[ "$UPLOAD_OUTCOME" == success ]]; then printf 'REPORT-02\tPASS\tartifact phase3-linux-dry-run-report uploaded (14-day retention)\n' >>"$RESULTS"
+          else printf 'REPORT-02\tFAIL\tartifact upload outcome: %s\n' "${UPLOAD_OUTCOME:-not run}" >>"$RESULTS"; fi
+          EXPECTED="REPO-01 ENV-01 TEST-01 TEST-02 TEST-03 TEST-04 TEST-05 TEST-06 TEST-07 TEST-08 TEST-09
+          SETUP-01 SETUP-02 SETUP-03 SETUP-04 SETUP-05 SETUP-06 GUARD-02 GUARD-01 GUARD-03 GUARD-05
+          INSTALL-01 INSTALL-02 INSTALL-03 INSTALL-04 INSTALL-05 PRE-01 PRE-02 PRE-03 PRE-03b PRE-04 PRE-05
+          API-01 API-02 API-03 API-04 API-05 API-06 LAUNCH-01a LAUNCH-01b LAUNCH-01c
+          LAUNCH-02 LAUNCH-03 LAUNCH-04 LAUNCH-05 LAUNCH-06 LAUNCH-07 LAUNCH-08 GUARD-04 NET-01 TEAR-01 REPO-02
+          REPORT-01 REPORT-02"
+          SUMMARY="$RUNNER_TEMP/aqd/summary.md"
+          bad=0
+          status_of() { local rows; rows="$(awk -F'\t' -v id="$1" '$1 == id' "$RESULTS")"
+              if [[ -z "$rows" ]]; then echo "NOT VERIFIED"; elif grep -q $'\tFAIL\t' <<<"$rows"; then echo FAIL; else echo PASS; fi; }
+          {
+              echo "## Phase 3.2 Linux dry run (no model calls)"
+              echo
+              echo "Tested: $AQD_TEST_BRANCH at $AQD_TEST_SHA (fixed in the workflow)."
+              echo
+              if [[ "$(status_of GUARD-04)" == PASS && "$(status_of NET-01)" == PASS ]]; then
+                  echo "Model prompts sent: **none** - drive_session.py never started (GUARD-04) and agent egress stayed loopback-only (NET-01)."
+              else
+                  echo "Model prompts sent: **not established by this run** - GUARD-04 is $(status_of GUARD-04), NET-01 is $(status_of NET-01). If the launcher steps never ran, no launcher could have reached the prompt step."
+              fi
+              echo
+              echo "| Check | Result | Evidence |"
+              echo "|---|---|---|"
+          } >"$SUMMARY"
+          for id in $EXPECTED; do
+              status="$(status_of "$id")"
+              [[ "$status" == PASS ]] || bad=1
+              if [[ "$status" == "NOT VERIFIED" ]]; then evidence="step did not run"
+              else evidence="$(awk -F'\t' -v id="$id" '$1 == id {print $3}' "$RESULTS" | tr '\n' ' ' | sed 's/|/\\|/g')"; fi
+              echo "| $id | $status | $evidence |" >>"$SUMMARY"
+          done
+          extra="$(awk -F'\t' '{print $1}' "$RESULTS" | sort -u | grep -vxF -f <(tr ' ' '\n' <<<"$EXPECTED" | grep .) || true)"
+          [[ -z "$extra" ]] || { echo "Unlisted check ids: $extra" >>"$SUMMARY"; bad=1; }
+          {
+              echo
+              echo "Not verified by this workflow (by design): teardown.sh destructive path (operator store not copied off the runner); a real API key; skill activation inside a model session; export_checks/model checks on a real session; the 45-minute timeout and idle detection; hidden scoring; the -baseline OpenCode build used by CPUs without AVX2; the smoke-test host itself; agent network access during a real run."
+              echo
+              echo "Detailed captures, sealed files, OpenCode data and server logs were discarded with the runner; only the sanitised report artifact and these logs remain."
+          } >>"$SUMMARY"
+          cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "overall: $([[ "$bad" == 0 ]] && echo 'every expected check PASSED' || echo 'NOT all checks passed')"
+          exit "$bad"
