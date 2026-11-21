@@ -300,6 +300,27 @@ class ApiCheckTests(unittest.TestCase):
         report = api_checks.check_skills([skill_info("/aqd/env-a/runs/r-0123456789/home/x/SKILL.md", SKILL_BODY, "notes")], "control", self.ROOTS)
         self.assertFalse(report["ok"])
 
+    # Shape returned by GET /api/skill on OpenCode 2.3.2 (probed 2026-11-21): the
+    # binary ships built-in skills served from skill:// paths in every run.
+    BUILTINS = [{"id": name, "name": name.title(), "description": "built-in", "path": f"skill://{name}/SKILL.md",
+                 "content": f"# {name}\n\nBuilt-in guide."} for name in ("opencode", "report", "browser")]
+
+    def test_builtin_skills_of_the_pinned_binary_are_recorded_not_failed(self):
+        for group in ("control", "treatment"):
+            skills = list(self.BUILTINS)
+            if group == "treatment":
+                skills.append(skill_info("/aqd/env-a/runs/r-0123456789/home/.config/opencode/skills/code-discipline/SKILL.md", SKILL_BODY))
+            report = api_checks.check_skills(skills, group, self.ROOTS)
+            self.assertTrue(report["ok"], report["problems"])
+            self.assertEqual([s["builtin"] for s in report["skills"]][:3], [True, True, True])
+
+    def test_builtin_skill_cannot_carry_code_discipline(self):
+        renamed = dict(self.BUILTINS[0], content=SKILL_BODY)
+        self.assertFalse(api_checks.check_skills([renamed], "control", self.ROOTS)["ok"])
+        builtin_cd = dict(self.BUILTINS[0], id="code-discipline", path="skill://code-discipline/SKILL.md", content=SKILL_BODY)
+        self.assertFalse(api_checks.check_skills([builtin_cd], "control", self.ROOTS)["ok"])
+        self.assertFalse(api_checks.check_skills([builtin_cd], "treatment", self.ROOTS)["ok"])
+
     def test_treatment_requires_canonical_content_inside_run(self):
         good = skill_info("/aqd/env-a/runs/r-0123456789/home/.config/opencode/skills/code-discipline/SKILL.md", SKILL_BODY)
         self.assertTrue(api_checks.check_skills([good], "treatment", self.ROOTS)["ok"])
@@ -543,12 +564,32 @@ class RunStatusTests(TempDirTest):
         self.assertFalse(bad["valid"])
         self.assertIn("unexpected HOME configuration entries", bad["invalid_reasons"][0])
 
+    def test_provider_error_is_an_infrastructure_failure_not_a_valid_zero(self):
+        error = {"index": 1, "error": {"type": "auth", "message": "invalid x-api-key", "status": 401}, "finish": "error"}
+        for driver, export_errors in (({"status": "idle", "session_id": "ses_1", "outcome": "failed"}, []),
+                                      ({"status": "idle", "session_id": "ses_1", "outcome": "succeeded"}, [error])):
+            with self.subTest(driver=driver, errors=export_errors):
+                self.complete_run()
+                self.write("driver/driver-result.json", driver)
+                self.write("export-checks.json", {"valid": True, "activation": "CONFIRMED", "tool_counts": {}, "tokens": {},
+                                                  "model_ref": self.MODEL, "errors": export_errors})
+                status = run_status.build_status(self.tmp, "treatment", 0, 100, 0, 0, "done")
+                self.assertFalse(status["valid"])
+                self.assertTrue(any("provider/API error" in r for r in status["invalid_reasons"]), status["invalid_reasons"])
+        # A pre-registered timeout interrupts the session; that stays a valid outcome.
+        self.complete_run()
+        self.write("driver/driver-result.json", {"status": "timeout", "session_id": "ses_1"})
+        self.write("export-checks.json", {"valid": True, "activation": "CONFIRMED", "tool_counts": {}, "tokens": {},
+                                          "model_ref": self.MODEL, "errors": [error]})
+        self.assertTrue(run_status.build_status(self.tmp, "treatment", 0, 100, 0, 0, "done")["valid"])
+
     def test_run_record_must_be_complete_and_consistent(self):
         cases = {
             "missing prompt hash": self.record(prompt_sha256=None),
             "missing workspace hash": self.record(workspace_sha256="x"),
             "missing config hash": {k: v for k, v in self.record().items() if k != "global_config_sha256"},
             "no interface version": self.record(interface="opencode "),
+            "raw V2 --version output": self.record(interface="opencode opencodev2.3.2"),
             "variant disagrees": self.record(model_variant="high"),
             "other model than export": self.record(model="anthropic/claude-sonnet-5-5", model_id="claude-sonnet-5-5"),
             "treatment without skill hash": self.record(skill={"installed": True, "sha256": None}),
@@ -951,6 +992,29 @@ class ShellSyntaxTests(unittest.TestCase):
                 with self.subTest(script=name):
                     proc = subprocess.run([bash, "-n", os.path.join(HARNESS, name)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                     self.assertEqual(proc.returncode, 0, proc.stdout)
+
+
+class OpenCodeVersionTests(TempDirTest):
+    """The V2 CLI prints "opencode v2.3.2" (checked on 2.3.2); the pin compares X.Y.Z."""
+
+    def version_of(self, printed):
+        bash = find_bash()
+        if bash is None:
+            self.skipTest("bash not available")
+        fake = os.path.join(self.tmp, "opencode").replace("\\", "/")
+        with open(fake, "w", encoding="utf-8", newline="\n") as h:
+            h.write(f"#!/usr/bin/env bash\nprintf '%s\\n' '{printed}'\n")
+        lib = os.path.join(HARNESS, "lib.sh").replace("\\", "/")
+        script = f'source "{lib}"; AQD_OPENCODE_BIN="{fake}"; chmod +x "$AQD_OPENCODE_BIN"; printf "[%s]" "$(opencode_version)"'
+        env = dict(os.environ, AQD_OPERATOR=self.tmp.replace("\\", "/"))
+        proc = subprocess.run([bash, "-c", script], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        return proc.stdout.strip().splitlines()[-1]
+
+    def test_v2_cli_version_output_matches_the_pin(self):
+        self.assertEqual(self.version_of("opencode v2.3.2"), "[2.3.2]")
+        self.assertEqual(self.version_of("2.3.2"), "[2.3.2]")
+        self.assertEqual(self.version_of("no version here"), "[]")
 
 
 if __name__ == "__main__":

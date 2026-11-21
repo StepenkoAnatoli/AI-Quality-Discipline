@@ -2,14 +2,14 @@
 
 **Purpose.** Check that the real task prompt, the real workspace and the scoring pipeline produce valid, interpretable runs for Claude and Grok, with and without `code-discipline`. Four runs on one task (NEW-02). This is a workflow check. With one run per cell it is **not** evidence about the skill.
 
-**Status: NOT EXECUTED.** Nothing below has been run (SPECIFICATION.md §9). Grok is **BLOCKED** (see Models).
+**Status: NOT EXECUTED.** Nothing below has been run on Linux and no prompt has been sent (SPECIFICATION.md §9). Grok is **BLOCKED** until the user supplies an `XAI_API_KEY` and confirms the model (see Models).
 
 | Cell | Model reference | Condition | Task |
 |---|---|---|---|
 | 1 | `anthropic/claude-opus-5-5#medium` | without skill (control) | NEW-02 |
 | 2 | `anthropic/claude-opus-5-5#medium` | with skill (treatment) | NEW-02 |
-| 3 | `xai/<grok-id>[#variant]` — BLOCKED | without skill (control) | NEW-02 |
-| 4 | `xai/<grok-id>[#variant]` — BLOCKED | with skill (treatment) | NEW-02 |
+| 3 | `xai/grok-4.7#medium` (candidate; BLOCKED) | without skill (control) | NEW-02 |
+| 4 | `xai/grok-4.7#medium` (candidate; BLOCKED) | with skill (treatment) | NEW-02 |
 
 Cells 1 and 2 are compared with each other, and cells 3 and 4 with each other. Never compare across models.
 
@@ -19,11 +19,11 @@ Cells 1 and 2 are compared with each other, and cells 3 and 4 with each other. N
 |---|---|---|
 | Interface | OpenCode CLI 2.3.2 (`@opencode/cli`, the version the operator's existing installation runs and the harness pins) | same |
 | Provider | `anthropic` | `xai` |
-| Model ID | `claude-opus-5-5` (Claude Opus 5.5) | **not verified** |
-| Variant (thinking effort) | `medium` | to be chosen from the variants the catalog lists |
-| Model reference for `schedule.py` | `anthropic/claude-opus-5-5#medium` | `xai/<id>[#variant]` |
-| Evidence | 2026-11-21, operator PC: `opencode-cli.exe models` (v2.3.2) lists `anthropic/claude-opus-5-5`; the installation's model catalog lists its variants as `low, medium, high, xhigh, max` | the same installation lists no `xai` provider and no Grok model |
-| Status | verified in the operator's catalog; `preflight.sh` re-checks model and variant on the run host (exit 20 if absent) | **BLOCKED**: needs a user-provided `XAI_API_KEY`, then the exact ID read from `opencode models` on the run host |
+| Model ID | `claude-opus-5-5` (Claude Opus 5.5) | candidate `grok-4.7` (Grok 4.7); in the catalog, not callable without a key |
+| Variant (thinking effort) | `medium` | `medium` (catalog offers `low, medium, high, xhigh`) |
+| Model reference for `schedule.py` | `anthropic/claude-opus-5-5#medium` | `xai/grok-4.7#medium` once confirmed |
+| Evidence | 2026-11-21, operator PC: `opencode-cli.exe models` (v2.3.2) lists `anthropic/claude-opus-5-5`; the 2.3.2 server lists its variants as `low, medium, high, xhigh, max` | the operator's installation lists no `xai` provider and no Grok model. With a placeholder `XAI_API_KEY` in a throwaway HOME, 2.3.2 lists `xai/grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`, `grok-4.20-multi-agent-0309` (no request sent) |
+| Status | verified in the operator's catalog; `preflight.sh` re-checks model and variant on the run host (exit 20 if absent) | **BLOCKED**: needs a user-provided `XAI_API_KEY` and the user's confirmation of the model; `preflight.sh` then checks it on the run host |
 
 Use the same reference for both conditions of a model. Nobody but the user creates keys, accounts or billing settings.
 
@@ -46,14 +46,17 @@ The old procedure ran four extra unscored SMOKE-task runs before the scored ones
 
 ## 0. What the user must provide
 
-1. **A disposable Linux machine** with `sudo`, Docker, Node.js/npm, Python ≥ 3.10, git and curl, holding nothing but this checkout: no private repositories, no personal files, no evaluator pack. A free local VM (Hyper-V or VirtualBox, **no shared folders, no clipboard or drive sharing**) is enough; no paid cloud machine is needed. **Do not use WSL**: it mounts the Windows drives (`/mnt/c`), where the operator's own skills, `CLAUDE.md` files and the evaluator pack are readable.
+1. **A disposable Linux machine** (for example Ubuntu 24.04 x64) with passwordless `sudo` for the operator, Docker (operator in the `docker` group), Node.js/npm **from the distribution packages** (not nvm under `$HOME`, which `setup-host.sh` makes unreadable to the agent users), Python ≥ 3.10, git, curl and `acl`, holding nothing but this checkout: no private repositories, no personal files, no evaluator pack. A free local VM (Hyper-V or VirtualBox, **no shared folders, no clipboard or drive sharing**) is enough; no paid cloud machine is needed. **Do not use WSL**: it mounts the Windows drives (`/mnt/c`), where the operator's own skills, `CLAUDE.md` files and the evaluator pack are readable.
 2. **API keys** in `$AQD_OPERATOR/sealed/credentials.env` (mode 0600): `ANTHROPIC_API_KEY`, and `XAI_API_KEY` for Grok. Dedicated, spend-capped keys are strongly advised because the agent's shell can read its run's key; revoke them afterwards.
-3. **Grok's exact model ID and variant**, read from `opencode models` on the run host (below).
+3. **Confirmation of the Grok model** (candidate `xai/grok-4.7#medium`), checked with `opencode models` on the run host (below).
 4. **Approval of the cost** of four runs of at most 45 minutes each.
 
 ## 1. Prepare the host
 
 ```sh
+# Ubuntu example; any distribution with the same tools works
+sudo apt-get update && sudo apt-get install -y git curl python3 nodejs npm docker.io acl
+sudo usermod -aG docker "$USER"         # then log out and back in
 git clone -b phase-3/benchmark-foundation https://github.com/StepenkoAnatoli/AI-Quality-Discipline.git
 cd AI-Quality-Discipline
 git rev-parse HEAD                      # record this commit
@@ -63,18 +66,24 @@ bash evaluations/phase-3.2/harness/setup-host.sh
 bash evaluations/phase-3.2/harness/install-opencode.sh
 ```
 
-Read the model IDs from OpenCode itself, with a throwaway HOME so no key is stored (this lists the catalog; it sends no model request):
+Read the model IDs from OpenCode itself, with a throwaway HOME so no key is stored. `--standalone` keeps the V2 CLI from starting a background service that would outlive the command. This lists the catalog; it sends no model request, so it does not prove the key works:
 
 ```sh
-HOME=$(mktemp -d) ANTHROPIC_API_KEY=... XAI_API_KEY=... /opt/aqd-opencode/bin/opencode models | grep -E '^(anthropic|xai)/'
+T=$(mktemp -d)
+env -i PATH=/usr/bin:/bin HOME=$T XDG_CONFIG_HOME=$T/c XDG_DATA_HOME=$T/d XDG_STATE_HOME=$T/s XDG_CACHE_HOME=$T/k \
+    OPENCODE_DISABLE_CLAUDE_CODE=1 ANTHROPIC_API_KEY=... XAI_API_KEY=... \
+    /opt/aqd-opencode/bin/opencode models --standalone | grep -E '^(anthropic/claude-opus-5-5|xai/grok-4\.7)$'
+rm -rf "$T"
 ```
+
+Both lines must appear. Variants are not printed here; `preflight.sh` checks them.
 
 ## 2. Seal the design and check the host (no model request)
 
 ```sh
 H=evaluations/phase-3.2/harness
 python3 $H/schedule.py create --out $AQD_OPERATOR/sealed/schedule.json \
-    --models anthropic/claude-opus-5-5#medium,xai/<grok-id>[#variant] --tasks NEW-02 --repetitions 1
+    --models anthropic/claude-opus-5-5#medium,xai/grok-4.7#medium --tasks NEW-02 --repetitions 1
 install -m 0600 /dev/null $AQD_OPERATOR/sealed/credentials.env
 printf 'ANTHROPIC_API_KEY=%s\nXAI_API_KEY=%s\n' "$ANTHROPIC_KEY" "$XAI_KEY" >> $AQD_OPERATOR/sealed/credentials.env
 bash $H/preflight.sh          # exit 0 required; 20 = BLOCKED (key missing, model or variant absent)
@@ -97,7 +106,7 @@ For each run, `$AQD_OPERATOR/captures/<run>/run-status.json` must say `"valid": 
 | G1 model | `export-checks.json` | `model_ok` true; `observed_models` equals the requested model and variant |
 | G2 activation / isolation | `api-checks.json`, `export-checks.json` | treatment: `activation` = `CONFIRMED`; control: `contamination` false and no `code-discipline` in the server's skill list |
 | G3 paths | `debug-paths.txt`, `api-checks.json`, `home-config-listing.txt` | all inside the run; a skill only in treatment |
-| G4 completion | `driver/driver-result.json` | status `idle` (or `timeout`, a valid outcome) |
+| G4 completion | `driver/driver-result.json`, `export-checks.json` | status `idle` (or `timeout`, a valid outcome); an idle session must not end on a provider/API error (`outcome` `failed` or an assistant `error`: rejected key, quota, rate limit, outage), which is an infrastructure failure, never a valid zero |
 | G5 record | `run-record.json` | model with provider, ID and variant; `opencode <version>`; prompt, workspace and global-config SHA-256; skill SHA-256 (treatment) or `null` (control) |
 
 If `run-all.sh` stops on an invalid run, read `invalid_reasons`. Rerun only for a pre-registered infrastructure cause (SPECIFICATION.md §6.2), with `schedule.py rerun`. Wrong code, a timeout or a false claim is an outcome, never a reason to rerun.

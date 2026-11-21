@@ -40,7 +40,7 @@ v2 was a benchmark *infrastructure* for one model that is now out of scope. An i
 
 Private evaluator pack (outside the repository): inventories added; `check_oracles.py` uses inventories and sandbox-free *trusted* scoring and requires valid evaluations; two new mutants (`with_conn_autocommit`, `csv_not_strict`); scoring key updated.
 
-## v3.1 corrections (2026-11-21, on top of `72fa194`; not yet committed)
+## v3.1 corrections (2026-11-21, on top of `72fa194`; committed as `f0c857c`, CI green)
 
 Problems, effects and corrections are listed in [SPECIFICATION.md §11](SPECIFICATION.md#11-v31-corrections-2026-11-21). Files:
 
@@ -55,3 +55,17 @@ Problems, effects and corrections are listed in [SPECIFICATION.md §11](SPECIFIC
 | `tests/test_scoring.py`, `tests/test_harness.py` | Tests for every correction (most fail on the v3 code) |
 | `PROMPT-SMOKE-TEST.md` | Four agent runs and nothing else; verified Claude reference; Grok BLOCKED |
 | `SPECIFICATION.md`, `README.md`, `VALIDATION-CHECKLIST.md`, `RISK-REGISTER.md`, this file | Updated for v3.1 |
+
+## v3.2 corrections (2026-11-21, on top of `f0c857c`; not yet committed)
+
+Problems, effects and corrections are listed in [SPECIFICATION.md §12](SPECIFICATION.md#12-v32-corrections-2026-11-21). Found by checking the harness against the real OpenCode 2.3.2 server without sending a prompt. Files:
+
+| File | Change |
+|---|---|
+| `harness/lib.sh` | `opencode_version`: reads X.Y.Z from `opencode v2.3.2` |
+| `harness/install-opencode.sh`, `preflight.sh`, `launch-run.sh` | Use `opencode_version` (the verbatim comparison failed on every host) |
+| `harness/api_checks.py` | Built-in `skill://` skills of the pinned binary are recorded, not treated as leaks; a built-in that is or contains `code-discipline` still fails |
+| `harness/run_status.py` | A session that ends on a provider/API error is invalid; the run record must name `opencode X.Y.Z` |
+| `tests/test_harness.py` | Tests for each correction (all fail on `f0c857c`) |
+| `PROMPT-SMOKE-TEST.md` | Host packages and docker group; `models --standalone` with a throwaway HOME; Grok candidate from the 2.3.2 catalog; provider-error rule in G4 |
+| `SPECIFICATION.md`, `README.md`, `VALIDATION-CHECKLIST.md`, `RISK-REGISTER.md`, this file | Stale commit/CI statements corrected; skill hash corrected to the LF file; probe results; v3.2 |

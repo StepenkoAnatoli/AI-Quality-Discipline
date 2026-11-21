@@ -1,4 +1,4 @@
-# Phase 3.2 — Risk register (v3)
+# Phase 3.2 — Risk register (v3.2)
 
 | # | Risk | Severity | Mitigation | Residual |
 |---|---|---|---|---|
@@ -12,9 +12,10 @@
 | R07 | Ceiling effect: both conditions pass everything | Medium | Solution hints removed; several independent defect classes per task | Possible with strong models; a null result must be reported as such |
 | R08 | Small sample read as proof | High | Analysis labelled exploratory; effects within model only | Depends on reporting discipline |
 | R09 | Oracle too strict for a valid alternative design | Medium | Every check traces to a stated requirement; references and 11 mutants validate both directions; adjudication notes, never test edits after unblinding | Judgement calls documented in the private key |
-| R10 | Launcher never executed: unknown OpenCode V2 behaviour (paths, idle detection, export, background service) | Medium | Gates G1–G5 inside every run; `run-all.sh` stops at the first invalid run | The first smoke run is the launcher's first test; a defect can cost one session |
-| R14 | Grok model ID unverified | High (blocks cells 3–4) | No ID is guessed; `preflight.sh` refuses absent models or variants | BLOCKED until the user supplies an xAI key |
+| R10 | Launcher never executed on Linux: unknown OpenCode V2 behaviour (idle detection after a prompt, skill attachment, Linux build, OS-user separation) | Medium | HTTP API shapes checked against the real 2.3.2 server without a prompt (v3.2; found and fixed two defects that would have blocked every host); gates G1–G5 inside every run; `run-all.sh` stops at the first invalid run | The first smoke run is the launcher's first real test; a defect can cost one session |
+| R14 | Grok not callable: no `XAI_API_KEY`; model not confirmed | High (blocks cells 3–4) | The 2.3.2 catalog lists `xai/grok-4.7` with a `medium` variant (placeholder-key probe); no ID is used without the user's confirmation; `preflight.sh` refuses absent models or variants | BLOCKED until the user supplies an xAI key and confirms the model |
 | R15 | Host leaks operator files (shared folders, WSL drive mounts) | High | Specification requires a VM without sharing and rules out WSL | Not checked by code |
 | R11 | Public specification readable by agents through the internet | Low | Hidden tests, references and the key stay private; the specification only restates the prompt | — |
 | R12 | Evaluator pack exists only on the operator PC | Medium | Back it up privately; never copy it to an agent host before agent runs end | — |
-| R13 | Pre-existing `tests/test_install.py` failures on the operator PC (line endings) | Low | Unrelated to Phase 3.2; untouched | Needs a separate fix |
+| R13 | Pre-existing `tests/test_install.py` failures on the operator PC (9 of 14) | Low | Unrelated to Phase 3.2; the test helper writes SKILL.md with `write_text`, which produces CRLF on Windows, and the installer requires LF front matter. Not run in CI | Needs a separate fix |
+| R16 | A provider error (rejected key, quota, rate limit, outage) is scored as wrong code | High | Since v3.2 such a session is invalid and `run-all.sh` stops | A provider that silently truncates a session without an error is not detected |

@@ -32,7 +32,7 @@ gate commit "$COMMIT"
 
 # 2. Pinned OpenCode and the CLI surface the harness relies on.
 [[ -x "$AQD_OPENCODE_BIN" ]] || die "OpenCode not installed at $AQD_OPENCODE_BIN; run install-opencode.sh"
-VERSION="$("$AQD_OPENCODE_BIN" --version 2>/dev/null | tr -d '[:space:]')"
+VERSION="$(opencode_version)"
 [[ "$VERSION" == "$AQD_OPENCODE_VERSION" ]] || die "OpenCode $VERSION found, $AQD_OPENCODE_VERSION pinned"
 gate opencode_version "$VERSION"
 SERVE_HELP="$("$AQD_OPENCODE_BIN" serve --help 2>&1 || true)"

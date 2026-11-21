@@ -12,7 +12,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_cmd sudo npm node sha256sum
 [[ -d "$AQD_SEALED" ]] || die "run setup-host.sh first"
 
-if [[ -x "$AQD_OPENCODE_BIN" ]] && [[ "$("$AQD_OPENCODE_BIN" --version | tr -d '[:space:]')" == "$AQD_OPENCODE_VERSION" ]]; then
+if [[ -x "$AQD_OPENCODE_BIN" ]] && [[ "$(opencode_version)" == "$AQD_OPENCODE_VERSION" ]]; then
     log "OpenCode $AQD_OPENCODE_VERSION already installed at $AQD_OPENCODE_PREFIX"
 else
     sudo install -d -o root -g root -m 0755 "$AQD_OPENCODE_PREFIX"
@@ -22,7 +22,7 @@ fi
 sudo chown -R root:root "$AQD_OPENCODE_PREFIX"
 sudo chmod -R a+rX,go-w "$AQD_OPENCODE_PREFIX"
 
-VERSION="$("$AQD_OPENCODE_BIN" --version | tr -d '[:space:]')"
+VERSION="$(opencode_version)"
 [[ "$VERSION" == "$AQD_OPENCODE_VERSION" ]] || die "installed version $VERSION, expected $AQD_OPENCODE_VERSION"
 
 "$(python_bin)" - "$AQD_OPENCODE_PREFIX" "$VERSION" "$AQD_SEALED/opencode-install.json" <<'PY'

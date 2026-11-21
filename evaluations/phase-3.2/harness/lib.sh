@@ -67,6 +67,12 @@ require_cmd() {
     done
 }
 
+# Version of the pinned OpenCode binary as X.Y.Z. The V2 CLI prints
+# "opencode v2.3.2" (checked on 2.3.2); a bare "2.3.2" is accepted too.
+opencode_version() {
+    { "$AQD_OPENCODE_BIN" --version 2>/dev/null || true; } | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true
+}
+
 python_bin() {
     command -v python3 || die "python3 not found"
 }

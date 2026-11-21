@@ -173,7 +173,7 @@ PASSWORD="$(random_secret)"
 make_agent_env "$RUN_ROOT" "$PASSWORD"
 add_provider_credential "$MODEL_PROVIDER"
 "$PY" - "$CAP/run-record.json" "$RUN_ID" "$TASK" "$GROUP" "$MODEL_REF" "$AQD_ACTIVATION_MODE" "$MESSAGE_FILE" "$MANIFEST" \
-    "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$("$AQD_OPENCODE_BIN" --version 2>/dev/null | tr -d '[:space:]')" \
+    "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$(opencode_version)" \
     "$AQD_PRISTINE/config/global-opencode.jsonc" "$AQD_SEALED/opencode-install.json" "$AQD_AGENT" "$AQD_RUN_TIMEOUT_SECONDS" <<'PY'
 import datetime, hashlib, json, os, sys
 out, run_id, task, group, model, mode, prompt, manifest, skill, version, config, install, agent, timeout = sys.argv[1:15]

@@ -31,6 +31,7 @@ sys.path.insert(0, HERE)
 import aqd_common as c  # noqa: E402
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+INTERFACE = re.compile(r"^opencode [0-9]+\.[0-9]+\.[0-9]+$")
 
 
 def _load(path):
@@ -62,7 +63,7 @@ def check_run_record(record, group, export_model_ref):
             reasons.append(f"run record lacks {key}")
     if record.get("group") != group:
         reasons.append("run record names a different group")
-    if not str(record.get("interface", "")).startswith("opencode ") or record.get("interface") == "opencode ":
+    if not INTERFACE.match(str(record.get("interface", ""))):
         reasons.append("run record lacks the interface version")
     try:
         provider, model_id, variant = c.parse_model(record.get("model"))
@@ -97,6 +98,12 @@ def build_status(capture, group, started, ended, api_exit, driver_exit, step):
     status = driver.get("status")
     if status not in ("idle", "timeout"):
         reasons.append(f"driver status {status!r} (exit {driver_exit})")
+    # A rejected key, quota, rate limit or provider outage ends the session
+    # with an error. That is an infrastructure failure, never a model outcome
+    # (a valid zero would count it as wrong code). A timeout interrupts the
+    # session on purpose, so its outcome stays valid.
+    if status == "idle" and (driver.get("outcome") == "failed" or (export_checks or {}).get("errors")):
+        reasons.append("session ended with a provider/API error (infrastructure failure; see export-checks.json errors)")
     if export_checks is None:
         reasons.append("no export analysed")
     elif not export_checks.get("valid"):

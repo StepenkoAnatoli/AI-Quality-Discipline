@@ -62,7 +62,14 @@ def check_model(models, provider_id, model_id, variant):
             "model_sha256": c.sha256_text(json.dumps(target, sort_keys=True))}
 
 
+BUILTIN_SKILL_SCHEME = "skill://"
+
+
 def check_skills(skills, group, allowed_roots):
+    """Skills the server offers. Built-in skills (path `skill://<id>/...`) ship
+    inside the pinned OpenCode binary, are identical in both groups and are
+    denied by the project's permission rules; they are recorded, and must not
+    be or contain code-discipline. Every file-backed skill must be inside the run."""
     problems, listing = [], []
     found = None
     for s in skills:
@@ -70,10 +77,13 @@ def check_skills(skills, group, allowed_roots):
             continue
         content = s.get("content") or ""
         path = s.get("path") or ""
-        entry = {"id": s.get("id"), "path": path, "content_sha256": c.sha256_text(content),
+        builtin = path.startswith(BUILTIN_SKILL_SCHEME)
+        entry = {"id": s.get("id"), "path": path, "builtin": builtin, "content_sha256": c.sha256_text(content),
                  "has_sentinel": c.contains_any_sentinel(content)}
         listing.append(entry)
-        if path and not c.path_under(path, allowed_roots):
+        if builtin and s.get("id") == c.SKILL_ID:
+            problems.append(f"{c.SKILL_ID} is offered as a built-in skill: {path}")
+        elif path and not builtin and not c.path_under(path, allowed_roots):
             problems.append(f"skill {s.get('id')!r} loaded from outside the run: {path}")
         if s.get("id") == c.SKILL_ID:
             found = entry if found is None else found
