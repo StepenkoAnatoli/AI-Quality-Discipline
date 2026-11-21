@@ -302,7 +302,7 @@ Exit gate: each skill has clear metadata, narrow scope, useful examples/tests, a
 - [x] Add generic/manual fallback guidance.
 - [x] Test installation, repeat installation, conflicts, and removal.
 
-Exit gate: a new user can install one or all skills without silently losing existing files. The local installer and target-path adapters are implemented; 14 automated installer tests pass. Live discovery/invocation testing in Codex, Claude Code, and Copilot remains unverified and is not claimed.
+Exit gate: a new user can install one or all skills without silently losing existing files. The local installer and target-path adapters are implemented, with 14 automated installer tests in `tests/test_install.py`. No current passing run of all 14 is recorded: on the operator's Windows PC 9 of 14 fail because of a line-ending mismatch (the test helper writes CRLF; the installer requires LF front matter; Phase 3.2 risk R13), and CI does not run them. Live discovery/invocation testing in Codex, Claude Code, and Copilot remains unverified and is not claimed.
 
 ### Phase 3 — Validation and evaluation
 - [x] Add receipt validator (structural only; does not verify truth).
