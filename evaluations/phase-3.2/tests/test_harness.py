@@ -338,6 +338,94 @@ class ApiCheckTests(unittest.TestCase):
         self.assertTrue(api_checks.check_provider([{"id": "anthropic"}], "anthropic")["ok"])
         self.assertFalse(api_checks.check_provider([{"id": "anthropic"}], "xai")["ok"])
 
+    # Shapes of OpenCode 2.3.2 (OpenAPI and a live server, 2026-11-21): /api/provider,
+    # /api/model and /api/skill return {"location": ..., "data": [...]} with both
+    # keys required; /api/config returns a bare list of entries.
+    RUN = "/aqd/env-a/runs/r-0123456789"
+    LOC = {"directory": RUN + "/project"}
+
+    def wrapped_responses(self, group):
+        skills = list(self.BUILTINS)
+        if group == "treatment":
+            skills.append(skill_info(self.RUN + "/home/.config/opencode/skills/code-discipline/SKILL.md", SKILL_BODY))
+        return {
+            "/api/provider": {"location": self.LOC, "data": [{"id": "anthropic", "name": "Anthropic"}, {"id": "opencode", "name": "OpenCode"}]},
+            "/api/model": {"location": self.LOC, "data": [{"providerID": "anthropic", "id": "claude-test", "enabled": True,
+                                                           "variants": [{"id": "low"}, {"id": "medium"}]}]},
+            "/api/skill": {"location": self.LOC, "data": skills},
+            "/api/config": [{"type": "document", "path": self.RUN + "/project/opencode.jsonc", "info": {}},
+                            {"type": "directory", "path": self.RUN + "/home/.config/opencode"}],
+        }
+
+    @staticmethod
+    def stub_client(responses):
+        class StubClient:
+            def request(self, method, path, body=None, query=None):
+                return 200, responses[path]
+        return StubClient()
+
+    def test_run_reads_location_scoped_list_envelopes(self):
+        for group in ("control", "treatment"):
+            report, code = api_checks.run(self.stub_client(self.wrapped_responses(group)), self.LOC["directory"], group,
+                                          self.ROOTS, "anthropic/claude-test#medium")
+            self.assertEqual(code, 0, report)
+            self.assertEqual(report["provider"]["provider_ids"], ["anthropic", "opencode"])
+            self.assertEqual(report["model"]["variants"], ["low", "medium"])
+            self.assertEqual(len(report["skills"]["skills"]), 4 if group == "treatment" else 3)
+        # The same envelope still fails the checks it exists for.
+        leaked = self.wrapped_responses("treatment")
+        report, code = api_checks.run(self.stub_client(leaked), self.LOC["directory"], "control", self.ROOTS, "anthropic/claude-test#medium")
+        self.assertEqual(code, 13)
+        absent = self.wrapped_responses("control")
+        self.assertEqual(api_checks.run(self.stub_client(absent), self.LOC["directory"], "control", self.ROOTS, "xai/grok-test")[1], 10)
+
+    MALFORMED = {
+        "no data": {"location": LOC},
+        "data null": {"location": LOC, "data": None},
+        "data object": {"location": LOC, "data": {"id": "x"}},
+        "entries not objects": {"location": LOC, "data": ["anthropic"]},
+        "entry lacks fields": {"location": LOC, "data": [{"name": "no id"}]},
+        "extra envelope key": {"location": LOC, "data": [], "error": "x"},
+        "empty body": None,
+        "bare object": {"id": "anthropic"},
+    }
+
+    def test_malformed_or_unexpected_shapes_fail_closed(self):
+        for endpoint in ("/api/provider", "/api/model", "/api/skill", "/api/config"):
+            for label, bad in self.MALFORMED.items():
+                for group in ("control", "treatment"):
+                    with self.subTest(endpoint=endpoint, shape=label, group=group):
+                        responses = self.wrapped_responses(group)
+                        responses[endpoint] = bad
+                        with self.assertRaises(drive_session.ApiError):
+                            api_checks.run(self.stub_client(responses), self.LOC["directory"], group, self.ROOTS,
+                                           "anthropic/claude-test#medium")
+
+    def test_cli_exits_2_and_writes_no_report_on_a_malformed_skill_list(self):
+        from unittest import mock
+        responses = self.wrapped_responses("control")
+        responses["/api/skill"] = {"location": self.LOC, "data": None}
+        out = os.path.join(tempfile.mkdtemp(prefix="aqd-test-"), "api-checks.json")
+        try:
+            with mock.patch.object(api_checks, "Client", lambda server, password: self.stub_client(responses)), \
+                    mock.patch.dict(os.environ, {"OPENCODE_PASSWORD": "x"}), redirect_stdout(io.StringIO()):
+                stderr = io.StringIO()
+                with mock.patch.object(sys, "stderr", stderr):
+                    code = api_checks.main(["--server", "http://127.0.0.1:1", "--directory", self.LOC["directory"],
+                                            "--group", "control", "--model", "anthropic/claude-test#medium",
+                                            "--allowed-root", self.RUN, "--out", out])
+            self.assertEqual(code, 2)
+            self.assertFalse(os.path.exists(out))
+            self.assertIn("/api/skill", stderr.getvalue())
+        finally:
+            shutil.rmtree(os.path.dirname(out), ignore_errors=True)
+
+    def test_unwrap_only_strips_known_envelopes(self):
+        self.assertEqual(drive_session.unwrap({"data": [1]}), [1])
+        self.assertEqual(drive_session.unwrap({"location": {}, "data": [1]}), [1])
+        for payload in ({"data": [1], "cursor": {}}, {"location": {}}, {"id": "ses_1"}, [1], None):
+            self.assertEqual(drive_session.unwrap(payload), payload)
+
     def test_config_paths_must_stay_inside_run(self):
         entries = [{"path": "/aqd/env-a/runs/r-0123456789/project/opencode.jsonc"}, {"path": "/etc/opencode/opencode.json"}]
         self.assertTrue(api_checks.check_config(entries, self.ROOTS, exists=lambda p: False)["ok"])

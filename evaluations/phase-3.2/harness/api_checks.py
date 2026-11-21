@@ -111,18 +111,37 @@ def check_config(config_entries, allowed_roots, exists=os.path.exists):
     return {"ok": not outside, "paths": paths, "outside_allowed_roots": outside}
 
 
+# String fields every list entry must carry (OpenCode 2.3.2 OpenAPI: Provider.Info,
+# Model.Info, Skill.Info, Config.Entry).
+REQUIRED_FIELDS = {"/api/provider": ("id",), "/api/model": ("providerID", "id"),
+                   "/api/skill": ("id", "path", "content"), "/api/config": ("type",)}
+
+
+def fetch_list(client, path, query):
+    """GET a list endpoint. Any other shape is an API error (exit 2), never an
+    empty list, so an unreadable skill list cannot pass an isolation check."""
+    payload = client.request("GET", path, query=query)[1]
+    items = unwrap(payload)
+    if not isinstance(items, list):
+        raise ApiError(f"GET {path}: expected a list, got {type(items).__name__}: {str(payload)[:300]}")
+    for item in items:
+        if not isinstance(item, dict) or not all(isinstance(item.get(k), str) for k in REQUIRED_FIELDS[path]):
+            raise ApiError(f"GET {path}: malformed entry: {str(item)[:300]}")
+    return items
+
+
 def run(client, directory, group, allowed_roots, model_ref):
     provider_id, model_id, variant = c.parse_model(model_ref)
     loc = {"location[directory]": directory}
     report = {"directory": directory, "group": group, "allowed_roots": allowed_roots, "model_ref": model_ref}
-    report["provider"] = check_provider(unwrap(client.request("GET", "/api/provider", query=loc)[1]) or [], provider_id)
+    report["provider"] = check_provider(fetch_list(client, "/api/provider", loc), provider_id)
     if not report["provider"]["ok"]:
         return report, 10
-    report["model"] = check_model(unwrap(client.request("GET", "/api/model", query=loc)[1]) or [], provider_id, model_id, variant)
+    report["model"] = check_model(fetch_list(client, "/api/model", loc), provider_id, model_id, variant)
     if not report["model"]["ok"]:
         return report, 11 if report["model"]["reason"] in ("model_absent", "model_disabled") else 12
-    report["skills"] = check_skills(unwrap(client.request("GET", "/api/skill", query=loc)[1]) or [], group, allowed_roots)
-    report["config"] = check_config(unwrap(client.request("GET", "/api/config", query=loc)[1]), allowed_roots)
+    report["skills"] = check_skills(fetch_list(client, "/api/skill", loc), group, allowed_roots)
+    report["config"] = check_config(fetch_list(client, "/api/config", loc), allowed_roots)
     return report, 0 if report["skills"]["ok"] and report["config"]["ok"] else 13
 
 

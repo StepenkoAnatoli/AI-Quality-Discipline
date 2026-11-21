@@ -66,8 +66,11 @@ class Client:
 
 
 def unwrap(payload):
-    """API responses are {"data": ...}; tolerate a bare object as well."""
-    if isinstance(payload, dict) and "data" in payload and len(payload) == 1:
+    """API responses are {"data": ...}; the location-scoped lists of OpenCode
+    2.3.2 (/api/provider, /api/model, /api/skill) are {"location": ..., "data": [...]}.
+    Anything else, including an envelope with extra keys, is returned unchanged
+    for the caller to reject."""
+    if isinstance(payload, dict) and "data" in payload and set(payload) <= {"data", "location"}:
         return payload["data"]
     return payload
 

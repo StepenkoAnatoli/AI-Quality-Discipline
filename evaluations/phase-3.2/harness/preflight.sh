@@ -71,6 +71,17 @@ gate cli_surface ok
 for name in /etc/opencode; do
     [[ ! -e "$name" ]] || die "$name exists; it would configure every user"
 done
+# OpenCode 2.3.2 creates $HOME/.local/share/opencode/log even for --version and
+# exits 1 when it cannot, so the version check runs with a throwaway HOME that is
+# removed on success, on failure and on any exit before the loop ends.
+VHOME=""
+cleanup_version_home() {
+    if [[ -n "$VHOME" ]]; then
+        sudo rm -rf --one-file-system "$VHOME"
+    fi
+    VHOME=""
+}
+trap cleanup_version_home EXIT
 for env in "${AQD_ENVS[@]}" ; do
     user="${AQD_USER_FOR_ENV[$env]}"
     id "$user" >/dev/null 2>&1 || die "user $user missing; run setup-host.sh"
@@ -80,8 +91,11 @@ for env in "${AQD_ENVS[@]}" ; do
     if sudo -l -U "$user" 2>/dev/null | grep -q '(ALL'; then
         die "$user has sudo rights"
     fi
-    sudo -u "$user" env -i PATH="$(agent_path)" HOME=/nonexistent "$AQD_OPENCODE_BIN" --version >/dev/null \
+    VHOME="$(sudo -u "$user" mktemp -d -p "$AQD_ROOT/$env" preflight-home.XXXXXXXXXX)" \
+        || die "cannot create a temporary HOME for $user in $AQD_ROOT/$env"
+    sudo -u "$user" env -i PATH="$(agent_path)" HOME="$VHOME" TMPDIR="$VHOME" "$AQD_OPENCODE_BIN" --version >/dev/null \
         || die "$user cannot execute $AQD_OPENCODE_BIN with the agent PATH"
+    cleanup_version_home
     sudo -u "$user" env -i PATH="$(agent_path)" python3 -c 'import sqlite3, csv, multiprocessing' \
         || die "$user cannot run python3 with sqlite3/csv/multiprocessing"
     assert_unreadable_by "$user" "$AQD_OPERATOR" "$AQD_CHECKOUT" "$HOME" /workspaces/.codespaces
