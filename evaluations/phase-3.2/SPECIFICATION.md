@@ -1,4 +1,4 @@
-# Phase 3.2 — Specification v3
+# Phase 3.2 — Specification v3.1
 
 **Question.** Does giving a coding agent the `code-discipline` skill produce objectively better working software than the same agent, model and settings without it?
 
@@ -6,21 +6,21 @@
 
 **Models in scope.** Claude and Grok only. Nemotron and the free OpenCode gateway are out of scope (decision 2026-11-21). The v2 specification that used them is in git history (`3ec3b32`).
 
-**Date:** 2026-11-21. **Branch:** `phase-3/benchmark-foundation`, base commit `3ec3b32`.
+**Date:** 2026-11-21. **Branch:** `phase-3/benchmark-foundation`, base commit `3ec3b32`; v3.1 corrections on top of `72fa194` (§11).
 
 ## 1. Status
 
-Local runs were on Windows with Python 3.14.7. CI = GitHub Actions on `ubuntu-latest`, commit `8680c4c`, runs 44864449784 (push) and 44864453346 (PR #1), both green. Nothing has been independently audited or run against a model.
+Local runs were on Windows with Python 3.14.7. CI = GitHub Actions on `ubuntu-latest`, commit `8680c4c`, runs 44864449784 (push) and 44864453346 (PR #1), both green. The v3.1 corrections (§11) are tested locally only; they are not committed or pushed, so CI has not run them. Nothing has been independently audited or run against a model.
 
 | Component | Implemented | Tested locally | Tested in CI | Independently audited | Status |
 |---|---|---|---|---|---|
-| Tasks NEW-01/02/03, revised prompts | yes | baseline tests pass; prompt/workspace hashes pinned by a test | yes (hash test) | no | ready for a smoke test |
-| Hidden oracles (41 checks), references, 11 mutants (private pack) | yes | `check_oracles.py`: ORACLES OK, all mutants killed | never (private) | no | ready; re-run on the scoring host |
-| Fail-closed scoring (`score_run.py`, `run_checks.py`, inventories) | yes | 30 adversarial tests (`test_scoring.py`) | yes, 30 OK | no | ready |
+| Tasks NEW-01/02/03, revised prompts | yes | baseline tests pass; prompt/workspace hashes pinned by a test | yes (hash test, `8680c4c`) | no | ready for a smoke test |
+| Hidden oracles (41 checks), references, 11 mutants (private pack) | yes | `check_oracles.py`: ORACLES OK, all mutants killed (re-run with v3.1 scoring) | never (private) | no | ready; re-run on the scoring host |
+| Fail-closed scoring (`score_run.py`, `run_checks.py`, inventories) | yes, v3.1 | 37 tests in `test_scoring.py` | v3 only (30 OK) | no | ready, pending CI for v3.1 |
 | Docker scoring sandbox | yes | no (no Docker on the operator PC; tests skip) | yes, 3/3 isolation probes OK, no skips (`python:3.12-slim` pinned by digest) | no | **demonstrated on the CI runner**; `score-all.sh` re-runs the probes on the scoring host and refuses to score if they fail or skip |
-| Fail-closed analysis (`analyze.py`), model-aware schedule | yes | unit tests (`test_harness.py`) | yes | no | ready |
-| OpenCode run launcher (`launch-run.sh`, `preflight.sh`, driver, checks) | yes, model now a parameter | Python parts unit-tested with a fake server; shell syntax only | no | no | **never executed** |
-| Live Claude / Grok runs | — | — | — | — | **not executed** (§9) |
+| Fail-closed analysis (`analyze.py`): review gating, score-file integrity, run-record consistency | yes, v3.1 | unit tests (`test_harness.py`) | v3 only | no | ready, pending CI for v3.1 |
+| OpenCode run launcher (`launch-run.sh`, `preflight.sh`, driver, checks) | yes | Python parts unit-tested with a fake server; the two new refusal paths executed in Git Bash; otherwise shell syntax only | no | no | **never executed** |
+| Live Claude / Grok runs | — | — | — | — | **not executed** (§9); Grok **BLOCKED** (§3) |
 
 ## 2. Design
 
@@ -32,10 +32,10 @@ Local runs were on Windows with Python 3.14.7. CI = GitHub Actions on `ubuntu-la
 
 A block is one control run and one treatment run of the same model and task, in random order (`schedule.py`). Within a block, everything is identical: prompt bytes, starting workspace, tests visible to the agent, tools and permissions, time limit (45 min), model ID and variant, interface version.
 
-1. **Smoke test (4 runs):** both models × both conditions on one task (NEW-02), one repetition: `schedule.py create --models <claude>,<grok> --tasks NEW-02 --repetitions 1`. It checks that the prompt, workflow and scoring work. It is not evidence about the skill.
-2. **Controlled pilot (36 runs):** 2 models × 3 tasks × 3 repetitions × 2 conditions. It starts only after the smoke test has been reviewed and the user approves it. It is exploratory (§8).
+1. **Smoke test (4 agent runs, no others):** both models × both conditions on one task (NEW-02), one repetition: `schedule.py create --models <claude>,<grok> --tasks NEW-02 --repetitions 1`. Isolation and skill registration are checked inside each run before its prompt is sent (no model request); model, activation and contamination are checked from each run's own export. No separate gate runs are needed (PROMPT-SMOKE-TEST.md, "Model calls"). It checks that the prompt, workflow and scoring work. It is not evidence about the skill.
+2. **Controlled pilot (36 runs):** 2 models × 3 tasks × 3 repetitions × 2 conditions. It starts only after the smoke test has been reviewed and the user approves it in writing (`sealed/pilot-approved.json`; `launch-run.sh` refuses any schedule of more than 4 runs without it). It is exploratory (§8).
 
-**Run record** (`run-record.json`, written by the launcher before the prompt is sent): run ID, task, condition, model reference `provider/model[#variant]` as given to the interface, interface and version (`opencode <version>`), activation mode, skill SHA-256 or `null`, prompt SHA-256, workspace SHA-256, start time. `export_checks.py` also records every model and variant the session actually reported (`observed_models`); a mismatch with the run's model invalidates the run. Substitution is never silent.
+**Run record** (`run-record.json`, written by the launcher before the prompt is sent): run ID, task, condition, model reference `provider/model[#variant]` and its three parts, interface and version (`opencode <version>`), activation mode, agent, time limit, skill SHA-256 or `null`, prompt SHA-256, workspace SHA-256 (covers the project's `opencode.jsonc`, i.e. tools and permissions), SHA-256 of the global config installed in the run's HOME, the OpenCode install tree hash, start time. `run_status.py` invalidates a run whose record is incomplete or contradicts the run; `analyze.py` refuses to analyse runs whose records differ in anything but the skill. `export_checks.py` also records every model and variant the session actually reported (`observed_models`); a mismatch with the run's model invalidates the run. Substitution is never silent.
 
 ## 3. Execution interface
 
@@ -48,11 +48,18 @@ The model and the interface are separate variables. The recommendation is to kee
 | A custom agent loop over both APIs | Maximum control, but it is a new, untested agent, unlike the agents people actually use, and more code to audit |
 | Running agents on the operator's own PC | **Rejected.** The user's global skills (for example a `careful-coding` skill very close to `code-discipline`), `CLAUDE.md` and the private evaluator pack are all readable by an agent's shell there |
 
-**Host.** Use a disposable Linux machine (a VM, or a Codespace if the user authorises one) that holds only this public checkout. The private evaluator pack must never be on the agent host while agents run. The launcher needs `sudo` (for the per-group OS users) and Docker (for scoring).
+**Host.** Use a disposable Linux machine that holds only this public checkout. A free local VM (Hyper-V or VirtualBox) with no shared folders or drive sharing is enough; no paid cloud machine is needed. WSL is not acceptable: it mounts the Windows drives, where the operator's own skills and the evaluator pack are readable. The private evaluator pack must never be on the agent host while agents run. The launcher needs `sudo` (for the per-group OS users) and Docker (for scoring).
 
 **Credentials.** The user creates dedicated, spend-capped `ANTHROPIC_API_KEY` and `XAI_API_KEY` values and stores them in `$AQD_SEALED/credentials.env` (mode 0600). Each run receives only its own provider's key. The agent's shell can read that key, because it runs as the same OS user as the OpenCode server. Revoke the keys after the pilot. Nobody else creates accounts, keys or billing settings.
 
-**Model IDs.** Read the exact IDs with `opencode models` on the run host and record them in the schedule. They are not guessed here. On 2026-11-21 the operator's own OpenCode catalog listed `anthropic/claude-opus-5-5`, `anthropic/claude-sonnet-5-5` and `anthropic/claude-haiku-5-5`, and no xAI provider was configured.
+**Model IDs.** Not guessed. Verified on 2026-11-21 against the operator's existing OpenCode installation (CLI `opencode v2.3.2`, the version the harness pins):
+
+| Model | Reference | Evidence | Status |
+|---|---|---|---|
+| Claude Opus 5.5, thinking effort Medium | `anthropic/claude-opus-5-5#medium` | `opencode models` lists `anthropic/claude-opus-5-5`; the installation's model catalog lists its variants as `low, medium, high, xhigh, max` | verified in the operator's catalog; `preflight.sh` re-checks model and variant on the run host |
+| Grok | `xai/<id>[#variant]` | the installation has no `xai` provider and lists no Grok model | **BLOCKED**: needs an `XAI_API_KEY` from the user; then read the ID and variants with `opencode models` on the run host |
+
+The run host needs an `ANTHROPIC_API_KEY`. How the operator's own installation authenticates to Anthropic was not inspected (credential files were deliberately not read), so whether a usable key already exists is unknown.
 
 ## 4. Contamination controls (agent runs)
 
@@ -64,6 +71,9 @@ These are implemented in the existing launcher but have **never been executed**:
 - Activation: the treatment prompt is byte-identical to control and the skill is attached through the API (`skills: [{"id": "code-discipline"}]`). After the run, `export_checks.py` marks a treatment run valid only if the skill text is demonstrably in the session. It marks a control run invalid if any skill sentinel text, skill-tool call or attachment appears.
 - Only allowlisted files enter a workspace: no `.git`, no hidden tests, no references, no results from other runs. Run roots are deleted after capture.
 - Agents can reach the internet through the shell, so the public skill text and this public specification can be fetched. Control transcripts are scanned for skill text; contamination is detected after the fact, not prevented.
+- Hidden tests and inventories are not on the agent host while agents run: every run refuses to start if `$AQD_OPERATOR/evaluator/` is not empty, and that directory is unreadable to agent users anyway.
+
+**What has actually been demonstrated** (v3.1): only the logic, offline. The skill-visibility, config-path, activation, contamination, model and run-record checks are unit-tested against synthetic API responses and synthetic exports; the two launcher refusals (optional SMOKE call without approval, pilot without approval) were executed in Git Bash. **Not demonstrated:** that OpenCode 2.3.2 on Linux honours the fresh HOME/XDG/`OPENCODE_DB` layout, that `env -i` plus `OPENCODE_DISABLE_CLAUDE_CODE=1` leaves no other discovery path, how the V2 CLI's background service behaves when `opencode debug paths` or `session export` runs as the agent user, that the API attachment injects the skill text, that the OS-user separation and file modes hold, and that agent users cannot leave anything (cron, `at`, user services) that runs after their processes are killed. The first real run is the first test of all of these.
 
 ## 5. Tasks and prompts
 
@@ -91,19 +101,31 @@ Every hidden check traces to a stated requirement (private key, "Hidden-check ma
 - **The inventory is defined without candidate code.** `score_run.py inventory` lists the exact hidden and baseline test IDs from the pristine project plus the hidden tests, and records the SHA-256 of every hidden file. Inventories live in the private pack, and `check_oracles.py` verifies that they still match.
 - **The evaluator is checked first.** The hidden files must match the inventory hashes, and the pristine project must list exactly the inventoried tests with no load errors. Only then does candidate code run.
 - **One process per test.** The runner reads a random nonce before any project code is imported and writes `{nonce, requested_id, tests_run, outcome, detail}`.
-- **INVALID evaluation (no score produced, exit 3)** in any of these cases: hidden files differ from the inventory; a test is missing, unexpected, duplicated or fails to load in the pristine canary run; the result file is missing (crash, `os._exit`), malformed, has extra fields or files, carries the wrong nonce or test ID, or reports other than one executed test; a check was skipped; the runner exited non-zero after writing its result; any evaluator exception.
+- **INVALID evaluation (no score produced, exit 3)** in any of these cases: the agent's captured result directory is missing (an infrastructure failure, never a valid zero; a deleted mutable file inside an existing result is a valid failure); hidden files differ from the inventory; a test is missing, unexpected, duplicated or fails to load in the pristine canary run; the result file is missing (crash, `os._exit`), malformed, has extra fields or files, carries the wrong nonce or test ID, or reports other than one executed test; a check was skipped; the runner exited non-zero after writing its result; any evaluator exception.
 - **VALID failure of a check:** the test fails, errors, times out, or cannot import the candidate's code (for example a syntax error). An evaluation where every check fails is a valid zero, which is different from an invalid evaluation.
-- **What is scored:** the pristine project plus only the task's mutable file and `tests/additive/` from the agent result. Agent-written tests are run and reported, but never scored and never able to invalidate an evaluation.
+- **What is scored:** the pristine project plus only the task's mutable file from the agent result. Agent-written tests (`tests/additive/`) run in a separate tree, so the scored code cannot import them; they are reported, but never scored and never able to invalidate an evaluation. Symbolic links in agent files are copied as links, never followed on the scoring host.
+- **Review flags.** The scored file is scanned (comments ignored) for constructs a solution has no reason to use: a pattern list plus a structural check that flags any import outside a fixed list of ordinary standard-library modules and the task's own package, dynamic execution and reflection builtins (`exec`, `eval`, `compile`, `getattr`, `open`, …) and access to private or dunder attributes other than on `self`/`cls`. None of the 3 references, 11 mutants or original fixture files triggers a flag. A flag sets `requires_review`; every valid evaluation records `review_subject_sha256`, the hash of the scored code.
 - **Candidate code never runs unsandboxed.** `--sandbox none` is refused unless `--trusted-code` is given; that flag is for reference solutions, mutants and synthetic tests only.
 
 ### 6.2 Outcomes and aggregation (`analyze.py`)
 
 - **Primary:** `hidden_pass_fraction`, and `fully_correct` (every hidden and every baseline check passes). Both come only from valid evaluations.
 - **Secondary, reported separately:** blind-scorer ratings (0–4) for request compliance, evidence and verification, scope and economy, and clarity, plus overclaim and critical-failure counts. Correctness is no longer a scorer dimension. Secondary scores are never added to the primary outcome or allowed to offset it, so excellent documentation cannot compensate for failing code. A test proves this.
-- **Slot accounting:** every scheduled slot must resolve to exactly one valid run with a valid evaluation. Missing runs, invalid runs, and missing or invalid evaluations are listed, the report is labelled INCOMPLETE, and the exit code is 3 unless `--allow-incomplete` is given. Two valid runs in one slot, duplicate IDs, or a task mismatch are errors.
+- **Slot accounting:** every scheduled slot gets exactly one status, and only **valid** slots enter any outcome:
+
+  | Status | Meaning |
+  |---|---|
+  | valid | valid run, valid evaluation, and no review required, or a reviewer recorded `tamper_review: "none"` with `tamper_review_subject` equal to the evaluation's `review_subject_sha256` and a `scorer_id` |
+  | invalid | the run is invalid, or the evaluation is INVALID (no score exists) |
+  | excluded | a reviewer recorded `suspected` or `confirmed` tampering, whether or not the scan flagged the code |
+  | unresolved | review required, and no verdict, a placeholder, or a verdict for different code |
+  | missing | no run status, or a valid run that was never evaluated |
+
+  Counts are reported overall and per model and condition, so exclusions that differ between conditions are visible. Any non-valid slot labels the report INCOMPLETE, exit 3 unless `--allow-incomplete`.
+- **Fail closed on the inputs:** analysis stops with an error (no report) on unreadable JSON; a `hidden-score.json` whose schema, task, counts, fraction, `fully_correct`, baseline or review fields are not internally consistent; valid evaluations of one task against different inventories; a valid run without a run record, or run records that differ in anything but the skill; two valid runs in one slot; duplicate IDs; result or score directories that belong to no scheduled run.
 - **Reruns:** at most one per slot, only for pre-registered infrastructure causes (gateway error before the first tool call, launcher or server crash, host stop, harness-caused activation failure), decided by a human and recorded with its reason. Wrong code, timeouts and false claims are outcomes, never rerun.
 - **Effects:** treatment minus control per (model, task), their mean per model, and an exact permutation p-value within model. The p-value is descriptive only.
-- **Blind scoring:** the packets hide the condition and run identity. The hidden results are shown as fact. If a run's code is flagged for tamper review, the scorer must record a verdict.
+- **Blind scoring:** the packets hide the condition and run identity. The hidden results are shown as fact. If a run's code is flagged for tamper review, the scorer must record a verdict; until then the run is unresolved and not counted. The scorer should be someone other than the operator who ran the agents; the code records `scorer_id` but cannot enforce that.
 
 ## 7. Security assessment (scoring)
 
@@ -116,7 +138,8 @@ The boundary is a fresh Docker container per test with `--network none --read-on
 | Read scoring logic, inventories, scoring key, other runs, host secrets | No | not mounted; host environment not passed; probed |
 | Persist anything to a later test or run | No | container removed after each test; fresh `/out` per test |
 | Read the hidden test source of the task being scored | **Yes** | In-process unit tests must import alongside the code they test. This cannot feed back into the agent's work: the agent session has ended, and there is no network or persistence |
-| Forge its own result in-process (for example by monkeypatching `unittest`, or reading the nonce from memory) | **Yes, detectable only** | Naive forging (no nonce, wrong ID, crash, extra files) is rejected by tests. Deliberate in-process tampering cannot be prevented. The code is scanned for constructs a solution has no reason to use (`unittest`, `sys.modules`, `os._exit`, `inspect`, `gc`, `subprocess`, `socket`, …); a match forces a human tamper review of the diff, which is small (one file) |
+| Import agent-written test modules into the scored run | No | additive tests run in a separate tree (v3.1; before, a helper in `tests/additive/` could patch `unittest` unflagged and a wrong solution scored 2/2) |
+| Forge its own result in-process (for example by monkeypatching `unittest`, or reading the nonce from memory) | **Yes, detectable only** | Naive forging (no nonce, wrong ID, crash, extra files) is rejected by tests. Deliberate in-process tampering cannot be prevented. The scored file is scanned (§6.1, pattern list plus structural check; v3.1 closed the `exec("import unitt" + "est")` bypass); a flag keeps the run out of the primary outcome until a reviewer clears exactly that code. A scan can still be evaded by code it does not anticipate, so the reviewer's reading of the diff (one file) is the real control |
 
 **Status: demonstrated in CI, with synthetic probes only.** On 2026-11-21 the probe candidate in `test_sandbox.py` passed on GitHub's Ubuntu runner (runs 44864449784 and 44864453346): it found no network, no DNS, no writable code, no root, no host environment variable and no evaluator files. The tests skip on the operator PC, which has no Docker. The boundary must also hold on the host that does the real scoring, so `score-all.sh` re-runs the probes there and refuses to score if they fail or skip. Directory permissions alone are not relied on.
 
@@ -126,15 +149,32 @@ The smoke test answers only one question: does the workflow produce valid, inter
 
 ## 9. Live execution
 
-No Claude or Grok run was executed for v3. This environment has no xAI provider, no isolated Claude access (the only Claude access is the operator's own agent session, which carries global skills and instructions and would contaminate a control run), no Docker and no Linux host. Running the smoke test needs the user to provide a host and keys. The procedure and copy-paste commands are in [PROMPT-SMOKE-TEST.md](PROMPT-SMOKE-TEST.md).
+No Claude or Grok run was executed for v3 or v3.1. No code was generated by either model for any task, so nothing is known yet about whether the skill changes working software. This environment has no xAI provider, no isolated Claude access (the only Claude access is the operator's own agent session, which carries global skills and instructions and would contaminate a control run), no Docker and no Linux host. Running the smoke test needs the user to provide a host and keys. The procedure and copy-paste commands are in [PROMPT-SMOKE-TEST.md](PROMPT-SMOKE-TEST.md).
 
 ## 10. Readiness
 
-**NOT READY.** No known defect remains in the scoring code, and the scoring sandbox has been demonstrated in CI. The blockers are that the agent-run path has never been executed:
+**Smoke test: CONDITIONALLY READY. Pilot: NOT READY.** The v3 statement "no known defect remains in the scoring code" was wrong: v3.1 found and fixed four ways an invalid or manipulated result could count (§11). The conditions below are inputs only the user can supply, plus CI on the v3.1 commit. The launcher has never run, so the first smoke run is also its first test; `run-all.sh` stops at the first invalid run, which bounds the cost of a launcher defect to one session.
 
-| # | Blocker | Resolved by |
+| # | Condition | Resolved by |
 |---|---|---|
-| B1 | ~~Docker isolation not demonstrated~~ Demonstrated in CI on 2026-11-21; it must also pass on the real scoring host | Enforced automatically by `score-all.sh` |
-| B2 | Launcher never executed against OpenCode, Claude or Grok | Host, OpenCode install, SMOKE-task runs per model (runtime gates in PROMPT-SMOKE-TEST.md) |
-| B3 | No model access | The user supplies spend-capped Anthropic and xAI keys and the exact model IDs and variants |
-| B4 | Smoke test not run or reviewed | The four-run 2×2 on NEW-02, reviewed before the pilot is approved |
+| C1 | v3.1 corrections not committed, pushed or run in CI (including the Linux-only symlink check and the sandbox job) | User approval to commit and push; CI green |
+| C2 | No Linux host | The user provides a disposable local VM (§3) |
+| C3 | No model access on a host | The user supplies `ANTHROPIC_API_KEY` (Claude reference verified: `anthropic/claude-opus-5-5#medium`) |
+| C4 | **Grok BLOCKED** | The user supplies `XAI_API_KEY`; the Grok ID and variant are then read from `opencode models` on the host. Until then only cells 1–2 (Claude) can run |
+| C5 | Smoke test not run or reviewed (blocks the pilot) | The four-run 2×2 on NEW-02, reviewed, then written approval in `sealed/pilot-approved.json` |
+| — | Docker isolation on the real scoring host | Enforced automatically by `score-all.sh` |
+
+## 11. v3.1 corrections (2026-11-21)
+
+| Problem found | Effect before | Correction |
+|---|---|---|
+| A run flagged for tamper review entered the primary outcome; the scorer's verdict was never read | flagged code counted, even with a `confirmed` verdict | review gating and the five slot statuses (§6.2); the verdict must name the scored code's hash |
+| Scored code could import a helper from `tests/additive/`, which was not scanned | a wrong solution (`return 0`) scored 2/2 with `requires_review` false (reproduced) | additive tests run in a separate tree |
+| Building a module name at run time evaded the scan | `exec("import unitt" + "est ...")` scored 2/2 unflagged (reproduced) | structural check (§6.1) |
+| A missing agent result directory scored as a valid zero | an infrastructure failure looked like a wrong answer (reproduced) | INVALID evaluation |
+| `analyze.py` trusted any `hidden-score.json` with a numeric fraction; malformed JSON crashed it | an edited or inconsistent score file counted | full consistency check; errors instead of crashes |
+| Symlinks in agent tests were followed on the scoring host, and `chmod` followed them | a link to a host file could copy it into the sandbox tree, or loosen its mode | links copied as links, never chmod'ed |
+| Smoke procedure required four extra SMOKE-task runs (8 sessions) | four model sessions spent on checks every scored run already makes | removed; the SMOKE task is an optional diagnostic behind explicit approval |
+| Run record lacked the config hash and model parts and was never checked | conditions could differ silently | record extended; `run_status.py` and `analyze.py` check it |
+| Packets read the task text from a path that does not exist | blind packets showed no task text | correct path; a missing task text is an error |
+| Nothing kept hidden tests off the host during agent runs except the procedure | — | every run refuses to start if the evaluator directory is not empty |

@@ -39,3 +39,19 @@ v2 was a benchmark *infrastructure* for one model that is now out of scope. An i
 | Repository `README.md`, `BRAIN.md`, `evaluations/README.md` | Stale Phase 3.2 statements corrected |
 
 Private evaluator pack (outside the repository): inventories added; `check_oracles.py` uses inventories and sandbox-free *trusted* scoring and requires valid evaluations; two new mutants (`with_conn_autocommit`, `csv_not_strict`); scoring key updated.
+
+## v3.1 corrections (2026-11-21, on top of `72fa194`; not yet committed)
+
+Problems, effects and corrections are listed in [SPECIFICATION.md §11](SPECIFICATION.md#11-v31-corrections-2026-11-21). Files:
+
+| File | Change |
+|---|---|
+| `harness/score_run.py` | Missing agent result is INVALID; agent tests run in a separate tree; structural review scan; `review_subject_sha256`; symlinks never followed or chmod'ed; schema version 3 |
+| `harness/analyze.py` | Review gating; five slot statuses with per-model/condition counts; hidden-score consistency check; run-record consistency across conditions; stray-directory and blind-id checks; JSON errors are analysis errors |
+| `harness/blind_packet.py` | Score template carries `tamper_review_subject`; scorer may flag tampering without a scan flag; task text path fixed |
+| `harness/run_status.py` | Run record must be complete and match the run; malformed capture files invalidate instead of crashing |
+| `harness/launch-run.sh` | No `runtime-gates.json`; optional SMOKE task needs `AQD_EXTRA_MODEL_CALL_APPROVED=yes`; pilot needs `pilot-approved.json`; refuses to start with evaluator material on the host; extended run record |
+| `harness/preflight.sh` | Final message no longer refers to separate gate runs |
+| `tests/test_scoring.py`, `tests/test_harness.py` | Tests for every correction (most fail on the v3 code) |
+| `PROMPT-SMOKE-TEST.md` | Four agent runs and nothing else; verified Claude reference; Grok BLOCKED |
+| `SPECIFICATION.md`, `README.md`, `VALIDATION-CHECKLIST.md`, `RISK-REGISTER.md`, this file | Updated for v3.1 |

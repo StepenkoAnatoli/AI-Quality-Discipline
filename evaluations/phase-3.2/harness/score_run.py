@@ -25,11 +25,16 @@ every hidden-test file. The evaluator keeps it with the hidden tests.
     is a VALID failure of that check. A valid zero is not an invalid evaluation.
 Exit codes: 0 valid evaluation, 3 invalid evaluation, 2 usage error.
 
-The scoring tree is the pristine project plus only the task's mutable file and
-the additive test directory from the agent result. Additive (agent-written)
-tests are reported but never scored.
+The scoring tree is the pristine project plus only the task's mutable file
+from the agent result. Additive (agent-written) tests run in a separate tree;
+they are reported but never scored, and scored code cannot import them.
+A missing agent result directory is INVALID (an infrastructure failure), never
+a valid zero. Every valid evaluation records review_subject_sha256, the hash of
+the scored agent code; when requires_review is true, analyze.py counts the run
+only after a reviewer's verdict names that hash (see analyze.py).
 """
 import argparse
+import ast
 import datetime
 import hashlib
 import io
@@ -50,6 +55,8 @@ import manifest as manifest_mod  # noqa: E402
 
 CHECK_ID = re.compile(r"\.test_(H\d{2})_[A-Za-z0-9_]+$")
 INVENTORY_KIND = "aqd-phase-3.2-test-inventory"
+SCORE_KIND = "aqd-phase-3.2-hidden-score"
+SCORE_SCHEMA_VERSION = 3
 RESULT_KEYS = {"nonce", "requested_id", "tests_run", "outcome", "detail"}
 VALID_OUTCOMES = {"pass", "fail", "error"}
 
@@ -57,11 +64,29 @@ VALID_OUTCOMES = {"pass", "fail", "error"}
 # used to tamper with an in-process test run. A match does not invalidate the
 # evaluation; it marks the run for mandatory human review of the diff.
 TAMPER_PATTERNS = (
-    r"\bunittest\b", r"\bsys\.modules\b", r"\bos\._exit\b", r"\bsys\.exit\b", r"\binspect\b", r"\bgc\b",
+    r"\bunittest\b", r"\bsys\b", r"\bos\._exit\b", r"\binspect\b", r"\bgc\b",
     r"_getframe", r"\bbuiltins\b", r"__builtins__", r"__import__", r"\bimportlib\b", r"hidden_tests", r"run_checks",
-    r"\bsubprocess\b", r"\bsocket\b", r"\bctypes\b", r"\batexit\b", r"\bsignal\b", r"\bsys\.argv\b", r"\bsys\.stdin\b",
+    r"\bsubprocess\b", r"\bsocket\b", r"\bctypes\b", r"\batexit\b", r"\bsignal\b",
     r"\bsetprofile\b", r"\bsettrace\b", r"\bos\.environ\b", r"\bshutil\b", r"\burllib\b",
+    r"\bexec\b", r"\beval\b", r"(?<![\w.])compile\s*\(",
 )
+
+# Structural check (AST). A regex list alone is evaded by building names at
+# run time (for example exec("import unitt" + "est")), so any import outside
+# this list, any dynamic-execution or reflection builtin, and any access to a
+# private or dunder attribute (other than on self/cls) also forces a review.
+# This is detection, not prevention: see SPECIFICATION.md section 7.
+ALLOWED_IMPORTS = frozenset({
+    "__future__", "abc", "collections", "contextlib", "copy", "csv", "dataclasses", "datetime", "decimal", "enum",
+    "functools", "hashlib", "hmac", "io", "itertools", "json", "logging", "math", "numbers", "operator", "random",
+    "re", "secrets", "sqlite3", "string", "textwrap", "threading", "time", "typing", "unicodedata", "uuid",
+})
+FLAGGED_NAMES = frozenset({
+    "exec", "eval", "compile", "__import__", "globals", "locals", "vars", "getattr", "setattr", "delattr",
+    "breakpoint", "open", "__builtins__", "__loader__", "__spec__",
+})
+ALLOWED_DUNDERS = frozenset({"__init__", "__name__", "__all__", "__enter__", "__exit__", "__post_init__", "__repr__",
+                             "__str__", "__eq__", "__hash__", "__lt__", "__iter__", "__len__", "__slots__"})
 
 
 class Invalid(Exception):
@@ -101,9 +126,43 @@ def _without_comments(text):
         return text
 
 
-def scan_for_tampering(text):
+def _structural_flags(text, own_packages):
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return set()  # cannot be imported, so it cannot run; the checks fail on their own
+    flags = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            modules = [] if node.level else [node.module or ""]
+        else:
+            modules = []
+        for module in modules:
+            top = module.split(".")[0]
+            if top not in ALLOWED_IMPORTS and top not in own_packages:
+                flags.add(f"import:{module}")
+        if isinstance(node, ast.Name) and node.id in FLAGGED_NAMES:
+            flags.add(f"name:{node.id}")
+        elif isinstance(node, ast.Attribute) and node.attr.startswith("_") and node.attr not in ALLOWED_DUNDERS:
+            if not (isinstance(node.value, ast.Name) and node.value.id in ("self", "cls")):
+                flags.add(f"attribute:{node.attr}")
+    return flags
+
+
+def scan_for_tampering(text, own_packages=()):
     code = _without_comments(text)
-    return sorted({p for p in TAMPER_PATTERNS if re.search(p, code)})
+    found = {p for p in TAMPER_PATTERNS if re.search(p, code)}
+    return sorted(found | _structural_flags(text, set(own_packages)))
+
+
+def review_subject_sha256(mutable_bytes):
+    """Hash of exactly the agent code that was scored; a tamper verdict must name it."""
+    digest = hashlib.sha256()
+    for rel in sorted(mutable_bytes):
+        digest.update(rel.encode("utf-8") + b"\0" + hashlib.sha256(mutable_bytes[rel]).digest())
+    return digest.hexdigest()
 
 
 # ---------------------------------------------------------------- runners
@@ -171,7 +230,10 @@ def make_world_readable(tree):
     for root, dirs, files in os.walk(tree):
         os.chmod(root, 0o755)
         for name in files:
-            os.chmod(os.path.join(root, name), stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+            path = os.path.join(root, name)
+            if os.path.islink(path):
+                continue  # chmod would follow the link and change a file on the scoring host
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
 
 # ---------------------------------------------------------------- trees
@@ -180,12 +242,18 @@ def copy_tree(src, dst):
     shutil.copytree(src, dst, symlinks=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
 
 
-def build_tree(phase_root, task, pristine, agent, hidden, dest):
-    """Pristine project + (optionally) the agent's mutable file and additive tests + hidden tests."""
+def build_tree(phase_root, task, pristine, agent, hidden, dest, include_additive=False):
+    """Pristine project + (optionally) the agent's mutable file + hidden tests.
+
+    The agent's additive tests are copied only when include_additive is set.
+    The tree that runs the hidden and baseline checks never contains them, so
+    the scored code cannot import agent-written test modules.
+    Returns (taken, mutable_bytes); a mutable file the agent deleted maps to b"".
+    """
     allowlist, _ = manifest_mod.load_allowlist(phase_root)
     entries = manifest_mod.task_entries(allowlist, task)
     copy_tree(pristine, dest)
-    taken, mutable_text = [], {}
+    taken, mutable_bytes = [], {}
     if agent is not None:
         for rel, _source, category in entries:
             if category != "mutable":
@@ -195,17 +263,20 @@ def build_tree(phase_root, task, pristine, agent, hidden, dest):
             if os.path.isfile(src) and not os.path.islink(src):
                 shutil.copyfile(src, dst)
                 taken.append(rel)
-                with open(src, encoding="utf-8", errors="replace") as handle:
-                    mutable_text[rel] = handle.read()
+                with open(src, "rb") as handle:
+                    mutable_bytes[rel] = handle.read()
             else:
                 os.remove(dst)
-                mutable_text[rel] = ""
+                mutable_bytes[rel] = b""
+    if agent is not None and include_additive:
         for additive in allowlist.get("additive_dirs", []):
             src = os.path.join(agent, *additive.split("/"))
             dst = os.path.join(dest, *additive.split("/"))
             if os.path.isdir(src) and not os.path.islink(src):
                 shutil.rmtree(dst)
-                shutil.copytree(src, dst, symlinks=False, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+                # symlinks=True: a link is copied as a link (resolved inside the
+                # sandbox), never followed to read a file on the scoring host.
+                shutil.copytree(src, dst, symlinks=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
                 taken.append(additive + "/")
     if os.path.exists(os.path.join(dest, "hidden_tests")):
         raise Invalid("the project already contains a hidden_tests directory")
@@ -213,7 +284,7 @@ def build_tree(phase_root, task, pristine, agent, hidden, dest):
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copyfile(os.path.join(HERE, "run_checks.py"), os.path.join(dest, "run_checks.py"))
     make_world_readable(dest)
-    return taken, mutable_text
+    return taken, mutable_bytes
 
 
 def list_tests(runner, tree, scratch, start_dir):
@@ -327,8 +398,8 @@ def run_inventory(runner, tree, scratch, ids):
 
 def score(phase_root, task, pristine, agent, hidden, inventory, runner):
     report = {
-        "schema_version": 2,
-        "kind": "aqd-phase-3.2-hidden-score",
+        "schema_version": SCORE_SCHEMA_VERSION,
+        "kind": SCORE_KIND,
         "task": task,
         "sandbox": runner.name,
         "image": getattr(runner, "image", None),
@@ -338,6 +409,9 @@ def score(phase_root, task, pristine, agent, hidden, inventory, runner):
     }
     scratch = tempfile.mkdtemp(prefix="aqd-score-")
     try:
+        if agent is None or not os.path.isdir(agent) or os.path.islink(agent):
+            raise Invalid(f"agent result directory missing or not a directory: {agent}; "
+                          "a missing capture is an infrastructure failure, not a zero score")
         validate_inventory(inventory, task)
         report["inventory_sha256"] = hashlib.sha256(json.dumps(inventory, sort_keys=True).encode()).hexdigest()
         if hidden_file_hashes(hidden) != inventory["hidden_files"]:
@@ -354,23 +428,29 @@ def score(phase_root, task, pristine, agent, hidden, inventory, runner):
                               f"unexpected={unexpected} load_errors={errors}")
 
         tree = os.path.join(scratch, "candidate")
-        taken, mutable_text = build_tree(phase_root, task, pristine, agent, hidden, tree)
+        taken, mutable_bytes = build_tree(phase_root, task, pristine, agent, hidden, tree)
         report["taken_from_agent"] = taken
-        flags = {rel: scan_for_tampering(text) for rel, text in mutable_text.items()}
+        own = {rel.split("/")[0] for rel in mutable_bytes}
+        flags = {rel: scan_for_tampering(data.decode("utf-8", "replace"), own) for rel, data in mutable_bytes.items()}
         report["review_flags"] = {rel: found for rel, found in flags.items() if found}
         report["requires_review"] = bool(report["review_flags"])
+        report["review_subject_sha256"] = review_subject_sha256(mutable_bytes)
 
         hidden_results = run_inventory(runner, tree, scratch, inventory["hidden_ids"])
         baseline_results = run_inventory(runner, tree, scratch, inventory["baseline_ids"])
-        # Agent-written tests: reported, never scored, never able to invalidate the evaluation.
+        # Agent-written tests: run in a separate tree, reported, never scored,
+        # never able to invalidate the evaluation.
         additive = {}
+        additive_tree = os.path.join(scratch, "candidate-additive")
         try:
-            additive_ids, additive_errors = list_tests(runner, tree, scratch, "tests/additive")
-        except Invalid as exc:
-            additive_ids, additive_errors = [], [str(exc)]
+            additive_taken, _ = build_tree(phase_root, task, pristine, agent, hidden, additive_tree, include_additive=True)
+            report["additive_tests_from_agent"] = [t for t in additive_taken if t.endswith("/")]
+            additive_ids, additive_errors = list_tests(runner, additive_tree, scratch, "tests/additive")
+        except (Invalid, OSError, ValueError) as exc:
+            additive_ids, additive_errors = [], [f"agent tests not run: {type(exc).__name__}: {exc}"]
         for test_id in additive_ids:
             try:
-                outcome, _detail, _log = run_one(runner, tree, scratch, test_id)
+                outcome, _detail, _log = run_one(runner, additive_tree, scratch, test_id)
             except Invalid as exc:
                 outcome = f"unverifiable: {exc}"
             additive[test_id] = outcome

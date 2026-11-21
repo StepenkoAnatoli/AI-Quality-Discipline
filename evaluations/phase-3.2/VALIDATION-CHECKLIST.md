@@ -22,6 +22,20 @@ Status words: **LOCAL** = tested on the operator PC (Windows, Python 3.14.7); **
 | V16 | Prompt text byte-identical across conditions; only treatment attaches the skill | `test_harness.py` DriveSessionTests (fake server) | LOCAL (fake server only) |
 | V17 | Activation confirmed / contamination detected from session exports; model substitution detected | `test_harness.py` ExportCheckTests (synthetic exports) | LOCAL (synthetic only) |
 | V18 | Shell scripts parse | `bash -n` (Git Bash) | LOCAL (syntax only) |
-| V19 | Launcher, preflight, isolation, activation with real OpenCode | runtime gates G1–G5 | **NOT TESTED** |
-| V20 | Claude and Grok understand and complete the actual prompts | smoke test | **BLOCKED** (no host, no keys, no xAI access) |
-| V21 | Oracles pass on Linux | `check_oracles.py` on the run host | **NOT TESTED** |
+| V19 | Launcher, preflight, isolation, activation with real OpenCode | gates G1–G5, evaluated inside each of the four smoke runs | **NOT TESTED** |
+| V20 | Claude and Grok understand and complete the actual prompts | smoke test | **BLOCKED** (no host, no keys on a host, no xAI access) |
+| V21 | Oracles pass on Linux | `check_oracles.py` on the run host | **NOT TESTED** (re-run on Windows with v3.1 scoring: ORACLES OK) |
+
+## v3.1 additions (local only: not yet committed, pushed or run in CI)
+
+| # | Requirement | Evidence | Status |
+|---|---|---|---|
+| V22 | A run flagged for review is not counted until a verdict names exactly the scored code; placeholder, unknown or stale verdicts leave it unresolved; `suspected`/`confirmed` exclude it, flagged or not | `test_harness.py` AnalyzeTests (review gating); failed on the v3 `analyze.py` | LOCAL |
+| V23 | Inconsistent, malformed or foreign score files stop the analysis (counts, fraction, `fully_correct`, baseline, review fields, schema, kind, status, inventory, stray directories, blind-id mismatch) | `test_harness.py` AnalyzeTests; failed on v3 | LOCAL |
+| V24 | The report separates valid, invalid, excluded, unresolved and missing slots, per model and condition; an invalid evaluation is never reported as missing | `test_harness.py` AnalyzeTests | LOCAL |
+| V25 | Scored code cannot import agent tests; run-time-built imports, dynamic execution, reflection and private-attribute access are flagged; none of the 14 known solutions is flagged | `test_scoring.py` ResidualRiskTests; reproduced bypasses scored 2/2 unflagged on v3; scan run over references and mutants | LOCAL |
+| V26 | A missing agent result is INVALID; a deleted mutable file is a valid zero | `test_scoring.py`; failed on v3 | LOCAL |
+| V27 | Agent symlinks are not followed on the scoring host | `test_scoring.py` | LOCAL on Windows, where `chmod` cannot show the defect; **needs CI on Linux** |
+| V28 | Run record complete and consistent (`run_status.py`); conditions differ only in the skill (`analyze.py`) | `test_harness.py` RunStatusTests, AnalyzeTests | LOCAL (synthetic records) |
+| V29 | No extra model session in the smoke procedure; the optional SMOKE task and the pilot refuse to start without approval | `test_harness.py` LauncherGateTests (launcher executed in Git Bash up to the refusal) | LOCAL |
+| V30 | Hidden private pack still passes with the v3.1 scorer | `check_oracles.py` | LOCAL (ORACLES OK) |

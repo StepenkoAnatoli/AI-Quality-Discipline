@@ -2,12 +2,12 @@
 
 A controlled comparison of the same coding agent with and without the `code-discipline` skill, run separately for Claude and for Grok, on three synthetic tasks. The primary outcome is objective: hidden tests run against the code each agent leaves behind.
 
-**Status: NOT READY for a pilot.** The scoring code has been corrected and tested locally and in CI, including the Docker scoring sandbox (synthetic probes). The run launcher and every live model run have **not** been executed. See [SPECIFICATION.md §1 and §10](SPECIFICATION.md#1-status).
+**Status: smoke test CONDITIONALLY READY (needs a Linux VM, an Anthropic key, CI on the v3.1 commit; Grok BLOCKED until an xAI key is supplied); pilot NOT READY.** The scoring code is tested locally and, up to v3, in CI, including the Docker scoring sandbox (synthetic probes). The run launcher and every live model run have **not** been executed; no model has produced code for any task. See [SPECIFICATION.md §1 and §10](SPECIFICATION.md#1-status).
 
 | File | Purpose |
 |---|---|
-| [SPECIFICATION.md](SPECIFICATION.md) | Specification v3 (normative): design, interface, contamination controls, scoring, security, readiness |
-| [PROMPT-SMOKE-TEST.md](PROMPT-SMOKE-TEST.md) | Procedure for the 2 models × 2 conditions smoke test (not yet run) |
+| [SPECIFICATION.md](SPECIFICATION.md) | Specification v3.1 (normative): design, interface, contamination controls, scoring, security, readiness |
+| [PROMPT-SMOKE-TEST.md](PROMPT-SMOKE-TEST.md) | Procedure for the 2 models × 2 conditions smoke test: exactly four agent runs (not yet run) |
 | [VALIDATION-CHECKLIST.md](VALIDATION-CHECKLIST.md) | Each requirement and how it was verified, or that it was not |
 | [RISK-REGISTER.md](RISK-REGISTER.md) | Remaining risks |
 | [CHANGE-REPORT.md](CHANGE-REPORT.md) | What changed from v2 and why |

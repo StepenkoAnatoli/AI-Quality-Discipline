@@ -2,7 +2,8 @@
 
 | # | Risk | Severity | Mitigation | Residual |
 |---|---|---|---|---|
-| R01 | Candidate code forges its own result in-process | High | Nonce, per-test process, strict result validation; tamper-pattern scan forces human diff review | Deliberate in-process tampering is detectable, not preventable |
+| R01 | Candidate code forges its own result in-process | High | Nonce, per-test process, strict result validation; agent tests kept out of the scored tree; pattern and structural scan; a flagged run counts only after a reviewer clears exactly that code (v3.1) | Deliberate in-process tampering is detectable, not preventable; code the scan does not anticipate counts unless the scorer notices it in the diff |
+| R01b | Tamper reviews pile up as "unresolved" (the scan flags any unusual import or `getattr`) | Medium | One-file diffs; review is part of blind scoring | Unresolved runs make the report INCOMPLETE; if flags differ by condition, exclusions bias the comparison, so report slot accounting with every effect |
 | R02 | Scoring sandbox weaker than assumed on the scoring host | High | `score-all.sh` refuses to score unless `test_sandbox.py` passes with no skips on that host | Container escape not addressed |
 | R03 | Control run inherits the skill (global config, the user's own skills, `CLAUDE.md`) | High | Never run agents on the operator PC; fresh `env -i` HOME per run; server skill registry checked before the prompt; export scanned after | Agent can fetch public text from the internet; detected after the fact only |
 | R04 | Treatment attachment does not add the skill text | High | Activation must be CONFIRMED per run; smoke gate G2 | Untested with real OpenCode |
@@ -11,7 +12,9 @@
 | R07 | Ceiling effect: both conditions pass everything | Medium | Solution hints removed; several independent defect classes per task | Possible with strong models; a null result must be reported as such |
 | R08 | Small sample read as proof | High | Analysis labelled exploratory; effects within model only | Depends on reporting discipline |
 | R09 | Oracle too strict for a valid alternative design | Medium | Every check traces to a stated requirement; references and 11 mutants validate both directions; adjudication notes, never test edits after unblinding | Judgement calls documented in the private key |
-| R10 | Launcher never executed: unknown OpenCode V2 behaviour (paths, idle detection, export) | Medium | Smoke gates G1–G5 before any scored run | Version-specific |
+| R10 | Launcher never executed: unknown OpenCode V2 behaviour (paths, idle detection, export, background service) | Medium | Gates G1–G5 inside every run; `run-all.sh` stops at the first invalid run | The first smoke run is the launcher's first test; a defect can cost one session |
+| R14 | Grok model ID unverified | High (blocks cells 3–4) | No ID is guessed; `preflight.sh` refuses absent models or variants | BLOCKED until the user supplies an xAI key |
+| R15 | Host leaks operator files (shared folders, WSL drive mounts) | High | Specification requires a VM without sharing and rules out WSL | Not checked by code |
 | R11 | Public specification readable by agents through the internet | Low | Hidden tests, references and the key stay private; the specification only restates the prompt | — |
 | R12 | Evaluator pack exists only on the operator PC | Medium | Back it up privately; never copy it to an agent host before agent runs end | — |
 | R13 | Pre-existing `tests/test_install.py` failures on the operator PC (line endings) | Low | Unrelated to Phase 3.2; untouched | Needs a separate fix |

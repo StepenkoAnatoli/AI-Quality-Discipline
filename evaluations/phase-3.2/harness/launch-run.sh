@@ -10,9 +10,15 @@
 # sealed schedule. The run record (run-record.json) names the exact model,
 # interface version, activation mode and the hashes of prompt, project and skill.
 #
-# --smoke runs the never-scored SMOKE task through the identical procedure
-# (same users, HOME layout, config, activation mode) to verify the runtime
-# gates in PROMPT-SMOKE-TEST.md. Smoke evidence goes to $AQD_OPERATOR/smoke.
+# Every scheduled run checks isolation and skill registration BEFORE the
+# prompt is sent (api_checks.py: no model request), and model, activation,
+# contamination and integrity AFTER it (export_checks.py, run_status.py). The
+# four-run smoke test therefore needs no separate gate runs.
+#
+# --smoke runs the never-scored SMOKE task through the identical procedure.
+# It is an OPTIONAL diagnostic, not part of the procedure, and it sends one
+# model request, so it refuses to start unless the user approved that extra
+# call (AQD_EXTRA_MODEL_CALL_APPROVED=yes). Evidence goes to $AQD_OPERATOR/smoke.
 #
 # The same script serves all three tasks and both groups; everything that
 # differs comes from the sealed schedule:
@@ -35,6 +41,8 @@ if [[ "${1:-}" == "--smoke" ]]; then
     MODEL_REF="${3:-}"
     [[ "$GROUP" =~ ^(control|treatment)$ && -n "$MODEL_REF" ]] \
         || { echo "usage: launch-run.sh --smoke control|treatment MODEL_REF" >&2; exit 2; }
+    [[ "${AQD_EXTRA_MODEL_CALL_APPROVED:-}" == "yes" ]] \
+        || { log "--smoke sends an extra, unscored model request; set AQD_EXTRA_MODEL_CALL_APPROVED=yes only with the user's approval"; exit 2; }
     TASK="SMOKE"
     RUN_ID="r-$("$PY" -c 'import secrets; print(secrets.token_hex(5))')"
     ENV_LABEL="$(json_get "$SCHEDULE" env_for_group | "$PY" -c "import json, sys; print(json.load(sys.stdin)['$GROUP'])")"
@@ -43,7 +51,13 @@ if [[ "${1:-}" == "--smoke" ]]; then
 else
     RUN_ID="${1:-}"
     [[ "$RUN_ID" =~ ^r-[0-9a-f]{10}$ ]] || { echo "usage: launch-run.sh RUN_ID (r-<10 hex>)" >&2; exit 2; }
-    [[ -f "$AQD_SEALED/runtime-gates.json" ]] || { log "runtime gates not confirmed (run --smoke first, see PROMPT-SMOKE-TEST.md)"; exit 2; }
+    # Anything larger than the 2x2 smoke design is the pilot, which needs the
+    # user's approval after the smoke test was reviewed (SPECIFICATION.md section 2).
+    RUN_COUNT="$("$PY" -c 'import json, sys; print(sum(1 for r in json.load(open(sys.argv[1]))["runs"] if "replaces_slot" not in r))' "$SCHEDULE")"
+    if (( RUN_COUNT > 4 )) && [[ ! -f "$AQD_SEALED/pilot-approved.json" ]]; then
+        log "this schedule has $RUN_COUNT runs: the pilot needs the user's written approval in $AQD_SEALED/pilot-approved.json"
+        exit 2
+    fi
     sched() { "$PY" "$AQD_HARNESS/schedule.py" get --schedule "$SCHEDULE" --run-id "$RUN_ID" --key "$1"; }
     TASK="$(sched task)"
     GROUP="$(sched group)"
@@ -106,6 +120,9 @@ log "run $RUN_ID: task $TASK, model $MODEL_REF, environment $ENV_LABEL, mode $AQ
 
 STEP="preconditions"
 for env in "${AQD_ENVS[@]}"; do assert_no_processes "${AQD_USER_FOR_ENV[$env]}"; done
+# Hidden tests and inventories may reach this host only after every agent run.
+[[ -z "$(find "$AQD_EVALUATOR" -mindepth 1 -print -quit 2>/dev/null)" ]] \
+    || die "$AQD_EVALUATOR is not empty: evaluator material must not be on the host while agents run"
 "$PY" "$AQD_HARNESS/manifest.py" verify --manifest "$MANIFEST" --tree "$PRISTINE/project" --phase pre \
     --out "$CAP/pristine-check.json" >/dev/null || die "pristine store for $TASK is not intact"
 sha256sum --quiet -c "$AQD_SEALED/pristine-extra.sha256" || die "pristine skill/config changed"
@@ -156,19 +173,24 @@ PASSWORD="$(random_secret)"
 make_agent_env "$RUN_ROOT" "$PASSWORD"
 add_provider_credential "$MODEL_PROVIDER"
 "$PY" - "$CAP/run-record.json" "$RUN_ID" "$TASK" "$GROUP" "$MODEL_REF" "$AQD_ACTIVATION_MODE" "$MESSAGE_FILE" "$MANIFEST" \
-    "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$("$AQD_OPENCODE_BIN" --version 2>/dev/null | tr -d '[:space:]')" <<'PY'
-import datetime, hashlib, json, sys
-out, run_id, task, group, model, mode, prompt, manifest, skill, version = sys.argv[1:11]
+    "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$("$AQD_OPENCODE_BIN" --version 2>/dev/null | tr -d '[:space:]')" \
+    "$AQD_PRISTINE/config/global-opencode.jsonc" "$AQD_SEALED/opencode-install.json" "$AQD_AGENT" "$AQD_RUN_TIMEOUT_SECONDS" <<'PY'
+import datetime, hashlib, json, os, sys
+out, run_id, task, group, model, mode, prompt, manifest, skill, version, config, install, agent, timeout = sys.argv[1:15]
 sha = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
-json.dump({"run_id": run_id, "task": task, "group": group, "model": model,
-           "interface": f"opencode {version}", "activation_mode": mode,
+provider, model_id, variant = model.split("/", 1)[0], model.split("/", 1)[1].split("#")[0], (model.split("#", 1)[1] if "#" in model else None)
+json.dump({"schema_version": 2, "run_id": run_id, "task": task, "group": group, "model": model,
+           "model_provider": provider, "model_id": model_id, "model_variant": variant,
+           "interface": f"opencode {version}", "activation_mode": mode, "agent": agent, "timeout_seconds": int(timeout),
            "skill": {"installed": group == "treatment", "sha256": sha(skill) if group == "treatment" else None},
            "prompt_sha256": sha(prompt), "workspace_sha256": json.load(open(manifest, encoding="utf-8"))["workspace_sha256"],
+           "global_config_sha256": sha(config),
+           "opencode_install_tree_sha256": json.load(open(install, encoding="utf-8"))["tree_sha256"] if os.path.exists(install) else None,
            "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()},
           open(out, "w", encoding="utf-8"), indent=2)
 PY
 if [[ "$TASK" == "SMOKE" && "${AQD_DEBUG_LOG:-0}" == "1" ]]; then
-    AGENT_ENV+=("OPENCODE_LOG_LEVEL=DEBUG")   # runtime gate R4 only; never in scored runs
+    AGENT_ENV+=("OPENCODE_LOG_LEVEL=DEBUG")   # optional diagnostic only; never in scored runs
 fi
 as_agent "$AGENT_USER" "$PROJECT" "$AQD_OPENCODE_BIN" debug paths >"$CAP/debug-paths.txt" 2>&1 \
     || die "'opencode debug paths' failed"

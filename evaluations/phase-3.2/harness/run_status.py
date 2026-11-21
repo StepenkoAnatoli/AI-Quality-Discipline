@@ -13,20 +13,36 @@ Pre-registered validity rules (SPECIFICATION.md section 6.2). A run is VALID onl
     assistant message; treatment skill text in context; no skill text in
     control);
   * the post-run manifest verification shows every immutable file intact;
-  * the HOME configuration listing equals the expected listing.
+  * the HOME configuration listing equals the expected listing;
+  * run-record.json names the model (with its parts), interface version,
+    prompt, workspace and global-config SHA-256, and the skill SHA-256 for
+    treatment or null for control, consistent with the run.
 Anything else is INVALID with reasons; the operator decides about a rerun
 under the rerun rules, never silently.
 """
 import argparse
 import json
 import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import aqd_common as c  # noqa: E402
+
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _load(path):
+    """Parsed JSON object, or None when absent, malformed or not an object (each then invalidates the run)."""
     if not os.path.exists(path):
         return None
-    with open(path, encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def expected_home_listing(group):
@@ -34,6 +50,35 @@ def expected_home_listing(group):
     if group == "treatment":
         listing += ["opencode/skills", "opencode/skills/code-discipline", "opencode/skills/code-discipline/SKILL.md"]
     return sorted(listing)
+
+
+def check_run_record(record, group, export_model_ref):
+    """Reasons the run record is incomplete or contradicts the run (empty when sound)."""
+    if record is None:
+        return ["no run-record.json"]
+    reasons = []
+    for key in ("prompt_sha256", "workspace_sha256", "global_config_sha256"):
+        if not isinstance(record.get(key), str) or not SHA256.match(record[key]):
+            reasons.append(f"run record lacks {key}")
+    if record.get("group") != group:
+        reasons.append("run record names a different group")
+    if not str(record.get("interface", "")).startswith("opencode ") or record.get("interface") == "opencode ":
+        reasons.append("run record lacks the interface version")
+    try:
+        provider, model_id, variant = c.parse_model(record.get("model"))
+        if (record.get("model_provider"), record.get("model_id"), record.get("model_variant")) != (provider, model_id, variant):
+            reasons.append("run record model fields disagree with its model reference")
+    except ValueError:
+        reasons.append("run record has no valid model reference")
+    if export_model_ref is not None and record.get("model") != export_model_ref:
+        reasons.append("run record model differs from the model the export was checked against")
+    skill = record.get("skill") or {}
+    if group == "treatment":
+        if skill.get("installed") is not True or not isinstance(skill.get("sha256"), str) or not SHA256.match(skill["sha256"]):
+            reasons.append("treatment run record lacks the skill SHA-256")
+    elif skill.get("installed") is not False or skill.get("sha256") is not None:
+        reasons.append("control run record says a skill was installed")
+    return reasons
 
 
 def build_status(capture, group, started, ended, api_exit, driver_exit, step):
@@ -66,6 +111,8 @@ def build_status(capture, group, started, ended, api_exit, driver_exit, step):
         reasons.append(f"unexpected HOME configuration entries: {sorted(set(listing) ^ set(expected_home_listing(group)))}")
     if step != "done":
         reasons.append(f"launcher stopped at step {step!r}")
+    reasons.extend(check_run_record(_load(os.path.join(capture, "run-record.json")), group,
+                                    (export_checks or {}).get("model_ref")))
 
     tools = (export_checks or {}).get("tool_counts") or {}
     return {

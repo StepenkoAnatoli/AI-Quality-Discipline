@@ -160,11 +160,26 @@ class ValidOutcomeTests(ScoringTest):
         self.assertFalse(report["baseline_all_pass"])
         self.assertFalse(report["primary"]["fully_correct"])
 
-    def test_only_mutable_file_and_additive_tests_are_taken(self):
+    def test_only_mutable_file_is_scored_and_additive_tests_run_separately(self):
         agent_extra = {"calc/__init__.py": "raise RuntimeError('immutable file edited')\n"}
         report = self.score(extra=agent_extra)
         self.assertEqual(report["primary"]["hidden_pass_fraction"], 1.0)
-        self.assertEqual(report["taken_from_agent"], ["calc/core.py", "tests/additive/"])
+        self.assertEqual(report["taken_from_agent"], ["calc/core.py"])
+        self.assertEqual(report["additive_tests_from_agent"], ["tests/additive/"])
+        self.assertRegex(report["review_subject_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_review_subject_hash_tracks_the_scored_code(self):
+        first = self.score()["review_subject_sha256"]
+        self.assertEqual(self.score()["review_subject_sha256"], first)
+        self.assertNotEqual(self.score(core=CORRECT + "\n")["review_subject_sha256"], first)
+
+    def test_deleted_mutable_file_is_a_valid_zero(self):
+        agent = self.agent()
+        os.remove(os.path.join(agent, "calc", "core.py"))
+        report = score_run.score(self.phase, "SYN", self.pristine, agent, self.hidden, self.inventory,
+                                 score_run.LocalRunner(self.timeout))
+        self.assertEqual(report["evaluation_status"], "valid", report["invalid_reasons"])
+        self.assertEqual(report["primary"], {"hidden_pass_fraction": 0.0, "fully_correct": False})
 
     def test_broken_agent_tests_never_invalidate_the_evaluation(self):
         crash = {"tests/additive/test_mine.py": "import os\nos._exit(3)\n"}
@@ -242,6 +257,11 @@ class FailClosedTests(ScoringTest):
         shutil.rmtree(os.path.join(self.hidden, "hidden_tests"))
         self.assertInvalid(self.score(), "hidden test package not found")
 
+    def test_missing_agent_result_is_invalid_not_a_valid_zero(self):
+        report = score_run.score(self.phase, "SYN", self.pristine, os.path.join(self.tmp, "no-capture"), self.hidden,
+                                 self.inventory, score_run.LocalRunner(self.timeout))
+        self.assertInvalid(report, "agent result directory missing")
+
 
 class ResidualRiskTests(ScoringTest):
     """In-process tampering cannot be prevented, only flagged for review."""
@@ -258,6 +278,58 @@ class ResidualRiskTests(ScoringTest):
     def test_comments_do_not_trigger_review_flags(self):
         report = self.score(core="# inspect the subprocess output\n" + CORRECT)
         self.assertFalse(report["requires_review"])
+
+    def test_scored_code_cannot_import_agent_tests(self):
+        # Before the fix the helper ran inside the scored tree, unflagged: a
+        # wrong solution scored 2/2 with requires_review False.
+        core = "from tests.additive import helper\ndef add(a, b):\n    return 0\n"
+        helper = "import unittest\nunittest.TestCase.assertEqual = lambda *a, **k: None\n"
+        report = self.score(core=core, extra={"tests/additive/helper.py": helper})
+        self.assertEqual(report["evaluation_status"], "valid", report["invalid_reasons"])
+        self.assertEqual(report["hidden_passed"], 0)
+        self.assertTrue(report["requires_review"])
+
+    def test_obfuscated_dynamic_code_is_flagged(self):
+        # Before the fix: exec of a concatenated module name was not flagged.
+        cheats = {
+            "exec": "exec('import unitt' + 'est as u; u.TestCase.assertEqual = lambda *a, **k: None')\n",
+            "getattr": "import json\ngetattr(json, 'loads')\n",
+            "dunder": "x = ().__class__.__base__.__subclasses__()\n",
+            "import": "import importlib as m\n",
+            "alias": "import sys as s\nx = s.modules\n",
+            "private": "import logging.config\nlogging.config._resolve('json')\n",
+        }
+        for name, prefix in cheats.items():
+            with self.subTest(cheat=name):
+                flags = score_run.scan_for_tampering(prefix + "def add(a, b):\n    return 0\n", {"calc"})
+                self.assertTrue(flags, name)
+        report = self.score(core=cheats["exec"] + "def add(a, b):\n    return 0\n")
+        self.assertTrue(report["requires_review"])
+        self.assertIn("name:exec", report["review_flags"]["calc/core.py"])
+
+    def test_ordinary_solution_code_is_not_flagged(self):
+        plain = ("import json\nimport sqlite3\nfrom datetime import datetime, timezone\nfrom . import other\n"
+                 "from calc import helpers\n\nclass Store:\n    def __init__(self):\n        self._rows = []\n"
+                 "    def add(self, x):\n        self._rows.append(x)\n        return json.dumps(x)\n")
+        self.assertEqual(score_run.scan_for_tampering(plain, {"calc"}), [])
+
+    def test_symlink_in_agent_tests_is_not_followed_on_the_host(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("no symlink support")
+        secret = os.path.join(self.tmp, "host-secret.txt")
+        with open(secret, "w", encoding="utf-8") as handle:
+            handle.write("HOST SECRET")
+        os.chmod(secret, 0o600)
+        mode_before = os.stat(secret).st_mode
+        agent = self.agent()
+        try:
+            os.symlink(secret, os.path.join(agent, "tests", "additive", "leak.txt"))
+        except OSError:
+            self.skipTest("creating symlinks is not permitted here")
+        dest = os.path.join(self.tmp, "tree")
+        score_run.build_tree(self.phase, "SYN", self.pristine, agent, self.hidden, dest, include_additive=True)
+        self.assertTrue(os.path.islink(os.path.join(dest, "tests", "additive", "leak.txt")))
+        self.assertEqual(os.stat(secret).st_mode, mode_before, "make_world_readable followed the link")
 
 
 class CliTests(ScoringTest):

@@ -15,12 +15,31 @@ Outcomes (pre-registered):
              the primary outcome.
   process    duration, tool calls, tokens (descriptive only).
 
-Slot accounting: every scheduled slot (a run plus its reruns) must resolve to
-exactly one valid run with a valid evaluation. Missing runs, invalid runs,
-missing or invalid evaluations and task mismatches are listed; two valid runs
-for one slot, or duplicate identifiers, are errors. If any slot is not
-complete the report is marked INCOMPLETE and the exit code is 3 unless
---allow-incomplete is given (the label stays).
+Slot accounting: every scheduled slot (a run plus its reruns) resolves to
+exactly one status, and only "valid" slots enter any outcome:
+  valid       valid run, valid evaluation, and either no review was required
+              or a reviewer recorded tamper_review "none" for exactly the
+              scored code (score.json tamper_review_subject equals the
+              evaluation's review_subject_sha256, and scorer_id is set)
+  invalid     the run is invalid (run-status.json) or the evaluation is
+              INVALID (score_run.py produced no score)
+  excluded    a reviewer recorded tamper_review "suspected" or "confirmed"
+              (whether or not the scan flagged the code)
+  unresolved  the evaluation requires review and no matching verdict exists
+  missing     no run-status.json, or a valid run without hidden-score.json
+If any slot is not valid the report is INCOMPLETE and the exit code is 3
+unless --allow-incomplete is given (the label stays). Counts per status are
+also given per model and condition, so exclusions that differ between
+conditions are visible.
+
+Errors (exit 3, no report): unreadable or malformed JSON; a hidden-score.json
+that is not internally consistent (fractions, counts, flags, schema, task);
+valid evaluations of one task with different inventories; a valid run without
+run-record.json, or run records that differ in anything but the skill (prompt
+and workspace per task; global config, activation mode, agent, time limit and
+OpenCode install everywhere; interface per model; one skill hash for every
+treatment run); two valid runs in a slot; duplicate identifiers; capture or score directories that belong to no
+scheduled run; a score.json whose blind_id differs from its directory.
 
 Effects are computed only within a model: treatment - control per (model,
 task), their unweighted mean per model, and an exact permutation p-value with
@@ -31,9 +50,16 @@ import argparse
 import itertools
 import json
 import os
+import re
 import statistics
 
 SECONDARY_DIMENSIONS = ("request_compliance", "evidence_verification", "scope_economy", "clarity_usability")
+SCORE_KIND = "aqd-phase-3.2-hidden-score"  # must match score_run.py
+SCORE_SCHEMA_VERSION = 3
+CHECK_OUTCOMES = ("pass", "fail", "error", "timeout")
+REVIEW_VERDICTS = ("none", "suspected", "confirmed")
+SLOT_STATUSES = ("valid", "invalid", "excluded", "unresolved", "missing")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class AnalysisError(Exception):
@@ -41,8 +67,85 @@ class AnalysisError(Exception):
 
 
 def _load(path):
-    with open(path, encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise AnalysisError(f"{path}: unreadable or malformed JSON ({exc})")
+    if not isinstance(data, dict):
+        raise AnalysisError(f"{path}: expected a JSON object")
+    return data
+
+
+def _count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def check_hidden_score(hidden, task, where):
+    """Raise AnalysisError unless hidden-score.json is well-formed and self-consistent."""
+    def bad(message):
+        raise AnalysisError(f"{where}: hidden-score.json {message}")
+
+    if hidden.get("kind") != SCORE_KIND or hidden.get("schema_version") != SCORE_SCHEMA_VERSION:
+        bad(f"is not a {SCORE_KIND} v{SCORE_SCHEMA_VERSION} file")
+    if hidden.get("task") != task:
+        bad(f"is for {hidden.get('task')}, the schedule says {task}")
+    status = hidden.get("evaluation_status")
+    reasons = hidden.get("invalid_reasons")
+    if status == "invalid":
+        if hidden.get("primary") is not None or not isinstance(reasons, list) or not reasons:
+            bad("is invalid but carries a primary outcome or no reason")
+        return
+    if status != "valid":
+        bad(f"has evaluation_status {status!r}")
+    if reasons != []:
+        bad("is valid but lists invalid_reasons")
+    checks, baseline = hidden.get("hidden_checks"), hidden.get("baseline_outcomes")
+    for name, outcomes in (("hidden_checks", checks), ("baseline_outcomes", baseline)):
+        if not isinstance(outcomes, dict) or not outcomes or any(v not in CHECK_OUTCOMES for v in outcomes.values()):
+            bad(f"has a missing, empty or unknown {name}")
+    passed = sum(1 for v in checks.values() if v == "pass")
+    base_passed = sum(1 for v in baseline.values() if v == "pass")
+    if (hidden.get("hidden_passed"), hidden.get("hidden_total")) != (passed, len(checks)) \
+            or not _count(hidden.get("hidden_passed")) or not _count(hidden.get("hidden_total")):
+        bad("hidden counts do not match hidden_checks")
+    if (hidden.get("baseline_passed"), hidden.get("baseline_total")) != (base_passed, len(baseline)) \
+            or hidden.get("baseline_all_pass") is not (base_passed == len(baseline)):
+        bad("baseline counts do not match baseline_outcomes")
+    primary = hidden.get("primary")
+    if not isinstance(primary, dict) or set(primary) != {"hidden_pass_fraction", "fully_correct"}:
+        bad("primary block is malformed")
+    fraction = primary["hidden_pass_fraction"]
+    if isinstance(fraction, bool) or not isinstance(fraction, (int, float)) or fraction != round(passed / len(checks), 6):
+        bad("hidden_pass_fraction does not equal hidden_passed / hidden_total")
+    if primary["fully_correct"] is not (passed == len(checks) and base_passed == len(baseline)):
+        bad("fully_correct does not match the check outcomes")
+    flags = hidden.get("review_flags")
+    if not isinstance(flags, dict) or not isinstance(hidden.get("requires_review"), bool) \
+            or hidden["requires_review"] is not bool(flags):
+        bad("review fields are missing or inconsistent")
+    for key in ("review_subject_sha256", "inventory_sha256"):
+        if not isinstance(hidden.get(key), str) or not SHA256.match(hidden[key]):
+            bad(f"lacks {key}")
+
+
+def review_resolution(hidden, score):
+    """Return (status, detail) for a valid evaluation: valid, excluded or unresolved."""
+    verdict = (score or {}).get("tamper_review")
+    if verdict in ("suspected", "confirmed"):
+        return "excluded", f"tamper review: {verdict}"
+    if not hidden["requires_review"]:
+        return "valid", None
+    flags = json.dumps(hidden["review_flags"], sort_keys=True)
+    if score is None:
+        return "unresolved", f"tamper review required ({flags}); no score.json"
+    if verdict != "none":
+        return "unresolved", f"tamper review required ({flags}); verdict {verdict!r} is not one of {REVIEW_VERDICTS}"
+    if score.get("tamper_review_subject") != hidden["review_subject_sha256"]:
+        return "unresolved", "tamper verdict does not name the scored code (tamper_review_subject differs)"
+    if not isinstance(score.get("scorer_id"), str) or not score["scorer_id"].strip():
+        return "unresolved", "tamper verdict has no scorer_id"
+    return "valid", "tamper review: none"
 
 
 def describe(values):
@@ -94,60 +197,135 @@ def secondary_from_score(score):
     return out
 
 
+def check_run_records(records):
+    """Within the counted runs, everything except the skill must be identical across conditions.
+
+    records: list of (run, run-record.json). Raises AnalysisError on any difference.
+    """
+    shared = {}
+    for run, record in records:
+        where = f"{run['run_id']}: run-record.json"
+        for key in ("run_id", "task", "group", "model"):
+            if record.get(key) != run.get(key):
+                raise AnalysisError(f"{where} {key} {record.get(key)!r} differs from the schedule's {run.get(key)!r}")
+        skill = record.get("skill") or {}
+        if (run["group"] == "treatment") != (skill.get("installed") is True and bool(skill.get("sha256"))):
+            raise AnalysisError(f"{where} skill fields do not match the {run['group']} condition")
+        keys = {
+            ("task", run["task"]): ("prompt_sha256", "workspace_sha256"),
+            ("all runs", ""): ("global_config_sha256", "activation_mode", "agent", "timeout_seconds",
+                               "opencode_install_tree_sha256"),
+            ("model", run["model"]): ("interface",),
+        }
+        if run["group"] == "treatment":
+            values = shared.setdefault(("treatment skill", ""), {})
+            if values.setdefault("sha256", skill["sha256"]) != skill["sha256"]:
+                raise AnalysisError(f"{where} treatment skill SHA-256 differs between runs")
+        for scope, names in keys.items():
+            values = shared.setdefault(scope, {})
+            for name in names:
+                if name not in record:
+                    raise AnalysisError(f"{where} lacks {name}")
+                if values.setdefault(name, record[name]) != record[name]:
+                    raise AnalysisError(f"{where} {name} differs from other runs ({scope[0]} {scope[1]})".rstrip())
+
+
+def _check_no_strays(runs, captures, scores_dir):
+    """Results that belong to no scheduled run mean the inputs are mixed up."""
+    run_ids = {r["run_id"] for r in runs}
+    blind_ids = {r["blind_id"] for r in runs}
+    if os.path.isdir(captures):
+        for name in sorted(os.listdir(captures)):
+            path = os.path.join(captures, name)
+            if name not in run_ids and os.path.isdir(path) and any(
+                    os.path.exists(os.path.join(path, f)) for f in ("run-status.json", "hidden-score.json")):
+                raise AnalysisError(f"capture {name} holds results but is not in the schedule")
+    if os.path.isdir(scores_dir):
+        for name in sorted(os.listdir(scores_dir)):
+            if name not in blind_ids and os.path.exists(os.path.join(scores_dir, name, "score.json")):
+                raise AnalysisError(f"score directory {name} is not a scheduled blind id")
+
+
 def resolve_slots(schedule, captures, scores_dir):
+    """Return (rows, problems): rows are the valid slots; problems every other slot, with its status."""
     runs = schedule.get("runs") or []
+    if not runs:
+        raise AnalysisError("the schedule has no runs")
     ids = [r["run_id"] for r in runs] + [r["blind_id"] for r in runs]
     if len(ids) != len(set(ids)):
         raise AnalysisError("duplicate run_id or blind_id in the schedule")
+    _check_no_strays(runs, captures, scores_dir)
     slots = {}
     for run in sorted(runs, key=lambda r: r["order"]):
         slots.setdefault(run.get("replaces_slot", run["run_id"]), []).append(run)
 
-    rows, problems = [], []
+    rows, problems, signatures, records = [], [], {}, []
     for slot, attempts in slots.items():
         first = attempts[0]
         label = {"slot": slot, "model": first.get("model"), "task": first["task"], "group": first["group"]}
+        for run in attempts[1:]:
+            if (run.get("model"), run["task"], run["group"]) != (first.get("model"), first["task"], first["group"]):
+                raise AnalysisError(f"rerun {run['run_id']} does not match its slot's model/task/group")
         valid_attempts, invalid_attempts = [], []
         for run in attempts:
             status_path = os.path.join(captures, run["run_id"], "run-status.json")
             if not os.path.exists(status_path):
                 continue
             status = _load(status_path)
-            (valid_attempts if status.get("valid") is True else invalid_attempts).append((run, status))
+            if not isinstance(status.get("valid"), bool):
+                raise AnalysisError(f"{run['run_id']}: run-status.json has no boolean 'valid'")
+            (valid_attempts if status["valid"] else invalid_attempts).append((run, status))
+        label["attempts"] = [{"run_id": r["run_id"], "valid": s["valid"], "invalid_reasons": s.get("invalid_reasons") or []}
+                             for r, s in invalid_attempts + valid_attempts]
         if len(valid_attempts) > 1:
             raise AnalysisError(f"slot {slot} has {len(valid_attempts)} valid runs; exactly one may count")
         if not valid_attempts:
-            reason = "run invalid: " + "; ".join(invalid_attempts[-1][1].get("invalid_reasons") or ["unknown"]) \
-                if invalid_attempts else "run missing"
-            problems.append(dict(label, problem=reason))
+            if invalid_attempts:
+                problems.append(dict(label, status="invalid", problem="run invalid: " + "; ".join(
+                    invalid_attempts[-1][1].get("invalid_reasons") or ["unknown"])))
+            else:
+                problems.append(dict(label, status="missing", problem="run missing"))
             continue
         run, status = valid_attempts[0]
-        if (run.get("model"), run["task"], run["group"]) != (first.get("model"), first["task"], first["group"]):
-            raise AnalysisError(f"rerun {run['run_id']} does not match its slot's model/task/group")
+        where = run["run_id"]
+        record_path = os.path.join(captures, run["run_id"], "run-record.json")
+        if not os.path.exists(record_path):
+            raise AnalysisError(f"{where}: valid run without run-record.json")
+        records.append((run, _load(record_path)))
         hidden_path = os.path.join(captures, run["run_id"], "hidden-score.json")
         if not os.path.exists(hidden_path):
-            problems.append(dict(label, run_id=run["run_id"], problem="evaluation missing"))
+            problems.append(dict(label, run_id=run["run_id"], status="missing", problem="evaluation missing"))
             continue
         hidden = _load(hidden_path)
-        if hidden.get("task") != run["task"]:
-            raise AnalysisError(f"{run['run_id']}: hidden score is for {hidden.get('task')}, schedule says {run['task']}")
-        primary = hidden.get("primary") or {}
-        if hidden.get("evaluation_status") != "valid" or not isinstance(primary.get("hidden_pass_fraction"), (int, float)):
-            problems.append(dict(label, run_id=run["run_id"],
-                                 problem="evaluation invalid: " + "; ".join(hidden.get("invalid_reasons") or ["no valid primary outcome"])))
+        check_hidden_score(hidden, run["task"], where)
+        if hidden["evaluation_status"] != "valid":
+            problems.append(dict(label, run_id=run["run_id"], status="invalid",
+                                 problem="evaluation invalid: " + "; ".join(hidden["invalid_reasons"])))
             continue
-        row = dict(label, run_id=run["run_id"], blind_id=run["blind_id"],
-                   hidden_pass_fraction=primary["hidden_pass_fraction"], fully_correct=1.0 if primary.get("fully_correct") else 0.0,
-                   requires_review=bool(hidden.get("requires_review")),
-                   duration_seconds=status.get("duration_seconds"), tool_calls=status.get("tool_calls"))
+        signature = (hidden["inventory_sha256"], tuple(sorted(hidden["hidden_checks"])), tuple(sorted(hidden["baseline_outcomes"])))
+        if signatures.setdefault(run["task"], signature) != signature:
+            raise AnalysisError(f"{where}: evaluated against a different inventory than other {run['task']} runs")
         score_path = os.path.join(scores_dir, run["blind_id"], "score.json")
-        if os.path.exists(score_path):
-            score = _load(score_path)
+        score = _load(score_path) if os.path.exists(score_path) else None
+        if score is not None and score.get("blind_id") != run["blind_id"]:
+            raise AnalysisError(f"{score_path}: blind_id {score.get('blind_id')!r} does not match its directory")
+        resolution, detail = review_resolution(hidden, score)
+        if resolution != "valid":
+            problems.append(dict(label, run_id=run["run_id"], status=resolution, problem=detail,
+                                 review_flags=hidden["review_flags"]))
+            continue
+        primary = hidden["primary"]
+        row = dict(label, run_id=run["run_id"], blind_id=run["blind_id"], status="valid",
+                   hidden_pass_fraction=primary["hidden_pass_fraction"], fully_correct=1.0 if primary["fully_correct"] else 0.0,
+                   requires_review=hidden["requires_review"], review=detail,
+                   duration_seconds=status.get("duration_seconds"), tool_calls=status.get("tool_calls"))
+        if score is not None:
             row.update(secondary_from_score(score))
             row["group_guess"] = score.get("group_guess")
         else:
             row["secondary_missing"] = True
         rows.append(row)
+    check_run_records(records)
     return rows, problems
 
 
@@ -169,12 +347,27 @@ def summarise(rows, outcome):
     return result
 
 
+def slot_accounting(rows, problems):
+    counts = {s: 0 for s in SLOT_STATUSES}
+    by_cell = {}
+    for item in list(rows) + list(problems):
+        counts[item["status"]] += 1
+        cell = by_cell.setdefault(item["model"], {}).setdefault(item["group"], {s: 0 for s in SLOT_STATUSES})
+        cell[item["status"]] += 1
+    return {"total": len(rows) + len(problems), "by_status": counts, "by_model_and_condition": by_cell}
+
+
 def analyse(rows, problems):
     report = {
         "status": "COMPLETE" if not problems else "INCOMPLETE",
         "slots_complete": len(rows),
+        "slot_accounting": slot_accounting(rows, problems),
         "slots_incomplete": problems,
-        "runs_flagged_for_review": [r["run_id"] for r in rows if r.get("requires_review")],
+        "runs_flagged_for_review": {
+            "counted_after_review": [r["run_id"] for r in rows if r.get("requires_review")],
+            "excluded": [p["run_id"] for p in problems if p["status"] == "excluded"],
+            "unresolved": [p["run_id"] for p in problems if p["status"] == "unresolved"],
+        },
         "primary": {o: summarise(rows, o) for o in ("hidden_pass_fraction", "fully_correct")},
         "secondary": {o: summarise(rows, o) for o in SECONDARY_DIMENSIONS + ("overclaims", "critical_failures")},
         "process": {o: summarise(rows, o) for o in ("duration_seconds", "tool_calls")},
@@ -184,6 +377,8 @@ def analyse(rows, problems):
     report["interpretation"] = (
         "Exploratory. The skill effect is the within-model treatment - control difference in the primary outcome "
         "(verified software behaviour). Secondary scores describe process and reporting and never offset it. "
+        "Invalid, excluded, unresolved and missing slots are not in the primary outcome; report slot_accounting "
+        "next to every effect, because exclusions that differ between conditions bias it. "
         "Small samples cannot distinguish modest effects from noise; do not report significance or general improvement.")
     return report
 
@@ -205,9 +400,11 @@ def main(argv=None):
     with open(args.out, "w", encoding="utf-8") as h:
         json.dump(report, h, indent=2)
         h.write("\n")
-    print(f"{report['status']}: {report['slots_complete']} complete slot(s), {len(problems)} incomplete")
+    counts = report["slot_accounting"]["by_status"]
+    print(f"{report['status']}: " + ", ".join(f"{counts[s]} {s}" for s in SLOT_STATUSES)
+          + " (only 'valid' slots enter the primary outcome)")
     for item in problems:
-        print(f"  {item['slot']} {item['model']} {item['task']} {item['group']}: {item['problem']}")
+        print(f"  {item['status'].upper():10} {item['slot']} {item['model']} {item['task']} {item['group']}: {item['problem']}")
     return 0 if not problems or args.allow_incomplete else 3
 
 

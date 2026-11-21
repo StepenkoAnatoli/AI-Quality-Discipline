@@ -178,7 +178,7 @@ PY
 
 if [[ "$PROBE_CODE" == "0" ]]; then
     cp "$REPORT" "$AQD_SEALED/preflight.ok"
-    log "PREFLIGHT PASSED. Runtime gates (SPECIFICATION.md) still require the authorised smoke runs."
+    log "PREFLIGHT PASSED. No model request was sent; key validity and skill activation are shown by the first authorised runs."
     exit 0
 elif [[ "$PROBE_CODE" =~ ^1[012]$ ]]; then
     log "PREFLIGHT BLOCKED: a user decision is required. Do not add credentials or change the model without approval."

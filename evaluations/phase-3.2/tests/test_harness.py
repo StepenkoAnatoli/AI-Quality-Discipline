@@ -478,6 +478,32 @@ class BlindPacketTests(unittest.TestCase):
         self.assertIn("cd <project> && python -m unittest", combined)
         self.assertGreater(redact.count, 0)
 
+    def test_packet_has_task_text_and_a_review_template_bound_to_the_scored_code(self):
+        tmp = tempfile.mkdtemp(prefix="aqd-packet-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        capture, pristine, out = (os.path.join(tmp, d) for d in ("cap", "pristine", "out"))
+        os.makedirs(os.path.join(capture, "driver"))
+        os.makedirs(os.path.join(pristine, "NEW-02", "project"))
+        with open(os.path.join(pristine, "NEW-02", "project", "TASK.md"), "w", encoding="utf-8") as h:
+            h.write("# Task: reserve stock\n")
+        hidden = AnalyzeTests.hidden_score("NEW-02", flags={"inventory/service.py": ["name:exec"]}, subject="12" * 32)
+        for rel, data in (("driver/export.json", {"messages": []}), ("verify-post.json", {"findings": {}}),
+                          ("hidden-score.json", hidden)):
+            with open(os.path.join(capture, rel), "w", encoding="utf-8") as h:
+                json.dump(data, h)
+        run = {"blind_id": "b-01234567", "task": "NEW-02"}
+        blind_packet.build_packet(run, capture, pristine, out, blind_packet.Redactor())
+        with open(os.path.join(out, "packet.md"), encoding="utf-8") as h:
+            packet = h.read()
+        self.assertIn("# Task: reserve stock", packet)
+        self.assertIn("TAMPER REVIEW REQUIRED", packet)
+        with open(os.path.join(out, "score.json"), encoding="utf-8") as h:
+            template = json.load(h)
+        self.assertEqual(template["tamper_review_subject"], "12" * 32)
+        self.assertNotIn(template["tamper_review"], analyze.REVIEW_VERDICTS)  # a placeholder never counts
+        with self.assertRaises(FileNotFoundError):
+            blind_packet.build_packet(run, capture, os.path.join(tmp, "nowhere"), out, blind_packet.Redactor())
+
 
 class RunStatusTests(TempDirTest):
     def write(self, rel, data):
@@ -489,17 +515,64 @@ class RunStatusTests(TempDirTest):
             else:
                 json.dump(data, h)
 
-    def test_valid_and_invalid(self):
+    MODEL = "anthropic/claude-opus-5-5#medium"
+
+    def record(self, group="treatment", **changes):
+        record = {"schema_version": 2, "run_id": "r-0123456789", "task": "NEW-02", "group": group, "model": self.MODEL,
+                  "model_provider": "anthropic", "model_id": "claude-opus-5-5", "model_variant": "medium",
+                  "interface": "opencode 2.3.2", "activation_mode": "api-attachment",
+                  "skill": {"installed": group == "treatment", "sha256": "aa" * 32 if group == "treatment" else None},
+                  "prompt_sha256": "bb" * 32, "workspace_sha256": "cc" * 32, "global_config_sha256": "dd" * 32}
+        record.update(changes)
+        return record
+
+    def complete_run(self, group="treatment"):
         self.write("driver/driver-result.json", {"status": "idle", "session_id": "ses_1"})
-        self.write("export-checks.json", {"valid": True, "activation": "CONFIRMED", "tool_counts": {"shell": 3}, "tokens": {}})
+        self.write("export-checks.json", {"valid": True, "activation": "CONFIRMED", "tool_counts": {"shell": 3}, "tokens": {},
+                                          "model_ref": self.MODEL})
         self.write("verify-post.json", {"integrity_ok": True, "findings": {"unexpected": []}})
-        self.write("home-config-listing.txt", "\n".join(run_status.expected_home_listing("treatment")) + "\n")
+        self.write("home-config-listing.txt", "\n".join(run_status.expected_home_listing(group)) + "\n")
+        self.write("run-record.json", self.record(group))
+
+    def test_valid_and_invalid(self):
+        self.complete_run()
         good = run_status.build_status(self.tmp, "treatment", 0, 100, 0, 0, "done")
         self.assertTrue(good["valid"], good["invalid_reasons"])
         self.assertEqual(good["tool_calls"], 3)
         bad = run_status.build_status(self.tmp, "control", 0, 100, 0, 0, "done")
         self.assertFalse(bad["valid"])
         self.assertIn("unexpected HOME configuration entries", bad["invalid_reasons"][0])
+
+    def test_run_record_must_be_complete_and_consistent(self):
+        cases = {
+            "missing prompt hash": self.record(prompt_sha256=None),
+            "missing workspace hash": self.record(workspace_sha256="x"),
+            "missing config hash": {k: v for k, v in self.record().items() if k != "global_config_sha256"},
+            "no interface version": self.record(interface="opencode "),
+            "variant disagrees": self.record(model_variant="high"),
+            "other model than export": self.record(model="anthropic/claude-sonnet-5-5", model_id="claude-sonnet-5-5"),
+            "treatment without skill hash": self.record(skill={"installed": True, "sha256": None}),
+            "wrong group": self.record(group="control"),
+        }
+        for name, record in cases.items():
+            with self.subTest(case=name):
+                self.complete_run()
+                self.write("run-record.json", record)
+                status = run_status.build_status(self.tmp, "treatment", 0, 100, 0, 0, "done")
+                self.assertFalse(status["valid"], name)
+        self.complete_run("control")
+        self.write("run-record.json", self.record("control", skill={"installed": True, "sha256": "aa" * 32}))
+        self.assertIn("control run record says a skill was installed",
+                      run_status.build_status(self.tmp, "control", 0, 100, 0, 0, "done")["invalid_reasons"])
+        os.remove(os.path.join(self.tmp, "run-record.json"))
+        self.assertIn("no run-record.json", run_status.build_status(self.tmp, "control", 0, 100, 0, 0, "done")["invalid_reasons"])
+
+    def test_malformed_capture_file_invalidates_instead_of_crashing(self):
+        self.complete_run()
+        self.write("export-checks.json", "{broken")
+        status = run_status.build_status(self.tmp, "treatment", 0, 100, 0, 0, "done")
+        self.assertFalse(status["valid"])
+        self.assertIn("no export analysed", status["invalid_reasons"])
 
 
 class AnalyzeTests(TempDirTest):
@@ -509,20 +582,51 @@ class AnalyzeTests(TempDirTest):
         self.caps = os.path.join(self.tmp, "caps")
         self.scores = os.path.join(self.tmp, "scores")
 
-    def put(self, run, valid=True, evaluation="valid", fraction=1.0, score=None):
+    @staticmethod
+    def hidden_score(task, evaluation="valid", fraction=1.0, flags=None, subject="ab" * 32):
+        """A self-consistent hidden-score.json as score_run.py writes it (4 hidden checks, 2 baseline)."""
+        report = {"schema_version": score_run.SCORE_SCHEMA_VERSION, "kind": score_run.SCORE_KIND, "task": task,
+                  "evaluation_status": evaluation, "invalid_reasons": [], "primary": None}
+        if evaluation != "valid":
+            report["invalid_reasons"] = ["no result file"]
+            return report
+        passed = int(round(fraction * 4))
+        checks = {f"H{i:02d}": "pass" if i <= passed else "fail" for i in range(1, 5)}
+        report.update({"inventory_sha256": "cd" * 32, "review_subject_sha256": subject,
+                       "review_flags": flags or {}, "requires_review": bool(flags),
+                       "hidden_checks": checks, "hidden_passed": passed, "hidden_total": 4,
+                       "baseline_outcomes": {"b1": "pass", "b2": "pass"}, "baseline_passed": 2, "baseline_total": 2,
+                       "baseline_all_pass": True,
+                       "primary": {"hidden_pass_fraction": round(passed / 4, 6), "fully_correct": passed == 4}})
+        return report
+
+    @staticmethod
+    def run_record(run, **changes):
+        treatment = run["group"] == "treatment"
+        record = {"run_id": run["run_id"], "task": run["task"], "group": run["group"], "model": run["model"],
+                  "interface": "opencode 2.3.2", "activation_mode": "api-attachment", "agent": "build",
+                  "timeout_seconds": 2700, "opencode_install_tree_sha256": "11" * 32,
+                  "skill": {"installed": treatment, "sha256": "22" * 32 if treatment else None},
+                  "prompt_sha256": "33" * 32, "workspace_sha256": "44" * 32, "global_config_sha256": "55" * 32}
+        record.update(changes)
+        return record
+
+    def put(self, run, valid=True, evaluation="valid", fraction=1.0, score=None, flags=None, hidden=None, record=None):
         cap = os.path.join(self.caps, run["run_id"])
         os.makedirs(cap, exist_ok=True)
         with open(os.path.join(cap, "run-status.json"), "w", encoding="utf-8") as h:
             json.dump({"valid": valid, "invalid_reasons": [] if valid else ["gateway error"]}, h)
-        if evaluation is not None:
-            hidden = {"task": run["task"], "evaluation_status": evaluation, "invalid_reasons": [] if evaluation == "valid" else ["no result file"],
-                      "primary": {"hidden_pass_fraction": fraction, "fully_correct": fraction == 1.0} if evaluation == "valid" else None}
+        with open(os.path.join(cap, "run-record.json"), "w", encoding="utf-8") as h:
+            json.dump(record or self.run_record(run), h)
+        if hidden is None and evaluation is not None:
+            hidden = self.hidden_score(run["task"], evaluation, fraction, flags)
+        if hidden is not None:
             with open(os.path.join(cap, "hidden-score.json"), "w", encoding="utf-8") as h:
                 json.dump(hidden, h)
         if score is not None:
             os.makedirs(os.path.join(self.scores, run["blind_id"]), exist_ok=True)
             with open(os.path.join(self.scores, run["blind_id"], "score.json"), "w", encoding="utf-8") as h:
-                json.dump(score, h)
+                json.dump(dict({"blind_id": run["blind_id"]}, **score), h)
 
     def resolve(self):
         return analyze.resolve_slots(self.sched, self.caps, self.scores)
@@ -586,11 +690,205 @@ class AnalyzeTests(TempDirTest):
 
     def test_task_mismatch_is_an_error(self):
         run = self.sched["runs"][0]
-        self.put(run)
-        with open(os.path.join(self.caps, run["run_id"], "hidden-score.json"), "w", encoding="utf-8") as h:
-            json.dump({"task": "NEW-01", "evaluation_status": "valid", "primary": {"hidden_pass_fraction": 1.0}}, h)
-        with self.assertRaises(analyze.AnalysisError):
+        self.put(run, hidden=self.hidden_score("NEW-01"))
+        with self.assertRaisesRegex(analyze.AnalysisError, "schedule says NEW-02"):
             self.resolve()
+
+    # --- review gating (the run must not count until a verdict names the scored code)
+
+    def flagged_pilot(self, score_for_flagged):
+        runs = self.sched["runs"]
+        for run in runs[1:]:
+            self.put(run, fraction=0.5)
+        self.put(runs[0], fraction=1.0, flags={"x/y.py": [r"\bunittest\b"]}, score=score_for_flagged)
+        rows, problems = self.resolve()
+        return runs[0], rows, problems
+
+    def test_flagged_run_without_verdict_is_unresolved_and_not_counted(self):
+        # Before the fix, a flagged run entered the primary outcome unconditionally.
+        flagged, rows, problems = self.flagged_pilot(None)
+        self.assertNotIn(flagged["run_id"], [r["run_id"] for r in rows])
+        self.assertEqual([(p["run_id"], p["status"]) for p in problems], [(flagged["run_id"], "unresolved")])
+        report = analyze.analyse(rows, problems)
+        self.assertEqual(report["status"], "INCOMPLETE")
+        self.assertEqual(report["runs_flagged_for_review"]["unresolved"], [flagged["run_id"]])
+        cell = report["primary"]["hidden_pass_fraction"][flagged["model"]]["by_task"]["NEW-02"]
+        self.assertNotIn(flagged["group"], cell)  # the 1.0 is not there
+
+    def test_placeholder_or_unknown_verdict_is_unresolved(self):
+        for verdict in ("REQUIRED: none|suspected|confirmed", "None", "ok", None, ""):
+            with self.subTest(verdict=verdict):
+                shutil.rmtree(self.caps, ignore_errors=True)
+                shutil.rmtree(self.scores, ignore_errors=True)
+                _, _, problems = self.flagged_pilot({"tamper_review": verdict, "tamper_review_subject": "ab" * 32,
+                                                     "scorer_id": "s1"})
+                self.assertEqual([p["status"] for p in problems], ["unresolved"])
+
+    def test_verdict_for_different_code_or_without_scorer_is_unresolved(self):
+        _, _, problems = self.flagged_pilot({"tamper_review": "none", "tamper_review_subject": "ef" * 32, "scorer_id": "s1"})
+        self.assertEqual([p["status"] for p in problems], ["unresolved"])
+        self.assertIn("does not name the scored code", problems[0]["problem"])
+        shutil.rmtree(self.caps)
+        shutil.rmtree(self.scores)
+        _, _, problems = self.flagged_pilot({"tamper_review": "none", "tamper_review_subject": "ab" * 32, "scorer_id": " "})
+        self.assertEqual([p["status"] for p in problems], ["unresolved"])
+
+    def test_clean_verdict_on_the_scored_code_counts_the_run(self):
+        flagged, rows, problems = self.flagged_pilot({"tamper_review": "none", "tamper_review_subject": "ab" * 32,
+                                                      "scorer_id": "s1"})
+        self.assertEqual(problems, [])
+        self.assertIn(flagged["run_id"], analyze.analyse(rows, problems)["runs_flagged_for_review"]["counted_after_review"])
+
+    def test_suspected_or_confirmed_tampering_is_excluded_even_without_flags(self):
+        for verdict in ("suspected", "confirmed"):
+            with self.subTest(verdict=verdict):
+                shutil.rmtree(self.caps, ignore_errors=True)
+                shutil.rmtree(self.scores, ignore_errors=True)
+                runs = self.sched["runs"]
+                for run in runs:
+                    self.put(run, score={"tamper_review": verdict if run is runs[2] else "not required"})
+                rows, problems = self.resolve()
+                self.assertEqual([(p["run_id"], p["status"]) for p in problems], [(runs[2]["run_id"], "excluded")])
+                report = analyze.analyse(rows, problems)
+                self.assertEqual(report["slot_accounting"]["by_status"]["excluded"], 1)
+                self.assertEqual(report["slot_accounting"]["by_model_and_condition"][runs[2]["model"]][runs[2]["group"]]["excluded"], 1)
+
+    # --- integrity of the score files (fail closed, never "missing data")
+
+    def test_inconsistent_hidden_scores_are_errors(self):
+        run = self.sched["runs"][0]
+        base = self.hidden_score(run["task"], fraction=0.25)
+        tampered = {
+            "fraction raised": dict(base, primary={"hidden_pass_fraction": 1.0, "fully_correct": False}),
+            "fully_correct forged": dict(base, primary={"hidden_pass_fraction": 0.25, "fully_correct": True}),
+            "count forged": dict(base, hidden_passed=4),
+            "string fraction": dict(base, primary={"hidden_pass_fraction": "0.25", "fully_correct": False}),
+            "review flag dropped": dict(base, review_flags={"a.py": ["x"]}, requires_review=False),
+            "review field missing": {k: v for k, v in base.items() if k != "requires_review"},
+            "subject missing": {k: v for k, v in base.items() if k != "review_subject_sha256"},
+            "old schema": dict(base, schema_version=2),
+            "wrong kind": dict(base, kind="something-else"),
+            "unknown status": dict(base, evaluation_status="partial"),
+            "valid with reasons": dict(base, invalid_reasons=["x"]),
+            "invalid with primary": dict(self.hidden_score(run["task"], "invalid"), primary={"hidden_pass_fraction": 1.0}),
+            "invalid without reason": dict(self.hidden_score(run["task"], "invalid"), invalid_reasons=[]),
+            "no checks": dict(base, hidden_checks={}, hidden_passed=0, hidden_total=0),
+            "baseline forged": dict(base, baseline_outcomes={"b1": "fail", "b2": "pass"}),
+            "unknown outcome": dict(base, hidden_checks=dict(base["hidden_checks"], H01="skip")),
+        }
+        for name, hidden in tampered.items():
+            with self.subTest(case=name):
+                shutil.rmtree(self.caps, ignore_errors=True)
+                self.put(run, hidden=hidden)
+                with self.assertRaises(analyze.AnalysisError):
+                    self.resolve()
+
+    def test_malformed_files_are_errors_not_missing_data(self):
+        run = self.sched["runs"][0]
+        for name, content in (("hidden-score.json", "{not json"), ("hidden-score.json", "[]"),
+                              ("run-status.json", "{\"valid\": \"yes\"}"), ("run-status.json", "")):
+            with self.subTest(file=name, content=content):
+                shutil.rmtree(self.caps, ignore_errors=True)
+                self.put(run)
+                with open(os.path.join(self.caps, run["run_id"], name), "w", encoding="utf-8") as h:
+                    h.write(content)
+                with self.assertRaises(analyze.AnalysisError):
+                    self.resolve()
+
+    def test_invalid_evaluation_is_reported_as_invalid_not_missing(self):
+        runs = self.sched["runs"]
+        self.put(runs[0], evaluation="invalid")
+        self.put(runs[1], evaluation=None)
+        _, problems = self.resolve()
+        status = {p["slot"]: p["status"] for p in problems}
+        self.assertEqual(status[runs[0]["run_id"]], "invalid")
+        self.assertEqual(status[runs[1]["run_id"]], "missing")
+
+    def test_different_inventories_for_one_task_are_an_error(self):
+        runs = self.sched["runs"]
+        self.put(runs[0])
+        self.put(runs[1], hidden=dict(self.hidden_score(runs[1]["task"]), inventory_sha256="99" * 32))
+        with self.assertRaisesRegex(analyze.AnalysisError, "different inventory"):
+            self.resolve()
+
+    def test_stray_results_and_mismatched_score_files_are_errors(self):
+        run = self.sched["runs"][0]
+        self.put(run)
+        stray = os.path.join(self.caps, "r-ffffffffff")
+        os.makedirs(stray)
+        with open(os.path.join(stray, "hidden-score.json"), "w", encoding="utf-8") as h:
+            json.dump(self.hidden_score(run["task"]), h)
+        with self.assertRaisesRegex(analyze.AnalysisError, "not in the schedule"):
+            self.resolve()
+        shutil.rmtree(stray)
+        os.makedirs(os.path.join(self.scores, run["blind_id"]))
+        with open(os.path.join(self.scores, run["blind_id"], "score.json"), "w", encoding="utf-8") as h:
+            json.dump({"blind_id": "b-00000000"}, h)
+        with self.assertRaisesRegex(analyze.AnalysisError, "does not match its directory"):
+            self.resolve()
+        os.makedirs(os.path.join(self.scores, "b-12345678"))
+        with open(os.path.join(self.scores, "b-12345678", "score.json"), "w", encoding="utf-8") as h:
+            json.dump({"blind_id": "b-12345678"}, h)
+        with self.assertRaisesRegex(analyze.AnalysisError, "not a scheduled blind id"):
+            self.resolve()
+
+    def test_conditions_must_differ_only_in_the_skill(self):
+        runs = self.sched["runs"]
+        control = next(r for r in runs if r["group"] == "control")
+        treatment = next(r for r in runs if r["group"] == "treatment" and r["model"] == control["model"])
+        cases = {
+            "prompt": (control, {"prompt_sha256": "99" * 32}),
+            "workspace": (control, {"workspace_sha256": "99" * 32}),
+            "config": (treatment, {"global_config_sha256": "99" * 32}),
+            "time limit": (control, {"timeout_seconds": 3600}),
+            "interface": (treatment, {"interface": "opencode 2.3.3"}),
+            "model": (control, {"model": "anthropic/claude-opus-5-5#high"}),
+            "skill in control": (control, {"skill": {"installed": True, "sha256": "22" * 32}}),
+            "other skill text": (treatment, {"skill": {"installed": True, "sha256": "98" * 32}}),  # vs the other model's treatment
+            "missing field": (control, {"global_config_sha256": None}),
+        }
+        for name, (target, change) in cases.items():
+            with self.subTest(case=name):
+                shutil.rmtree(self.caps, ignore_errors=True)
+                for run in runs:
+                    record = None
+                    if run is target:
+                        record = {k: v for k, v in self.run_record(run, **change).items() if v is not None}
+                    self.put(run, record=record)
+                with self.assertRaises(analyze.AnalysisError):
+                    self.resolve()
+        shutil.rmtree(self.caps)
+        for run in runs:
+            self.put(run)
+        os.remove(os.path.join(self.caps, runs[0]["run_id"], "run-record.json"))
+        with self.assertRaisesRegex(analyze.AnalysisError, "without run-record.json"):
+            self.resolve()
+
+    def test_report_separates_every_status(self):
+        runs = self.sched["runs"]
+        self.put(runs[0])
+        self.put(runs[1], valid=False)
+        self.put(runs[2], flags={"a.py": ["x"]})
+        self.put(runs[3], evaluation="invalid")
+        report = analyze.analyse(*self.resolve())
+        self.assertEqual(report["slot_accounting"]["by_status"],
+                         {"valid": 1, "invalid": 2, "excluded": 0, "unresolved": 1, "missing": 0})
+        self.assertEqual(report["slot_accounting"]["total"], 4)
+
+    def test_hidden_score_written_by_score_run_passes_the_integrity_check(self):
+        # Guards against analyze.py and score_run.py drifting apart.
+        sys.path.insert(0, os.path.dirname(__file__))
+        import test_scoring  # noqa: E402
+        case = test_scoring.ScoringTest("run")
+        case.setUp()
+        try:
+            for core in (test_scoring.CORRECT, test_scoring.PRISTINE["calc/core.py"], "import unittest\n" + test_scoring.CORRECT):
+                report = json.loads(json.dumps(case.score(core=core)))
+                analyze.check_hidden_score(report, "SYN", "real score_run output")
+            invalid = json.loads(json.dumps(case.score(inventory={"error": "x"})))
+            analyze.check_hidden_score(invalid, "SYN", "real score_run output")
+        finally:
+            case.tearDown()
 
     def test_permutation_exact_for_perfect_separation(self):
         by_task = {t: {"control": [0.0, 0.0, 0.0], "treatment": [1.0, 1.0, 1.0]} for t in ("A", "B", "C")}
@@ -601,11 +899,51 @@ class AnalyzeTests(TempDirTest):
         self.assertEqual(overall, 1.0)
 
 
+def find_bash():
+    if os.path.exists(r"C:\Program Files\Git\bin\bash.exe"):
+        return r"C:\Program Files\Git\bin\bash.exe"
+    return shutil.which("bash")
+
+
+class LauncherGateTests(TempDirTest):
+    """The smoke test is the four scheduled runs; nothing may add model calls silently."""
+
+    def launch(self, *args, env_extra=None):
+        bash = find_bash()
+        if bash is None:
+            self.skipTest("bash not available")
+        env = {k: v for k, v in os.environ.items() if k != "AQD_EXTRA_MODEL_CALL_APPROVED"}
+        env.update(AQD_OPERATOR=self.tmp.replace("\\", "/"), **(env_extra or {}))
+        return subprocess.run([bash, os.path.join(HARNESS, "launch-run.sh"), *args], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+
+    def test_optional_smoke_task_refuses_without_approval_of_the_extra_call(self):
+        proc = self.launch("--smoke", "control", "anthropic/claude-opus-5-5#medium")
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertIn("AQD_EXTRA_MODEL_CALL_APPROVED", proc.stdout)
+
+    def test_pilot_schedule_refuses_without_written_approval(self):
+        sealed = os.path.join(self.tmp, "sealed")
+        os.makedirs(sealed)
+        pilot = schedule.make_schedule("ab" * 16, [CLAUDE, GROK])
+        with open(os.path.join(sealed, "schedule.json"), "w", encoding="utf-8") as h:
+            json.dump(pilot, h)
+        proc = self.launch(pilot["runs"][0]["run_id"])
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertIn("pilot-approved.json", proc.stdout)
+
+    def test_scheduled_runs_do_not_require_separate_gate_runs(self):
+        with open(os.path.join(HARNESS, "launch-run.sh"), encoding="utf-8") as h:
+            self.assertNotIn("runtime-gates.json", h.read())
+        with open(os.path.join(PHASE, "PROMPT-SMOKE-TEST.md"), encoding="utf-8") as h:
+            procedure = h.read().split("## Optional", 1)[0]
+        self.assertNotIn("launch-run.sh --smoke", procedure)
+        self.assertIn("run-all.sh", procedure)
+
+
 class ShellSyntaxTests(unittest.TestCase):
     def test_bash_scripts_parse(self):
-        bash = shutil.which("bash")
-        if bash is None and os.path.exists(r"C:\Program Files\Git\bin\bash.exe"):
-            bash = r"C:\Program Files\Git\bin\bash.exe"
+        bash = find_bash()
         if bash is None:
             self.skipTest("bash not available")
         for name in sorted(os.listdir(HARNESS)):
