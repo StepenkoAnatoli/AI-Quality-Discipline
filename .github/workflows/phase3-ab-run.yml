@@ -4,7 +4,7 @@ name: Phase 3.2 NEW-02 A/B run (2 scored model runs)
 #
 # Exactly two scored agent runs of task NEW-02 with anthropic/claude-opus-5-5#medium
 # through the unchanged Phase 3.2 harness of phase-3/benchmark-foundation at
-# aaf3e25: control (no skill) and treatment (code-discipline, attached through
+# 8827a27: control (no skill) and treatment (code-discipline, attached through
 # the API: api-attachment mode), in the sealed random order schedule.py draws.
 # No rerun, no SMOKE call, no other model request. Hidden scoring runs only if
 # BOTH runs are valid. An invalid run (provider or API error, isolation,
@@ -44,7 +44,7 @@ concurrency:
 
 env:
   AQD_TEST_BRANCH: phase-3/benchmark-foundation
-  AQD_TEST_SHA: aaf3e25bb186a3de85973f5132c45137fd188c32
+  AQD_TEST_SHA: 8827a27d5281c86c1c429b13e179f02d94665b71
   AQD_MODEL: "anthropic/claude-opus-5-5#medium"
   AQD_ACTIVATION_MODE: api-attachment
   AQD_OPERATOR: /home/runner/aqd-operator
@@ -170,7 +170,7 @@ jobs:
           MODEL = "anthropic/claude-opus-5-5#medium"
           PIN = {
               "prompt_sha256": "9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f",
-              "workspace_sha256": "cf0fea1a45be98860c0121b5e3b9d6b066bcf6530128140eef85e7067b2d2ed5",
+              "workspace_sha256": "ae420d1d9c621e4ad259dd1e2837245cd7f720a55bce08b74e1e21163eb96d58",
               "global_config_sha256": "978ef1603067c33e0ffc0bcda430e58e92d6587005579d663f18e460b4d86160",
           }
           SKILL_SHA256 = "d050d00fa8564b08cac71ca221368568420c731c830ef19667a760d5f7ebc842"
