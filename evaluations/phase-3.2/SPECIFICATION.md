@@ -6,20 +6,22 @@
 
 **Models in scope.** Claude and Grok only. Nemotron and the free OpenCode gateway are out of scope (decision 2026-11-21). The v2 specification that used them is in git history (`3ec3b32`).
 
-**Date:** 2026-11-21. **Branch:** `phase-3/benchmark-foundation`, base commit `3ec3b32`; v3.1 corrections committed as `f0c857c` (§11); v3.2 corrections on top of `f0c857c`, not yet committed (§12).
+**Date:** 2026-11-21. **Branch:** `phase-3/benchmark-foundation`, base commit `3ec3b32`; v3.1 corrections committed as `f0c857c` (§11); v3.2 corrections on top of `f0c857c`, committed as `3d522f5` (§12; this line said "not yet committed" until the status correction in §1).
 
 ## 1. Status
 
-Local runs were on Windows with Python 3.14.7. CI = GitHub Actions on `ubuntu-latest` (Python 3.11): commit `8680c4c` (v3), runs 44864449784 and 44864453346; commit `f0c857c` (v3.1), runs 44889032716 (push) and 44889036252 (PR #1). All green, and the sandbox job ran 3 tests with no skips. The v3.2 corrections (§12) are tested locally only; they are not committed, so CI has not run them. Nothing has been independently audited or run against a model.
+Local runs were on Windows with Python 3.14.7. CI = GitHub Actions on `ubuntu-latest` (Python 3.11): commit `8680c4c` (v3), runs 44864449784 and 44864453346; commit `f0c857c` (v3.1), runs 44889032716 (push) and 44889036252 (PR #1). All green, and the sandbox job ran 3 tests with no skips. When v3.2 was written, this paragraph said: "The v3.2 corrections (§12) are tested locally only; they are not committed, so CI has not run them." Nothing has been independently audited or run against a model.
+
+**Status correction (2026-11-21, after CI).** The v3.2 corrections are committed as `3d522f5` and pushed to `phase-3/benchmark-foundation` (PR #1, open, not merged). CI passed on that commit: runs 44892816556 (push) and 44892821220 (PR #1), CPython 3.11.18. Both jobs succeeded: `validate_skills.py`, `test_validators.py` (9 OK), `check_fixtures.py` (3 PASS), `check-sources`, `test_harness.py` (63 OK, including the v3.2 tests), `test_scoring.py` (37 OK), and `test_sandbox.py` (3 OK, 0 skipped). This is CI evidence for offline unit tests, structural checks and synthetic sandbox probes only. CI does not install or start OpenCode, does not run the launcher and sends no model request. The OpenCode 2.3.2 compatibility evidence is still the local Windows probe (§4). The Linux launcher has not been verified end to end, the four-run smoke test has not been executed, the pilot is not ready, and Grok is blocked (§3, §10).
 
 | Component | Implemented | Tested locally | Tested in CI | Independently audited | Status |
 |---|---|---|---|---|---|
 | Tasks NEW-01/02/03, revised prompts | yes | baseline tests pass; prompt/workspace hashes pinned by a test | yes (hash test, `8680c4c`) | no | ready for a smoke test |
 | Hidden oracles (41 checks), references, 11 mutants (private pack) | yes | `check_oracles.py`: ORACLES OK, all mutants killed (re-run with v3.1 scoring) | never (private) | no | ready; re-run on the scoring host |
-| Fail-closed scoring (`score_run.py`, `run_checks.py`, inventories) | yes, v3.1 | 37 tests in `test_scoring.py` | yes, 37 OK (`f0c857c`) | no | ready |
+| Fail-closed scoring (`score_run.py`, `run_checks.py`, inventories) | yes, v3.1 | 37 tests in `test_scoring.py` | yes, 37 OK (`f0c857c`, `3d522f5`) | no | ready |
 | Docker scoring sandbox | yes | no (no Docker on the operator PC; tests skip) | yes, 3/3 isolation probes OK, no skips (`python:3.12-slim` pinned by digest) | no | **demonstrated on the CI runner**; `score-all.sh` re-runs the probes on the scoring host and refuses to score if they fail or skip |
-| Fail-closed analysis (`analyze.py`): review gating, score-file integrity, run-record consistency | yes, v3.1 | unit tests (`test_harness.py`) | yes (`f0c857c`) | no | ready |
-| OpenCode run launcher (`launch-run.sh`, `preflight.sh`, driver, checks) | yes, v3.2 | Python parts unit-tested with a fake server; HTTP calls checked against the real OpenCode 2.3.2 server on Windows without a prompt (§4); the refusal paths and the version parser executed in Git Bash; otherwise shell syntax only | unit tests only (v3.1) | no | **never executed on Linux**; v3.2 fixed two defects that would have stopped `install-opencode.sh`/`preflight.sh` before any run (§12) |
+| Fail-closed analysis (`analyze.py`): review gating, score-file integrity, run-record consistency | yes, v3.1 | unit tests (`test_harness.py`) | yes (`f0c857c`, `3d522f5`) | no | ready |
+| OpenCode run launcher (`launch-run.sh`, `preflight.sh`, driver, checks) | yes, v3.2 | Python parts unit-tested with a fake server; HTTP calls checked against the real OpenCode 2.3.2 server on Windows without a prompt (§4); the refusal paths and the version parser executed in Git Bash; otherwise shell syntax only | unit tests only (v3.1 `f0c857c`; v3.2 `3d522f5`, including the version parser run in Linux bash against a stub `opencode`); CI never runs OpenCode or the launcher | no | **never executed on Linux**; v3.2 fixed two defects that would have stopped `install-opencode.sh`/`preflight.sh` before any run (§12) |
 | Live Claude / Grok runs | — | — | — | — | **not executed** (§9); Grok needs an `XAI_API_KEY` (§3) |
 
 ## 2. Design
@@ -145,7 +147,7 @@ The boundary is a fresh Docker container per test with `--network none --read-on
 | Import agent-written test modules into the scored run | No | additive tests run in a separate tree (v3.1; before, a helper in `tests/additive/` could patch `unittest` unflagged and a wrong solution scored 2/2) |
 | Forge its own result in-process (for example by monkeypatching `unittest`, or reading the nonce from memory) | **Yes, detectable only** | Naive forging (no nonce, wrong ID, crash, extra files) is rejected by tests. Deliberate in-process tampering cannot be prevented. The scored file is scanned (§6.1, pattern list plus structural check; v3.1 closed the `exec("import unitt" + "est")` bypass); a flag keeps the run out of the primary outcome until a reviewer clears exactly that code. A scan can still be evaded by code it does not anticipate, so the reviewer's reading of the diff (one file) is the real control |
 
-**Status: demonstrated in CI, with synthetic probes only.** On 2026-11-21 the probe candidate in `test_sandbox.py` passed on GitHub's Ubuntu runner (runs 44864449784 and 44864453346): it found no network, no DNS, no writable code, no root, no host environment variable and no evaluator files. The tests skip on the operator PC, which has no Docker. The boundary must also hold on the host that does the real scoring, so `score-all.sh` re-runs the probes there and refuses to score if they fail or skip. Directory permissions alone are not relied on.
+**Status: demonstrated in CI, with synthetic probes only.** On 2026-11-21 the probe candidate in `test_sandbox.py` passed on GitHub's Ubuntu runner (runs 44864449784 and 44864453346; again on `3d522f5`, runs 44892816556 and 44892821220): it found no network, no DNS, no writable code, no root, no host environment variable and no evaluator files. The tests skip on the operator PC, which has no Docker. The boundary must also hold on the host that does the real scoring, so `score-all.sh` re-runs the probes there and refuses to score if they fail or skip. Directory permissions alone are not relied on.
 
 ## 8. Interpretation
 
@@ -157,11 +159,11 @@ No Claude or Grok run was executed for v3, v3.1 or v3.2 (the v3.2 server probe s
 
 ## 10. Readiness
 
-**Smoke test: CONDITIONALLY READY. Pilot: NOT READY.** The v3 statement "no known defect remains in the scoring code" was wrong: v3.1 found and fixed four ways an invalid or manipulated result could count (§11). The v3.1 statement that only user inputs remained was also wrong: the v3.2 server probe found two defects that would have stopped `install-opencode.sh` and `preflight.sh` on every host (§12). The conditions below are what remains. The launcher has never run on Linux, so the first smoke run is also its first test; `run-all.sh` stops at the first invalid run, which bounds the cost of a launcher defect to one session.
+**Smoke test: CONDITIONALLY READY. Pilot: NOT READY.** The v3 statement "no known defect remains in the scoring code" was wrong: v3.1 found and fixed four ways an invalid or manipulated result could count (§11). The v3.1 statement that only user inputs remained was also wrong: the v3.2 server probe found two defects that would have stopped `install-opencode.sh` and `preflight.sh` on every host (§12). The conditions below are what remains (C1 resolved on 2026-11-21; C2–C5 open). The launcher has never run on Linux, so the first smoke run is also its first test; `run-all.sh` stops at the first invalid run, which bounds the cost of a launcher defect to one session.
 
 | # | Condition | Resolved by |
 |---|---|---|
-| C1 | v3.2 corrections (§12) not committed, pushed or run in CI. v3.1 was committed as `f0c857c` and CI is green | User approval to commit and push; CI green; the VM checkout must be at that commit (`preflight.sh` refuses a dirty checkout) |
+| C1 | **Resolved 2026-11-21.** Originally: "v3.2 corrections (§12) not committed, pushed or run in CI". They are committed as `3d522f5` and CI is green on it (§1). Green CI does not resolve C2–C5 | Done. As before, the VM checkout must be clean and contain the committed v3.2 code (`preflight.sh` refuses a dirty checkout) |
 | C2 | No Linux host | The user provides a disposable local VM (§3) |
 | C3 | No model access on a host | The user supplies `ANTHROPIC_API_KEY` (Claude reference verified: `anthropic/claude-opus-5-5#medium`) |
 | C4 | **Grok BLOCKED** | The user supplies `XAI_API_KEY` and confirms the Grok model (candidate `xai/grok-4.7#medium`, §3). `preflight.sh` verifies it on the host. Until then only cells 1–2 (Claude) can run |

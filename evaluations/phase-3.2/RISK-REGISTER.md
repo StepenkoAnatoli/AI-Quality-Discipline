@@ -1,5 +1,7 @@
 # Phase 3.2 — Risk register (v3.2)
 
+*Status note, 2026-11-21:* v3.2 is committed as `3d522f5` and CI passed on it (runs 44892816556 and 44892821220). Passing CI does not reduce R04, R10 or R14: CI never starts OpenCode, runs the launcher or calls a model.
+
 | # | Risk | Severity | Mitigation | Residual |
 |---|---|---|---|---|
 | R01 | Candidate code forges its own result in-process | High | Nonce, per-test process, strict result validation; agent tests kept out of the scored tree; pattern and structural scan; a flagged run counts only after a reviewer clears exactly that code (v3.1) | Deliberate in-process tampering is detectable, not preventable; code the scan does not anticipate counts unless the scorer notices it in the diff |
@@ -12,8 +14,8 @@
 | R07 | Ceiling effect: both conditions pass everything | Medium | Solution hints removed; several independent defect classes per task | Possible with strong models; a null result must be reported as such |
 | R08 | Small sample read as proof | High | Analysis labelled exploratory; effects within model only | Depends on reporting discipline |
 | R09 | Oracle too strict for a valid alternative design | Medium | Every check traces to a stated requirement; references and 11 mutants validate both directions; adjudication notes, never test edits after unblinding | Judgement calls documented in the private key |
-| R10 | Launcher never executed on Linux: unknown OpenCode V2 behaviour (idle detection after a prompt, skill attachment, Linux build, OS-user separation) | Medium | HTTP API shapes checked against the real 2.3.2 server without a prompt (v3.2; found and fixed two defects that would have blocked every host); gates G1–G5 inside every run; `run-all.sh` stops at the first invalid run | The first smoke run is the launcher's first real test; a defect can cost one session |
-| R14 | Grok not callable: no `XAI_API_KEY`; model not confirmed | High (blocks cells 3–4) | The 2.3.2 catalog lists `xai/grok-4.7` with a `medium` variant (placeholder-key probe); no ID is used without the user's confirmation; `preflight.sh` refuses absent models or variants | BLOCKED until the user supplies an xAI key and confirms the model |
+| R10 | Launcher never executed on Linux: unknown OpenCode V2 behaviour (idle detection after a prompt, skill attachment, Linux build, OS-user separation) | Medium | HTTP API shapes checked against the real 2.3.2 server without a prompt (v3.2; found and fixed two defects that would have blocked every host); gates G1–G5 inside every run; `run-all.sh` stops at the first invalid run. CI on `3d522f5` covers the unit tests and shell syntax only, not a Linux launch | The first smoke run is the launcher's first real test; a defect can cost one session |
+| R14 | Grok not callable: no `XAI_API_KEY`; model not confirmed | High (blocks cells 3–4) | The 2.3.2 catalog lists `xai/grok-4.7` with a `medium` variant (placeholder-key probe); no ID is used without the user's confirmation; `preflight.sh` refuses absent models or variants | BLOCKED until the user's xAI configuration (`XAI_API_KEY`) is confirmed and the user confirms the model |
 | R15 | Host leaks operator files (shared folders, WSL drive mounts) | High | Specification requires a VM without sharing and rules out WSL | Not checked by code |
 | R11 | Public specification readable by agents through the internet | Low | Hidden tests, references and the key stay private; the specification only restates the prompt | — |
 | R12 | Evaluator pack exists only on the operator PC | Medium | Back it up privately; never copy it to an agent host before agent runs end | — |

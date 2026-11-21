@@ -56,7 +56,9 @@ Problems, effects and corrections are listed in [SPECIFICATION.md §11](SPECIFIC
 | `PROMPT-SMOKE-TEST.md` | Four agent runs and nothing else; verified Claude reference; Grok BLOCKED |
 | `SPECIFICATION.md`, `README.md`, `VALIDATION-CHECKLIST.md`, `RISK-REGISTER.md`, this file | Updated for v3.1 |
 
-## v3.2 corrections (2026-11-21, on top of `f0c857c`; not yet committed)
+## v3.2 corrections (2026-11-21, on top of `f0c857c`; committed as `3d522f5`, CI green)
+
+*Status correction, 2026-11-21:* this heading read "not yet committed" when the section was written. v3.2 was then committed as `3d522f5` and pushed, and CI passed on it (runs 44892816556 and 44892821220, both jobs). CI covers the offline tests and synthetic sandbox probes only. The Linux launcher is still unverified, the smoke test has not been executed, and the pilot is not ready ([SPECIFICATION.md §1](SPECIFICATION.md#1-status)).
 
 Problems, effects and corrections are listed in [SPECIFICATION.md §12](SPECIFICATION.md#12-v32-corrections-2026-11-21). Found by checking the harness against the real OpenCode 2.3.2 server without sending a prompt. Files:
 

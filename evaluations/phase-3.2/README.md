@@ -2,7 +2,17 @@
 
 A controlled comparison of the same coding agent with and without the `code-discipline` skill, run separately for Claude and for Grok, on three synthetic tasks. The primary outcome is objective: hidden tests run against the code each agent leaves behind.
 
-**Status: smoke test CONDITIONALLY READY (needs a Linux VM, an Anthropic key, and the v3.2 fixes committed with CI green; Grok BLOCKED until the user supplies an xAI key and confirms the candidate `xai/grok-4.7#medium`); pilot NOT READY.** The scoring code is tested locally and in CI (v3.1 commit `f0c857c`), including the Docker scoring sandbox (synthetic probes). The harness's API calls were checked against the real OpenCode 2.3.2 server without sending a prompt (v3.2). The run launcher has **not** been executed on Linux, no live model run has happened, and no model has produced code for any task. See [SPECIFICATION.md §1 and §10](SPECIFICATION.md#1-status).
+**Status (corrected 2026-11-21, after CI on `3d522f5`): smoke test CONDITIONALLY READY (needs a Linux VM and an Anthropic key; Grok BLOCKED until the user's xAI configuration, an `XAI_API_KEY`, is confirmed and the user confirms the candidate `xai/grok-4.7#medium`); pilot NOT READY.** Until this correction the line read "needs ... the v3.2 fixes committed with CI green"; that condition is now met. The scoring code is tested locally and in CI, including the Docker scoring sandbox (synthetic probes). The harness's API calls were checked against the real OpenCode 2.3.2 server without sending a prompt (v3.2). The run launcher has **not** been executed on Linux, no live model run has happened, and no model has produced code for any task. See [SPECIFICATION.md §1 and §10](SPECIFICATION.md#1-status).
+
+| Item | State on 2026-11-21 |
+|---|---|
+| v3.2 implementation | Committed as `3d522f5` and pushed to `phase-3/benchmark-foundation` (PR #1, open, not merged) |
+| GitHub Actions on `3d522f5` | Passed: run 44892816556 (push, #22) and run 44892821220 (PR #1, #23); both jobs, `structural-and-fixture-checks` and `phase-3-2-scoring-sandbox`, succeeded. CI runs offline unit tests, structural checks and synthetic Docker-sandbox probes only. It does not install or start OpenCode, does not run the launcher and sends no model request, so it is **not** evidence that the Linux launcher works or that the benchmark is ready to run |
+| OpenCode 2.3.2 compatibility | Checked locally on the operator PC (Windows): the harness's HTTP calls against a real 2.3.2 server, no prompt sent ([SPECIFICATION.md §4](SPECIFICATION.md#4-contamination-controls-agent-runs), V31) |
+| Linux launcher, end to end | **Not verified** (outstanding) |
+| Four-run smoke test | **Not executed** |
+| 36-run pilot | **NOT READY** |
+| Grok | **BLOCKED** until the user's xAI configuration (`XAI_API_KEY`) is confirmed and the user confirms the model |
 
 | File | Purpose |
 |---|---|
