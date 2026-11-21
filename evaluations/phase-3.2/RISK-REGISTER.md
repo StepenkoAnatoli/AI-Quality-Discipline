@@ -1,6 +1,6 @@
 # Phase 3.2 — Risk register (v3.2)
 
-*Status note, 2026-11-21:* v3.2 is committed as `3d522f5` and CI passed on it (runs 44892816556 and 44892821220). Passing CI does not reduce R04, R10 or R14: CI never starts OpenCode, runs the launcher or calls a model.
+*Status note, 2026-11-21:* v3.2 is committed as `3d522f5` and CI passed on it (runs 44892816556 and 44892821220). Passing CI does not reduce R04, R10 or R14: CI never starts OpenCode, runs the launcher or calls a model. The documentation-only commit `13c91f8` (`13c91f808ec8e62a065139b7f2a37ea95548ac2c`) passed the same workflow (runs 44894181211 and 44894185206) on unchanged code; it changes no risk.
 
 | # | Risk | Severity | Mitigation | Residual |
 |---|---|---|---|---|

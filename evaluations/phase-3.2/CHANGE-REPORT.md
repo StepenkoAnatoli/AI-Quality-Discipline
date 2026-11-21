@@ -71,3 +71,12 @@ Problems, effects and corrections are listed in [SPECIFICATION.md §12](SPECIFIC
 | `tests/test_harness.py` | Tests for each correction (all fail on `f0c857c`) |
 | `PROMPT-SMOKE-TEST.md` | Host packages and docker group; `models --standalone` with a throwaway HOME; Grok candidate from the 2.3.2 catalog; provider-error rule in G4 |
 | `SPECIFICATION.md`, `README.md`, `VALIDATION-CHECKLIST.md`, `RISK-REGISTER.md`, this file | Stale commit/CI statements corrected; skill hash corrected to the LF file; probe results; v3.2 |
+
+## Documentation corrections after v3.2 (2026-11-21)
+
+Markdown only; no harness, test, task, fixture, scoring, configuration or model ID changed.
+
+| Commit | Change | CI |
+|---|---|---|
+| `13c91f808ec8e62a065139b7f2a37ea95548ac2c` (`13c91f8`) | Recorded CI on `3d522f5` and corrected stale status lines in `BRAIN.md`, `README.md`, `evaluations/README.md` and five Phase 3.2 documents | Runs 44894181211 (push, #24) and 44894185206 (PR #1, #25) passed, both jobs. The full workflow ran on an implementation identical to `3d522f5`; no new evidence about the launcher or the benchmark |
+| following commit | Recorded `13c91f8` and runs #24/#25 in the same eight documents (an earlier report had given the SHA with an extra `8`, 41 characters); aligned the Grok wording | see PR #1 checks |

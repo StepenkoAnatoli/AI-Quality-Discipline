@@ -11,7 +11,7 @@ This directory contains reproducible, skill-specific evaluations. A benchmark re
 - `fixtures/` — synthetic task inputs and baseline checks.
 - `run-record-template.json` — per-run metadata and blinded scoring record.
 - `results/` — raw run records and analyzed results.
-- `phase-3.2/` — specification v3.2, synthetic tasks (NEW-01/02/03), fail-closed scoring and harness for the Claude/Grok with/without `code-discipline` experiment. Offline tests and synthetic sandbox probes pass locally and in CI (latest on `3d522f5`, 2026-11-21); the launcher has not been run on Linux, the smoke test has not been executed, and no model run has happened. Start with `phase-3.2/README.md`.
+- `phase-3.2/` — specification v3.2, synthetic tasks (NEW-01/02/03), fail-closed scoring and harness for the Claude/Grok with/without `code-discipline` experiment. Offline tests and synthetic sandbox probes pass locally and in CI (on the v3.2 implementation commit `3d522f5`, runs #22/#23, and again on the documentation-only commit `13c91f8`, runs #24/#25, 2026-11-21); the launcher has not been verified end to end on Linux, the four-run smoke test has not been executed, the pilot is not ready, Grok is blocked until the xAI configuration and model are confirmed, and no benchmark model run has happened. Start with `phase-3.2/README.md`.
 
 ## Pilot status
 

@@ -8,11 +8,14 @@ A controlled comparison of the same coding agent with and without the `code-disc
 |---|---|
 | v3.2 implementation | Committed as `3d522f5` and pushed to `phase-3/benchmark-foundation` (PR #1, open, not merged) |
 | GitHub Actions on `3d522f5` | Passed: run 44892816556 (push, #22) and run 44892821220 (PR #1, #23); both jobs, `structural-and-fixture-checks` and `phase-3-2-scoring-sandbox`, succeeded. CI runs offline unit tests, structural checks and synthetic Docker-sandbox probes only. It does not install or start OpenCode, does not run the launcher and sends no model request, so it is **not** evidence that the Linux launcher works or that the benchmark is ready to run |
+| Documentation correction | Commit `13c91f808ec8e62a065139b7f2a37ea95548ac2c` (`13c91f8`, parent `3d522f5`) changed eight Markdown files and nothing else. An earlier report gave this SHA with an extra `8` (`13c91f88…`, 41 characters); that value is not a commit |
+| GitHub Actions on `13c91f8` | Passed: run 44894181211 (push, #24) and run 44894185206 (PR #1, #25); both jobs succeeded. The workflow has no documentation-only mode: these runs repeated the full suite of #22/#23 on an implementation identical to `3d522f5`, so they confirm only that the documentation commit broke no check and add no evidence about the launcher or the benchmark. Later Markdown-only commits are shown in the PR's checks, not here |
 | OpenCode 2.3.2 compatibility | Checked locally on the operator PC (Windows): the harness's HTTP calls against a real 2.3.2 server, no prompt sent ([SPECIFICATION.md §4](SPECIFICATION.md#4-contamination-controls-agent-runs), V31) |
 | Linux launcher, end to end | **Not verified** (outstanding) |
 | Four-run smoke test | **Not executed** |
 | 36-run pilot | **NOT READY** |
 | Grok | **BLOCKED** until the user's xAI configuration (`XAI_API_KEY`) is confirmed and the user confirms the model |
+| Benchmark model runs | **None** have taken place |
 
 | File | Purpose |
 |---|---|
