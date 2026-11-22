@@ -1,0 +1,239 @@
+name: Phase 3.2 NEW-04 re-score (oracle v2, no model calls)
+
+# One-off, temporary. Sends NO model request and uses NO API key.
+# Re-scores the two agent solutions of A/B run 44980786824 with the corrected
+# NEW-04 oracle (v2) in the Docker sandbox. Before any agent code is scored,
+# oracle v2 is validated on this Linux host with four trusted evaluator
+# implementations; if any behaves differently from the Windows validation, the
+# job stops and scores no agent.
+#
+# Inputs: secret AQD_RESCORE_NEW04_B64 (tar.xz; every member pinned below).
+# Output: one artifact encrypted on the runner with AQD_RESULTS_PASSPHRASE
+# (OpenPGP symmetric, AES-256), 1-day retention. Logs hold fixed status lines only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type RESCORE-NEW04 to re-score (no model calls)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase3-rescore-new04
+  cancel-in-progress: false
+
+env:
+  AQD_TEST_BRANCH: phase-3/benchmark-foundation
+  AQD_TEST_SHA: d99f29cf63dcd530a5a1ac0fa53a5971c589d389
+  AQD_SANDBOX_IMAGE: python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  rescore:
+    if: github.repository == 'StepenkoAnatoli/AI-Quality-Discipline'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out phase-3/benchmark-foundation (no credentials persisted)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: phase-3/benchmark-foundation
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Check revision, trigger and inputs (secrets are tested, never printed)
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          PACK: ${{ secrets.AQD_RESCORE_NEW04_B64 }}
+          PASS: ${{ secrets.AQD_RESULTS_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main ]] || { echo "STOP: must be dispatched manually from main"; exit 1; }
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]] || { echo "STOP: re-runs are refused"; exit 1; }
+          [[ "$CONFIRM" == RESCORE-NEW04 ]] || { echo "STOP: confirmation input does not match"; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$AQD_TEST_SHA" && -z "$(git status --porcelain)" ]] || { echo "STOP: checkout is not a clean $AQD_TEST_SHA"; exit 1; }
+          [[ -n "$PACK" ]] || { echo "STOP: secret AQD_RESCORE_NEW04_B64 is missing"; exit 1; }
+          [[ "${#PASS}" -ge 32 ]] || { echo "STOP: secret AQD_RESULTS_PASSPHRASE is missing or too short"; exit 1; }
+          umask 077
+          mkdir -p "$RUNNER_TEMP/rescore/logs" "$RUNNER_TEMP/rescore/out" "$RUNNER_TEMP/rescore/upload"
+          echo "inputs OK: revision pinned, confirmation given, two secrets present"
+
+      - name: Sandbox self-tests (must pass with no skips)
+        run: |
+          set -euo pipefail
+          umask 077
+          W="$RUNNER_TEMP/rescore"
+          docker pull -q "$AQD_SANDBOX_IMAGE" >"$W/logs/docker-pull.log" 2>&1 || { echo "STOP: sandbox image pull failed"; exit 1; }
+          rc=0
+          python3 -m unittest discover -s evaluations/phase-3.2/tests -p test_sandbox.py -v >"$W/logs/sandbox-tests.log" 2>&1 || rc=$?
+          if [[ "$rc" != 0 ]] || grep -q skipped "$W/logs/sandbox-tests.log"; then echo "STOP: sandbox self-tests failed or skipped"; exit 1; fi
+          echo "sandbox self-tests passed with no skips"
+
+      - name: Decode and verify the re-scoring pack (operator-only directory)
+        env:
+          PACK: ${{ secrets.AQD_RESCORE_NEW04_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 - "$RUNNER_TEMP/rescore/in" <<'PY'
+          import base64, binascii, hashlib, io, lzma, os, sys, tarfile
+          EXPECTED = {
+              "agents/r-82a85a82c6/jobqueue/jobs.py": "fef56802ecd79042d8177672386b6e2d43d7be253cb18729340a420b3241593c",
+              "agents/r-82a85a82c6/tests/additive/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "agents/r-82a85a82c6/tests/additive/test_jobs_contract.py": "95a05b3d363d351525e194c2fa325ec0278c539e398777e9c84d80480dee3fa6",
+              "agents/r-b92ecab33d/jobqueue/jobs.py": "a7235a92d076386e22c7a6811616df2efe2ee49856438b2d27596976ccad9135",
+              "agents/r-b92ecab33d/tests/additive/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "agents/r-b92ecab33d/tests/additive/test_jobs_contract.py": "cc00b4fe18efc9ca51de084d1f6559b6a21bc6c95794f80f4e601d93b5828a74",
+              "impl/conn_type_check.py": "e1fc74b56ab6d26908af735af1a78699520ce807c261e241f59c9caab2e570f8",
+              "impl/conn_type_check_claim_race.py": "eddc8eb14c723ba35afc6989f56df0031fed0d906b1e51ca40fe47c220627717",
+              "impl/conn_type_check_enqueue_race.py": "f18b0d08796f52ae7085ee6e6f0a49b3745308f89926983886eb25b66f48f18d",
+              "impl/reference.py": "119bb106066f09cec77832cb91fb50be07982605cb8df4c29dfc60c5998650f3",
+              "oracle/hidden_tests/NEW-04/hidden_tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "oracle/hidden_tests/NEW-04/hidden_tests/slow_db.py": "c403f04b2c62d96dbd6ef9dcc49f9a8e83e1e01543fd3f96c457238f31d1ff3a",
+              "oracle/hidden_tests/NEW-04/hidden_tests/test_new04_hidden.py": "e597eac61975686ab444fbae0d736ba3fd223090a5d44efda574bb0d166e7b17",
+              "oracle/inventory/NEW-04.json": "56d9969d40fc44b2bd3cdc5e5cce8f2f2465f873cdf67d487d6e2897775ee2f1",
+          }
+          def stop(msg):
+              print(f"STOP: re-scoring pack {msg}")
+              sys.exit(1)
+          dest = sys.argv[1]
+          try:
+              data = base64.b64decode("".join(os.environ["PACK"].split()), validate=True)
+          except (binascii.Error, ValueError):
+              stop("is not valid base64")
+          files = {}
+          try:
+              with tarfile.open(fileobj=io.BytesIO(data), mode="r:xz") as tar:
+                  for m in tar.getmembers():
+                      if not m.isreg() or m.name not in EXPECTED or m.name in files:
+                          stop("holds an unexpected, duplicate or non-regular member")
+                      content = tar.extractfile(m).read()
+                      if hashlib.sha256(content).hexdigest() != EXPECTED[m.name]:
+                          stop("holds a member that differs from its pinned SHA-256")
+                      files[m.name] = content
+          except (tarfile.TarError, lzma.LZMAError, EOFError, OSError):
+              stop("is not a readable tar.xz")
+          if set(files) != set(EXPECTED):
+              stop("lacks a required member")
+          for name, content in files.items():
+              path = os.path.join(dest, *name.split("/"))
+              os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+              fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+              with os.fdopen(fd, "wb") as handle:
+                  handle.write(content)
+          print(f"re-scoring pack verified ({len(files)} members, pinned hashes match)")
+          PY
+
+      - name: Validate oracle v2 on Linux, then re-score both solutions in the Docker sandbox
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 - "$RUNNER_TEMP/rescore" <<'PY'
+          import json, os, shutil, subprocess, sys
+          W = sys.argv[1]
+          PHASE = "evaluations/phase-3.2"
+          IN, OUT, LOGS = (os.path.join(W, d) for d in ("in", "out", "logs"))
+          IMAGE = os.environ["AQD_SANDBOX_IMAGE"]
+
+          def run(cmd, log):
+              with open(os.path.join(LOGS, log), "w") as handle:
+                  return subprocess.run(cmd, stdout=handle, stderr=subprocess.STDOUT).returncode
+
+          manifest, pristine = os.path.join(W, "manifest.json"), os.path.join(W, "pristine")
+          if run([sys.executable, f"{PHASE}/harness/manifest.py", "build", "--phase-root", PHASE, "--task", "NEW-04", "--out", manifest], "manifest.log") \
+                  or run([sys.executable, f"{PHASE}/harness/manifest.py", "materialize", "--phase-root", PHASE, "--manifest", manifest, "--dest", pristine], "materialize.log"):
+              print("STOP: could not build the pristine NEW-04 project")
+              sys.exit(1)
+          hidden = os.path.join(IN, "oracle", "hidden_tests", "NEW-04")
+          inventory = os.path.join(IN, "oracle", "inventory", "NEW-04.json")
+
+          def score(label, files):
+              cand = os.path.join(W, f"cand-{label}")
+              shutil.copytree(pristine, cand)
+              for rel, src in files.items():
+                  os.makedirs(os.path.dirname(os.path.join(cand, *rel.split("/"))), exist_ok=True)
+                  shutil.copyfile(src, os.path.join(cand, *rel.split("/")))
+              out = os.path.join(OUT, f"hidden-score.v2.{label}.json")
+              run([sys.executable, f"{PHASE}/harness/score_run.py", "score", "--phase-root", PHASE, "--task", "NEW-04",
+                   "--pristine", pristine, "--agent", cand, "--hidden", hidden, "--inventory", inventory, "--out", out,
+                   "--sandbox", "docker", "--image", IMAGE], f"score-{label}.log")
+              return json.load(open(out, encoding="utf-8")) if os.path.exists(out) else {}
+
+          # 1. Oracle v2 must behave on Linux exactly as validated on Windows.
+          expect = [("reference", set(), True), ("conn_type_check", set(), True),
+                    ("conn_type_check_claim_race", {"H01", "H02"}, False), ("conn_type_check_enqueue_race", {"H03"}, False)]
+          report, all_ok = {}, True
+          for i, (name, must_fail, must_pass) in enumerate(expect, 1):
+              s = score(f"oracle-{name}", {"jobqueue/jobs.py": os.path.join(IN, "impl", f"{name}.py")})
+              failing = sorted(k for k, v in (s.get("hidden_checks") or {}).items() if v != "pass")
+              valid = s.get("evaluation_status") == "valid"
+              ok = valid and ((not failing and s.get("baseline_all_pass") is True) if must_pass else must_fail <= set(failing))
+              report[name] = {"ok": ok, "valid": valid, "failing": failing}
+              all_ok = all_ok and ok
+              print(f"oracle validation {i}/4: {'as expected' if ok else 'UNEXPECTED'}")
+          json.dump(report, open(os.path.join(OUT, "oracle-v2-linux-validation.json"), "w"), indent=2)
+          if not all_ok:
+              print("STOP: oracle v2 did not behave as validated; no agent solution was scored")
+              sys.exit(1)
+
+          # 2. The two agent solutions, unmodified.
+          for i, rid in enumerate(("r-b92ecab33d", "r-82a85a82c6"), 1):
+              base = os.path.join(IN, "agents", rid)
+              rels = ("jobqueue/jobs.py", "tests/additive/__init__.py", "tests/additive/test_jobs_contract.py")
+              s = score(rid, {rel: os.path.join(base, *rel.split("/")) for rel in rels})
+              print(f"solution {i}/2: evaluation {'VALID' if s.get('evaluation_status') == 'valid' else 'INVALID'}")
+          print("re-scoring complete; scores are only in the encrypted artifact")
+          PY
+
+      - name: Package results (AES-256 encryption on the runner)
+        id: pack
+        if: always()
+        env:
+          AQD_PASS: ${{ secrets.AQD_RESULTS_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          W="$RUNNER_TEMP/rescore"
+          [[ -d "$W/out" ]] || exit 0
+          TAR="$W/results.tar.gz"; PF="$W/passphrase"; GH="$W/gnupg"; OUTF="$W/upload/aqd-rescore-new04.tar.gz.gpg"
+          cleanup() { for f in "$TAR" "$PF"; do if [[ -f "$f" ]]; then shred -u "$f" || rm -f "$f"; fi; done; gpgconf --homedir "$GH" --kill all >/dev/null 2>&1 || true; rm -rf "$GH"; }
+          trap cleanup EXIT
+          [[ "${#AQD_PASS}" -ge 32 ]] || { echo "STOP: no usable passphrase; nothing uploaded"; exit 1; }
+          printf '%s' "$AQD_PASS" >"$PF"
+          unset AQD_PASS
+          tar -C "$W" -czf "$TAR" out logs
+          install -d -m 0700 "$GH"
+          gpg --homedir "$GH" --batch --yes --quiet --no-symkey-cache --pinentry-mode loopback --passphrase-file "$PF" \
+              --symmetric --cipher-algo AES256 --s2k-mode 3 --s2k-digest-algo SHA512 --s2k-count 65011712 \
+              --compress-algo none --output "$OUTF" "$TAR"
+          want="$(sha256sum "$TAR" | cut -d' ' -f1)"
+          got="$(gpg --homedir "$GH" --batch --quiet --no-symkey-cache --pinentry-mode loopback --passphrase-file "$PF" --decrypt "$OUTF" | sha256sum | cut -d' ' -f1)"
+          [[ "$want" == "$got" ]] || { rm -f "$OUTF"; echo "STOP: decryption round trip failed; nothing uploaded"; exit 1; }
+          sha="$(sha256sum "$OUTF" | cut -d' ' -f1)"
+          echo "encrypted=true" >>"$GITHUB_OUTPUT"
+          echo "results encrypted on the runner (AES-256); encrypted file SHA-256 $sha"
+
+      - name: Upload the encrypted results only (1-day retention)
+        if: always() && steps.pack.outputs.encrypted == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aqd-rescore-new04-encrypted
+          path: ${{ runner.temp }}/rescore/upload/aqd-rescore-new04.tar.gz.gpg
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove all decoded inputs from the runner
+        if: always()
+        run: |
+          W="$RUNNER_TEMP/rescore"
+          if [[ -d "$W" ]]; then find "$W" -type f -exec shred -u {} + 2>/dev/null || true; rm -rf "$W"; fi
+          ids="$(docker ps -aq --filter name=aqd-score- 2>/dev/null || true)"
+          if [[ -n "$ids" ]]; then docker rm -f $ids >/dev/null 2>&1 || true; fi
+          echo "decoded inputs removed"
