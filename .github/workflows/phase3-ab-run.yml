@@ -1,10 +1,10 @@
-name: Phase 3.2 NEW-03 A/B run (2 scored model runs)
+name: Phase 3.2 NEW-04 A/B run (2 scored model runs)
 
 # Manual only. SENDS REAL MODEL REQUESTS AND SPENDS MONEY.
 #
-# Exactly two scored agent runs of task NEW-03 with anthropic/claude-opus-5-5#medium
+# Exactly two scored agent runs of task NEW-04 with anthropic/claude-opus-5-5#medium
 # through the unchanged Phase 3.2 harness of phase-3/benchmark-foundation at
-# 8827a27: control (no skill) and treatment (code-discipline, attached through
+# d99f29c: control (no skill) and treatment (code-discipline, attached through
 # the API: api-attachment mode), in the sealed random order schedule.py draws.
 # No rerun, no SMOKE call, no other model request. Hidden scoring runs only if
 # BOTH runs are valid. An invalid run (provider or API error, isolation,
@@ -13,7 +13,7 @@ name: Phase 3.2 NEW-03 A/B run (2 scored model runs)
 # Repository secrets (created by the owner; never printed, never in a script file):
 #   ANTHROPIC_API_KEY       the owner's existing key. Steps: "Check", "Seal" (written
 #                           to a 0600 operator file), "Package" (credential scan only).
-#   AQD_NEW03_HIDDEN_B64    NEW-03 hidden tests + inventory (build_hidden_pack.py).
+#   AQD_NEW04_HIDDEN_B64    NEW-04 hidden tests + inventory (build_hidden_pack.py).
 #                           Steps: "Check" (verified in memory), "Decode" (after both runs).
 #   AQD_RESULTS_PASSPHRASE  >= 32 characters. Steps: "Check" (length), "Package".
 #
@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: "Type RUN-NEW03-AB to start two real model runs (spends money)"
+        description: "Type RUN-NEW04-AB to start two real model runs (spends money)"
         required: true
         type: string
 
@@ -44,7 +44,7 @@ concurrency:
 
 env:
   AQD_TEST_BRANCH: phase-3/benchmark-foundation
-  AQD_TEST_SHA: 8827a27d5281c86c1c429b13e179f02d94665b71
+  AQD_TEST_SHA: d99f29cf63dcd530a5a1ac0fa53a5971c589d389
   AQD_MODEL: "anthropic/claude-opus-5-5#medium"
   AQD_ACTIVATION_MODE: api-attachment
   AQD_OPERATOR: /home/runner/aqd-operator
@@ -90,14 +90,15 @@ jobs:
           EOF
 
           cat >"$CI/bin/hidden_pack.py" <<'EOF'
-          """Verify, and optionally extract, the NEW-03 hidden-test pack held in
+          """Verify, and optionally extract, the NEW-04 hidden-test pack held in
           AQD_HIDDEN_B64 (base64 of a tar.xz). Messages never quote pack content."""
           import base64, binascii, hashlib, io, lzma, os, sys, tarfile
 
           EXPECTED = {
-              "hidden_tests/NEW-03/hidden_tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-              "hidden_tests/NEW-03/hidden_tests/test_new03_hidden.py": "43d2e0f8dcefb02b840fd9686388c6e970e68e62c949d46b51ea53679e139015",
-              "inventory/NEW-03.json": "57db956b386f0924325c069aa771bbeb5c473426e2cd7654be66ed3edc2616c5",
+              "hidden_tests/NEW-04/hidden_tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "hidden_tests/NEW-04/hidden_tests/slow_db.py": "2d6de928cf2dd6b6bc7fd4e2e504428205c4282bb6404b5b2ae87033679d7d62",
+              "hidden_tests/NEW-04/hidden_tests/test_new04_hidden.py": "2161e4abeac214f414f7386d2d4b367faab8565331442d982ad5ea2dd4ce87ce",
+              "inventory/NEW-04.json": "cb1b1b2f39ca8461d926206862f935d079dcc58e2e830fab12a95449fd3ef795",
           }
 
 
@@ -109,7 +110,7 @@ jobs:
           def load():
               raw = os.environ.get("AQD_HIDDEN_B64", "")
               if not raw.strip():
-                  fail("secret AQD_NEW03_HIDDEN_B64 is empty")
+                  fail("secret AQD_NEW04_HIDDEN_B64 is empty")
               try:
                   data = base64.b64decode("".join(raw.split()), validate=True)
               except (binascii.Error, ValueError):
@@ -139,7 +140,7 @@ jobs:
               mode = sys.argv[1] if len(sys.argv) > 1 else ""
               files = load()
               if mode == "verify":
-                  print("hidden pack: verified in memory (3 members, pinned hashes match)")
+                  print("hidden pack: verified in memory (4 members, pinned hashes match)")
                   return
               if mode != "extract" or len(sys.argv) != 3:
                   fail("usage: hidden_pack.py verify | extract DEST")
@@ -168,8 +169,8 @@ jobs:
 
           MODEL = "anthropic/claude-opus-5-5#medium"
           PIN = {
-              "prompt_sha256": "a5764db416e9848f7b6d51f06948b5110a6785013903260892942d3a042f649b",
-              "workspace_sha256": "cd61f2a29fd90040dc048b44fa424dd6fe8368f6cd7dac491b8ccdf917b4cf04",
+              "prompt_sha256": "a50a09d169767c51111c1dbd7729c2ee401791541ba21b9ce5237e6240594b93",
+              "workspace_sha256": "b8ee898b84df9754e2b6b991e347835889e864550470599e68c699155589ceb2",
               "global_config_sha256": "978ef1603067c33e0ffc0bcda430e58e92d6587005579d663f18e460b4d86160",
           }
           SKILL_SHA256 = "d050d00fa8564b08cac71ca221368568420c731c830ef19667a760d5f7ebc842"
@@ -196,12 +197,12 @@ jobs:
               schedule = load(schedule_path) or {}
               runs = schedule.get("runs") or []
               check("schedule: exactly 2 runs, no rerun entries", len(runs) == 2 and not any("replaces_slot" in r for r in runs))
-              check("schedule: design is 1 model x NEW-03 x 1 repetition",
-                    schedule.get("design") == {"models": [MODEL], "tasks": ["NEW-03"], "repetitions": 1,
+              check("schedule: design is 1 model x NEW-04 x 1 repetition",
+                    schedule.get("design") == {"models": [MODEL], "tasks": ["NEW-04"], "repetitions": 1,
                                                "groups": ["control", "treatment"]})
-              check("schedule: one control and one treatment run, NEW-03, pinned model",
+              check("schedule: one control and one treatment run, NEW-04, pinned model",
                     sorted(str(r.get("group")) for r in runs) == ["control", "treatment"]
-                    and all(r.get("task") == "NEW-03" and r.get("model") == MODEL for r in runs))
+                    and all(r.get("task") == "NEW-04" and r.get("model") == MODEL for r in runs))
               by_group = {r.get("group"): r for r in runs if isinstance(r, dict)}
               records, sessions = {}, {}
               for group in ("control", "treatment"):
@@ -475,14 +476,14 @@ jobs:
         env:
           CONFIRM: ${{ inputs.confirm }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          AQD_HIDDEN_B64: ${{ secrets.AQD_NEW03_HIDDEN_B64 }}
+          AQD_HIDDEN_B64: ${{ secrets.AQD_NEW04_HIDDEN_B64 }}
           AQD_PASS: ${{ secrets.AQD_RESULTS_PASSPHRASE }}
         run: |
           source "$RUNNER_TEMP/aqd/env.sh"
           [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main ]] \
               || die "must be dispatched manually from main"
           [[ "$GITHUB_RUN_ATTEMPT" == 1 ]] || die "re-runs are refused; a retry is a new, separately approved dispatch"
-          [[ "$CONFIRM" == RUN-NEW03-AB ]] || die "confirmation input does not match"
+          [[ "$CONFIRM" == RUN-NEW04-AB ]] || die "confirmation input does not match"
           head="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
           branch="$(git -C "$GITHUB_WORKSPACE" rev-parse --abbrev-ref HEAD)"
           [[ "$head" == "$AQD_TEST_SHA" && "$branch" == "$AQD_TEST_BRANCH" ]] || die "checkout is not $AQD_TEST_BRANCH at $AQD_TEST_SHA"
@@ -589,7 +590,7 @@ jobs:
         run: |
           source "$RUNNER_TEMP/aqd/env.sh"
           python3 "$H/schedule.py" create --out "$SEALED/schedule.json" \
-              --models "$AQD_MODEL" --tasks NEW-03 --repetitions 1 >"$LOGS/schedule.log" 2>&1 || die "schedule.py create failed"
+              --models "$AQD_MODEL" --tasks NEW-04 --repetitions 1 >"$LOGS/schedule.log" 2>&1 || die "schedule.py create failed"
           python3 - "$SEALED/schedule.json" <<'PY' || die "schedule is not exactly one control and one treatment run"
           import json, sys
           runs = json.load(open(sys.argv[1], encoding="utf-8"))["runs"]
@@ -655,7 +656,7 @@ jobs:
         id: decode
         if: steps.runs.outputs.both_valid == 'true' && steps.lockdown.outcome == 'success'
         env:
-          AQD_HIDDEN_B64: ${{ secrets.AQD_NEW03_HIDDEN_B64 }}
+          AQD_HIDDEN_B64: ${{ secrets.AQD_NEW04_HIDDEN_B64 }}
         run: |
           source "$RUNNER_TEMP/aqd/env.sh"
           [[ -d "$EVALUATOR" && -z "$(ls -A "$EVALUATOR")" ]] || die "evaluator directory missing or not empty"
@@ -783,7 +784,7 @@ jobs:
         run: |
           S="$RUNNER_TEMP/aqd/summary.md"
           {
-              echo "## Phase 3.2 NEW-03 A/B run"
+              echo "## Phase 3.2 NEW-04 A/B run"
               echo
               echo "Tested: $AQD_TEST_BRANCH at $AQD_TEST_SHA; model $AQD_MODEL; mode $AQD_ACTIVATION_MODE."
               echo
