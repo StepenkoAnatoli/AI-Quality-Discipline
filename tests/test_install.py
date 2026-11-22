@@ -60,7 +60,10 @@ class InstallerTests(unittest.TestCase):
         home = self.root / "home"
         home.mkdir()
         env = os.environ.copy()
+        # Path.home() reads HOME on POSIX but USERPROFILE on Windows. Setting only
+        # HOME made this test install into the real Windows user profile.
         env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
         cases = {"codex": ".agents/skills", "claude": ".claude/skills", "copilot": ".copilot/skills", "generic": ".agents/skills"}
         for target, relative in cases.items():
             result = subprocess.run(
