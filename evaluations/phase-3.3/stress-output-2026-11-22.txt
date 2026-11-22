@@ -1,0 +1,51 @@
+== A. Identifying a true null; the benefit rule's power curve. Hard tier, Beta(4,4), sims=600
+   25 tasks x 2 runs/arm, true effect 0.00: benefit=0.008 harm=0.025 no_meaningful_effect=0.002 inconclusive=0.965  (true effect +0.000)
+   50 tasks x 2 runs/arm, true effect 0.00: benefit=0.002 harm=0.027 no_meaningful_effect=0.178 inconclusive=0.793  (true effect +0.000)
+  100 tasks x 2 runs/arm, true effect 0.00: benefit=0.000 harm=0.010 no_meaningful_effect=0.535 inconclusive=0.455  (true effect +0.000)
+  200 tasks x 2 runs/arm, true effect 0.00: benefit=0.000 harm=0.000 no_meaningful_effect=0.842 inconclusive=0.158  (true effect +0.000)
+   50 tasks x 4 runs/arm, true effect 0.00: benefit=0.000 harm=0.010 no_meaningful_effect=0.497 inconclusive=0.493  (true effect +0.000)
+   25 tasks x 2 runs/arm, nominal +0.10: benefit=0.143 harm=0.003 no_meaningful_effect=0.002 inconclusive=0.852  (true effect +0.100)
+   25 tasks x 2 runs/arm, nominal +0.20: benefit=0.483 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.517  (true effect +0.199)
+   25 tasks x 2 runs/arm, nominal +0.30: benefit=0.850 harm=0.000 no_meaningful_effect=0.002 inconclusive=0.148  (true effect +0.291)
+   50 tasks x 2 runs/arm, nominal +0.10: benefit=0.060 harm=0.000 no_meaningful_effect=0.162 inconclusive=0.778  (true effect +0.100)
+   50 tasks x 2 runs/arm, nominal +0.20: benefit=0.513 harm=0.000 no_meaningful_effect=0.020 inconclusive=0.467  (true effect +0.199)
+   50 tasks x 2 runs/arm, nominal +0.30: benefit=0.950 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.050  (true effect +0.291)
+  100 tasks x 2 runs/arm, nominal +0.10: benefit=0.008 harm=0.000 no_meaningful_effect=0.557 inconclusive=0.435  (true effect +0.100)
+  100 tasks x 2 runs/arm, nominal +0.20: benefit=0.500 harm=0.000 no_meaningful_effect=0.012 inconclusive=0.488  (true effect +0.199)
+  100 tasks x 2 runs/arm, nominal +0.30: benefit=0.990 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.010  (true effect +0.291)
+
+== B. min_discriminating_share robustness (sims=600). Rate of no_meaningful_effect when the skill has a nominal effect of MID wherever there is room (false reassurance), worst over ceiling shares 0.1-0.85
+  baseline grid, seed A      share 0.40: worst false reassurance 0.340
+  baseline grid, seed A      share 0.45: worst false reassurance 0.167
+  baseline grid, seed A      share 0.50: worst false reassurance 0.147
+  baseline grid, seed A      share 0.60: worst false reassurance 0.057
+  other seeds B, C           share 0.40: worst false reassurance 0.380
+  other seeds B, C           share 0.45: worst false reassurance 0.170
+  other seeds B, C           share 0.50: worst false reassurance 0.147
+  other seeds B, C           share 0.60: worst false reassurance 0.047
+  3 runs per arm             share 0.40: worst false reassurance 0.687
+  3 runs per arm             share 0.45: worst false reassurance 0.550
+  3 runs per arm             share 0.50: worst false reassurance 0.347
+  3 runs per arm             share 0.60: worst false reassurance 0.187
+  heterogeneity tau 0.15     share 0.40: worst false reassurance 0.347
+  heterogeneity tau 0.15     share 0.45: worst false reassurance 0.180
+  heterogeneity tau 0.15     share 0.50: worst false reassurance 0.143
+  heterogeneity tau 0.15     share 0.60: worst false reassurance 0.043
+  near-ceiling tasks WITH a truncated effect (control ~ Beta(12,1), nominal +MID on every task):
+     25 tasks: benefit=0.007 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.993  (true effect +0.073)
+     50 tasks: benefit=0.000 harm=0.000 no_meaningful_effect=0.000 inconclusive=1.000  (true effect +0.073)
+    100 tasks: benefit=0.000 harm=0.000 no_meaningful_effect=0.000 inconclusive=1.000  (true effect +0.073)
+
+== C. Fragility of simulated power. Design 25 tasks x 2 runs/arm, nominal +0.40, Beta(4,4), sims=600
+  as simulated (no invalid slots)            benefit=0.990 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.010  (true effect +0.372)
+  5% infrastructure-invalid slots            benefit=0.888 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.112  (true effect +0.371)
+  10% infrastructure-invalid slots           benefit=0.657 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.343  (true effect +0.371)
+  30% of tasks turn out at the ceiling       benefit=0.818 harm=0.000 no_meaningful_effect=0.002 inconclusive=0.180  (true effect +0.252)
+  effect heterogeneity tau 0.30              benefit=0.870 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.130  (true effect +0.307)
+  run-level overdispersion sd 0.20           benefit=0.937 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.063  (true effect +0.372)
+  control drifts -0.15 in half the blocks    benefit=0.963 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.037  (true effect +0.372)
+  wide Beta(1.5,1.5) instead                 benefit=0.962 harm=0.000 no_meaningful_effect=0.002 inconclusive=0.037  (true effect +0.337)
+  skewed-easy Beta(4,1.5) instead            benefit=0.780 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.220  (true effect +0.245)
+  same at nominal +0.20:
+  as simulated                               benefit=0.483 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.517  (true effect +0.199)
+  10% infrastructure-invalid slots           benefit=0.100 harm=0.000 no_meaningful_effect=0.000 inconclusive=0.900  (true effect +0.199)

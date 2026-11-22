@@ -11,6 +11,7 @@
 | `analysis-plan-historical.json` | Draft plan pinning the rubric and ratings by SHA-256, for an exploratory tier report of the Phase 3.2 data |
 | `power_sim.py` | Operating characteristics of the real decision code (all guards, two tiers, interaction) under several variance assumptions; the share sweep behind `min_discriminating_share`; the stop-rule table |
 | `sim-output-2026-11-22.txt` | Output of the four `power_sim.py` reports quoted in DESIGN.md §6–§7 |
+| `stress_decisions.py`, `stress-output-2026-11-22.txt` | Stress tests of the decision rules: null identification, robustness of the 0.45 threshold beyond its grid, and how far simulated power moves under invalid slots, ceiling share and skew (DESIGN.md §6–§7) |
 
 The analysis code lives with the existing harness, so there is one evaluator and one analysis entry point:
 

@@ -594,7 +594,7 @@ def _summary(values, n_discriminating, absent, plan):
     share_min = plan.get("min_discriminating_share", MIN_DISCRIMINATING_SHARE)
     if not values["valid"]:
         return {"tasks": 0, "decision": "inconclusive", "reason": "no task with valid runs in both arms",
-                "missing_tasks": absent}
+                "missing_tasks": absent, "non_inferiority": {"margin": -harm, "holds": False}}
     main = _interval(values["valid"], confidence)
     worst = _interval(values["worst"], confidence)
     best = _interval(values["best"], confidence)
@@ -607,7 +607,11 @@ def _summary(values, n_discriminating, absent, plan):
            "ci": main["ci"], "df": main["df"], "bounds_mean": [worst["mean"], best["mean"]],
            "decisions": decisions, "robust_to_nonvalid": robust,
            "decision": decisions["observed"] if robust else "inconclusive",
-           "missing_tasks": absent}
+           "missing_tasks": absent,
+           # Non-inferiority (not harmful): the lower bound exceeds -harm under the observed data and under both
+           # imputations of non-valid slots. A separate, weaker claim than "benefit"; never a claim of no effect.
+           "non_inferiority": {"margin": -harm, "holds": not absent and n_discriminating >= 2 and bool(main["sd"])
+                               and all(s["ci"] is not None and s["ci"][0] > -harm for s in (main, worst, best))}}
     # A ceiling (or floor) is not evidence of no effect, and a zero-spread interval is degenerate, not
     # precise. Both make the stratum inconclusive whatever the interval says.
     if absent:

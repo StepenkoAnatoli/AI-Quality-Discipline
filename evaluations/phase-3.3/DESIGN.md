@@ -16,6 +16,18 @@ Implemented offline in this change: the difficulty rubric (`difficulty-rubric.js
 
 In addition, future schedules can counterbalance run order (§5), and a frozen plan is labelled "estimation" unless it records adequate power (§8).
 
+**Revision 2026-11-22b (stress tests of `002c3cf`).** Four changes:
+
+1. **Three claims corrected.**
+   - The 0.45 discrimination threshold is grid-limited (§7).
+   - Simulated power is an assumption, not a guarantee (§6).
+   - "Benefit" detecting a true MID-sized effect about half the time is a property of the rule, not a power shortfall (§6).
+2. **Two estimands distinguished:** the population effect for the default-on decision, and the challenging-task effect for the difficulty hypothesis. Neither selects tasks by observed outcomes (§1).
+3. **Terminology.** `no_meaningful_effect` is equivalence within margins, never "no effect".
+4. **Non-inferiority is reported**, and an adoption rule is proposed (§7, §8).
+
+The supporting runs are in `stress_decisions.py` and `stress-output-2026-11-22.txt`. The historical Phase 3.2 results are unchanged.
+
 ## 1. Question, hypotheses and estimands
 
 For one model M, interface version V and frozen skill S (`skills/code-discipline/SKILL.md`, SHA-256 `d050d00f…7ebc842`):
@@ -24,12 +36,26 @@ For one model M, interface version V and frozen skill S (`skills/code-discipline
 - **Tier effect** `D_k` = mean of `d_t` over the tasks in tier k (equal task weight).
 - **Interaction** `D_hard − D_easy` (and the other tier pairs).
 
+**Two estimands, for two different questions (revision 2026-11-22b).**
+
+| | E1: population effect | E2: challenging-task effect |
+|---|---|---|
+| Question | Should code-discipline be **on by default**? | Does the skill help on **challenging** tasks (the difficulty hypothesis)? |
+| Definition | Mean of `d_t` over a sample of tasks drawn to represent the work the product is used for, each task weighted by its pre-registered population share | `D_hard`: mean of `d_t` over the tasks **prospectively** rated hard by the rubric (intrinsic axis), before any run on them |
+| Ceiling tasks | Count in full. A task both arms always pass is real work where the skill cannot help; leaving it out would overstate the product benefit | Count in full. A hard-rated task that turns out easy for the model is a rating error. It is caught by calibration (§6), never by dropping it afterwards |
+| Computed by | Not implemented. With equal population shares it is the equal-weight task mean (`analyze.py` effect, or the tier summary over all tasks); unequal shares need pre-registered weights | `difficulty.py` `by_tier["hard"]` |
+
+- **No outcome-based subgroups.** Neither estimand selects tasks or runs by what happened in a scored run, in either arm. A subset "where the control failed", or "with room to improve", is computed from the outcome itself and would bias the effect upward. It is never an estimand.
+- **Guards are not selection.** The discriminating-task counts in §8 use outcomes, but only to *withhold* a conclusion (making it inconclusive). They never change which tasks enter an estimate.
+- **Correction.** An earlier private note proposed a "tasks with room" estimand. That proposal is withdrawn for this reason.
+- **What a feasibility run can tell us.** The four Phase 3.2 tasks and the planned calibration tasks are not a population sample, so neither can estimate E1. A feasibility run can only show whether E2 is measurable at all.
+
 Competing hypotheses, all tested by the same intervals:
 
 | | Claim | Evidence that would support it |
 |---|---|---|
 | H1 | The skill prevents meaningful errors, more so on harder tasks | `D_hard` decision "benefit" and the interval for `D_hard − D_easy` above 0 |
-| H0 | No useful effect | `D_k` intervals inside (−harm, +MID) in every tier with discriminating tasks |
+| H0 | No effect as large as the margins (equivalence, not "zero effect") | `D_k` intervals inside (−harm, +MID) in every tier with discriminating tasks |
 | H2 | The skill harms (hesitation, over-process, scope suppression) | any tier decision "harm", or overhead or critical-regression limits exceeded |
 
 A higher control error rate on hard tasks is **not** evidence for H1. Only treatment − control, and its change across tiers, is.
@@ -204,7 +230,21 @@ Any change to a task after Stage 1 needs three things:
 What this means:
 
 - **Clipping.** A nominal +0.20 is a realised +0.14 to +0.20, depending on how close the control is to the ceiling. Every rate is for the realised effect.
-- **"Benefit" power at a true effect of exactly MID is capped near 0.5 at any size.** The rule requires the point estimate to be ≥ MID (`power_sim.py scale`: 0.34–0.53 at 100 tasks per tier). A design powered to show "benefit" must assume a true effect well above MID: 25 × 2 gives 0.94–0.99 at a realised +0.32 to +0.37 (0.71–0.80 at +0.23 when control success is skewed toward easy).
+- **"Benefit" detects a true effect of exactly MID only about half the time, at any size.** This is by construction, not a lack of power: the rule requires the point estimate to be ≥ MID, and at a true effect equal to MID the estimate falls on either side about equally often (`power_sim.py scale`: 0.34–0.53 at 100 tasks per tier; `stress_decisions.py` A: 0.48–0.51 at 25–100 tasks). So "power at MID" is not a meaningful target for this rule. A design must state the true effect it is powered for, which has to be well above MID: 25 × 2 gives 0.94–0.99 at a realised +0.32 to +0.37, and 0.71–0.80 at +0.23 when control success is skewed toward easy. A rule that needs only a lower bound > 0 would detect smaller effects more often, at the cost of calling effects below MID a "benefit". The choice is the owner's, and must be pre-registered.
+- **Simulated power is an assumption, not a guarantee.** Every figure above assumes no non-valid slots, a known spread of control success and no ceiling share. `stress_decisions.py` (section C) moves one assumption at a time on a 25 × 2 design powered at 0.99 for a nominal +0.40:
+
+  | Change | P(benefit) |
+  |---|---|
+  | 5% of slots invalid from infrastructure | 0.89 |
+  | 10% invalid | 0.66 |
+  | 30% of tasks turn out at the ceiling | 0.82 |
+  | Control success skewed toward easy | 0.78 |
+  | Heterogeneity τ = 0.30 | 0.87 |
+  | Overdispersion and drift | 0.94–0.96 |
+  | Nominal +0.20, no invalid slots | 0.48 |
+  | Nominal +0.20, 10% invalid | **0.10** |
+
+  The 0/1 imputation of non-valid slots is the dominant sensitivity, and Phase 3.2 had one invalid run among its scored dispatches. A recorded power figure is therefore valid only together with the scenario it was computed under. `difficulty.py` checks the recorded figure's provenance (pinned output, contrast, task count), not its realism. Before a confirmation plan is frozen, its power must be ≥ 0.8 in **every** scenario of a pre-registered set that includes at least the expected infrastructure-invalid rate, a ceiling share and skewed control success. That remains a review requirement; the code does not enforce it.
 - **The difficulty-by-treatment interaction, which is the question, is the hardest part.**
   - At +0.20 it is detected 5–9% of the time with 6 × 2, and 18–33% of the time with 25 × 2, across the three variance assumptions.
   - About 0.8 needs **roughly 100 tasks per tier at 2 runs per arm** (0.82–0.87 in `power_sim.py scale`), which is 800 runs for two tiers.
@@ -242,7 +282,8 @@ Thresholds (owner to ratify; values in the frozen plan):
 | Acceptable overhead | median per-task treatment/control cost ratio ≤ 1.5 and wall-time ratio ≤ 1.5 | above that, users pay for process, not results |
 | Critical-regression limit | any critical defect class present in treatment and absent in control, on ≥ 2 tasks | flagged as H2 evidence whatever the means say |
 | Confidence | 95% two-sided | |
-| Minimum discriminating share for "no meaningful effect" | 0.45 of a tier's tasks | the smallest value on the grid whose worst-case rate of "no meaningful effect", when 10–85% of hard tasks sit at the ceiling and the skill has an effect of MID wherever there is room, is ≤ 0.05 (observed 0.026; 0.40 gives 0.082; without the rule, 0.745). The cost under a genuine null is negligible (P 0.026 vs 0.028). `power_sim.py share-sweep`, 1000 simulations. A rule with no parameter (concluding "no effect" only if it also holds on the discriminating tasks alone) was considered and rejected. In an exploratory run (not part of the committed output) it removed false reassurance, but it also made "no meaningful effect" practically unreachable under a true null |
+| Minimum discriminating share for "no meaningful effect" | 0.45 of a tier's tasks (a backstop guard, not a validated property) | **Grid-limited.** `power_sim.py share-sweep` chose 0.45 as the smallest grid value whose worst-case false reassurance was ≤ 0.05. "False reassurance" means "no meaningful effect" while 10–85% of tasks sit at the ceiling and the skill has an effect of MID wherever there is room. The grid covered up to 25 tasks per tier at 2 runs per arm (0.026; 0.40 gave 0.082; without the rule, 0.745). **Outside that grid it does not hold** (`stress_decisions.py` B): at 50 tasks per tier the worst case is 0.17 (confirmed with `power_sim.run_design`: 0.175 at a 30% ceiling share); with 3 runs per arm, 0.55; with τ = 0.15, 0.18. No single threshold fixes this. In these scenarios the true tier effect is +0.10 to +0.14, below MID, so "no meaningful effect" is arguably *correct* for E2 as defined; the rule patches a mismatch between the estimand and the question. The remedy is the estimand definition (§1) and the calibration stop rule (§6), which catches a ceiling-heavy "hard" tier before confirmatory runs. Keep the guard, but do not cite it as controlling false reassurance in general |
+| Non-inferiority margin | −0.10 (= harm) | reported per tier as `non_inferiority.holds`: the 95% lower bound > −0.10 under the observed data and both non-valid imputations, with at least two discriminating tasks and non-zero spread. It is the question "is it not harmful?" for a default-on decision |
 
 ## 8. Analysis
 
@@ -252,12 +293,19 @@ Thresholds (owner to ratify; values in the frozen plan):
 - per tier: mean of `d_t` with a t-interval over tasks (df = tasks − 1);
 - interaction: Welch intervals for every tier pair (df floored). It concludes `effect_larger_in_<tier>` or `effect_smaller_in_<tier>` only when the interval excludes 0 under valid runs **and** under both non-valid-slot bounds, and neither tier is at a ceiling or floor or missing a task. Otherwise it is inconclusive;
 - missing tasks: every pre-registered inference task must have slots for every model. A frozen confirmatory plan with a missing task is an error. In an exploratory report the tier is inconclusive and the task is listed;
-- decision per tier: **benefit** (lower bound > 0 and estimate ≥ MID), **harm** (upper bound < 0 and estimate ≤ −harm), **no_meaningful_effect** (interval inside (−harm, MID)), otherwise **inconclusive**. It is forced to inconclusive when:
+- decision per tier: **benefit** (lower bound > 0 and estimate ≥ MID), **harm** (upper bound < 0 and estimate ≤ −harm), **no_meaningful_effect** (interval inside (−harm, MID)), otherwise **inconclusive**. **Terminology:** `no_meaningful_effect` means *equivalent within the pre-registered margins (−0.10, +0.20)*. It is never a claim that the effect is zero, and reports must say "no effect as large as the margins" rather than "no effect". The 95% interval inside the margins is a two one-sided tests (TOST) equivalence test at 2.5% per side, more conservative than the usual 5%. It is forced to inconclusive when:
   - the tier has fewer than two discriminating tasks (a task where every run in both arms is at the same extreme is at the ceiling or floor);
   - the task differences have zero spread (a degenerate interval);
   - the decision changes under the non-valid-slot bounds;
   - for "no_meaningful_effect" only, fewer than `min_discriminating_share` (0.45) of the tier's tasks discriminate ("ceiling-dominated"). Zeros from ceiling tasks would otherwise make the interval look precise. A ceiling-heavy tier dilutes "benefit" and "harm" toward 0, so it cannot produce a false one;
-- agent-caused failures count as failures (§5). Each tier reports `agent_failures`, `decision_if_agent_failures_were_nonvalid` and `itt_dependent`;
+- agent-caused failures count as failures (§5). Each tier reports `agent_failures`, `tamper_failures`, `decision_if_scope_violations_were_nonvalid`, `decision_if_tamper_slots_were_dropped` and `itt_dependent`;
+- **non-inferiority** per tier (`non_inferiority`, revision 2026-11-22b): it holds when the lower bound exceeds −harm under the observed data and both imputations, with at least two discriminating tasks and non-zero spread. It is separate from the decision and weaker than "benefit";
+- **adoption rule for E1 (proposed, to be ratified):** turn code-discipline on by default only if all three hold:
+  - the E1 decision is "benefit";
+  - non-inferiority holds;
+  - the cost and wall-time ratios stay within the overhead limits in §7.
+
+  Otherwise it stays off. "inconclusive" and "no_meaningful_effect" lead to the same action, so the adoption decision never needs a null to be proven, and identifying one (100+ tasks per tier, `stress_decisions.py` A) is not worth the cost of building those tasks. None of this changes the historical Phase 3.2 results, which use none of these rules;
 - the interaction applies every tier guard to **each side**: missing tasks, fewer than two discriminating tasks, zero spread, ceiling-dominated. A difference in effect between a ceiling-dominated tier and another tier measures headroom, not difficulty. In `1912c0b`, an easy tier with zero spread still produced `effect_larger_in_hard`;
 - discovery: when the rubric has a discovery axis, the same analysis runs by discovery level (`by_discovery`) with the contrast `discovered − specified` (`discovery_interaction`), next to the tiers;
 - the report records the SHA-256 of the plan, the rubric and every ratings file;

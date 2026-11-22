@@ -409,6 +409,34 @@ class AnalysisTests(unittest.TestCase):
         with self.assertRaisesRegex(d.DifficultyError, "no slot exists"):
             d.analyse([], [], loaded(tasks))
 
+    def test_non_inferiority_is_reported_separately_from_the_decision(self):
+        # The adoption question "can it be on by default without meaningful harm?" needs a non-inferiority
+        # result (lower bound > -harm under every imputation); before this, only "harm" (proof of harm) existed.
+        tasks = {f"H{i}": rated(scores(3, 3, 2 + i % 2)) for i in range(8)}
+        rows = []
+        for i in range(8):
+            rows += [row(f"H{i}", "control", v) for v in (1, 0, 1, 0)]
+            rows += [row(f"H{i}", "treatment", v) for v in ((1, 1, 1, 0) if i < 4 else (1, 0, 1, 0))]
+        hard = self.primary(d.analyse(rows, [], loaded(tasks)))["by_tier"]["hard"]
+        self.assertEqual(hard["decision"], "inconclusive")  # not a benefit, not "no meaningful effect" ...
+        self.assertGreater(hard["ci"][0], -0.1)
+        self.assertEqual(hard["non_inferiority"], {"margin": -0.1, "holds": True})  # ... but not harmful
+        with_missing = dict(tasks, H9=rated(scores(3, 3, 3)))  # pre-registered, no slots
+        hard = self.primary(d.analyse(rows, [], loaded(with_missing, status="draft")))["by_tier"]["hard"]
+        self.assertFalse(hard["non_inferiority"]["holds"])
+        # One task's treatment slots all non-valid: the worst case can no longer exclude harm.
+        problems = [problem("H7", "treatment")] * 4
+        rows = [r for r in rows if not (r["task"] == "H7" and r["group"] == "treatment")]
+        hard = self.primary(d.analyse(rows, problems, loaded(tasks)))["by_tier"]["hard"]
+        self.assertFalse(hard["non_inferiority"]["holds"])
+        out = self.primary(d.analyse([row("H0", "control", 1), row("H0", "treatment", 1)], [],
+                                     loaded({"H0": tasks["H0"]}, status="draft")))
+        self.assertFalse(out["by_tier"]["hard"]["non_inferiority"]["holds"])  # no interval: nothing is shown
+        ceiling = [row(t, g, 1) for t in ("H0", "H1") for g in ("control", "treatment")]
+        out = self.primary(d.analyse(ceiling, [], loaded({t: tasks[t] for t in ("H0", "H1")})))
+        self.assertEqual(out["by_tier"]["hard"]["ci"], None if out["by_tier"]["hard"]["sd"] is None else [0.0, 0.0])
+        self.assertFalse(out["by_tier"]["hard"]["non_inferiority"]["holds"])  # ceiling, zero spread: no evidence
+
     def test_decide(self):
         self.assertEqual(d.decide({"mean": 0.3, "ci": [0.05, 0.55]}, 0.2, 0.1), "benefit")
         self.assertEqual(d.decide({"mean": 0.1, "ci": [0.05, 0.15]}, 0.2, 0.1), "no_meaningful_effect")

@@ -77,9 +77,19 @@ TAMPER_PATTERNS = (
 # private or dunder attribute (other than on self/cls) also forces a review.
 # This is detection, not prevention: see SPECIFICATION.md section 7.
 ALLOWED_IMPORTS = frozenset({
-    "__future__", "abc", "collections", "contextlib", "copy", "csv", "dataclasses", "datetime", "decimal", "enum",
-    "functools", "hashlib", "hmac", "io", "itertools", "json", "logging", "math", "numbers", "operator", "random",
-    "re", "secrets", "sqlite3", "string", "textwrap", "threading", "time", "typing", "unicodedata", "uuid",
+    "__future__", "abc", "bisect", "collections", "contextlib", "copy", "csv", "dataclasses", "datetime", "decimal",
+    "enum", "fractions", "functools", "hashlib", "heapq", "hmac", "io", "itertools", "json", "logging", "math",
+    "numbers", "operator", "random", "re", "secrets", "sqlite3", "statistics", "string", "textwrap", "threading",
+    "time", "typing", "unicodedata", "uuid",
+})
+# Several allowed modules re-export a risky module as a plain attribute (logging.os, contextlib.os, uuid.os, uuid.platform on 3.12,
+# enum.bltns = builtins, json.codecs, logging.traceback, typing.types), and io.open / codecs.open open files
+# (for example /proc/self/mem). An attribute with one of these names forces a review, unless it is on self/cls.
+# Frame and code attributes are flagged as well, in case a frame is reached some other way. The test suite
+# introspects every allowed module so that a new route cannot be added unnoticed.
+ESCAPE_ATTRIBUTES = frozenset({
+    "os", "bltns", "builtins", "codecs", "traceback", "types", "copyreg", "open", "platform",
+    "f_locals", "f_globals", "f_back", "f_code", "f_builtins", "tb_frame", "gi_frame", "cr_frame", "ag_frame",
 })
 FLAGGED_NAMES = frozenset({
     "exec", "eval", "compile", "__import__", "globals", "locals", "vars", "getattr", "setattr", "delattr",
@@ -145,7 +155,8 @@ def _structural_flags(text, own_packages):
                 flags.add(f"import:{module}")
         if isinstance(node, ast.Name) and node.id in FLAGGED_NAMES:
             flags.add(f"name:{node.id}")
-        elif isinstance(node, ast.Attribute) and node.attr.startswith("_") and node.attr not in ALLOWED_DUNDERS:
+        elif isinstance(node, ast.Attribute) and ((node.attr.startswith("_") and node.attr not in ALLOWED_DUNDERS)
+                                                  or node.attr in ESCAPE_ATTRIBUTES):
             if not (isinstance(node.value, ast.Name) and node.value.id in ("self", "cls")):
                 flags.add(f"attribute:{node.attr}")
     return flags
