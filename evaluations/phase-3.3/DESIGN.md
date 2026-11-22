@@ -121,7 +121,8 @@ Required harness changes. These are not implemented here, because they change th
 
 1. **Scope violations become an outcome, not an exclusion.** Today an edit to any immutable file makes the run INVALID (`run_status.py`), so a scope violation leaves the comparison. That is backwards for a skill whose rules include scope control. In 3.3: a valid run with `scope_violation: true` is scored on its mutable files, and `strictly_correct = fully_correct ∧ ¬scope_violation` is reported next to `fully_correct`. (Since the 2026-11-22 revision, the difficulty analysis already counts such a run as a failure of its arm, intention to treat; see below. What remains for the harness is scoring the run's mutable files, so `fully_correct` and `strictly_correct` can be reported separately.)
 2. **Unexpected new files** (recorded today in `workspace_findings.unexpected` but never reported) become a secondary outcome.
-3. **Results retention.** The Phase 3.2 encrypted artifacts have 1-day retention, so the evidence behind AB-RESULTS.md expires within a day of each run. In 3.3 the operator archives each encrypted bundle and records its SHA-256 next to the results, and a machine-readable per-run results file (scores, costs, validity, no code or transcripts) is committed with the report.
+3. **Control-only calibration runs.** Stage 1 (§6) needs 4 control-only hard-task runs. `schedule.validate` accepts only blocks of one control and one treatment run, so these runs need a separate, sealed calibration schedule kind, with its own tests. Until that exists, Stage 1 cannot be scheduled as specified.
+4. **Results retention.** The Phase 3.2 encrypted artifacts have 1-day retention, so the evidence behind AB-RESULTS.md expires within a day of each run. In 3.3 the operator archives each encrypted bundle and records its SHA-256 next to the results, and a machine-readable per-run results file (scores, costs, validity, no code or transcripts) is committed with the report.
 
 Already handled in analysis (this change):
 
@@ -135,16 +136,21 @@ Already handled in analysis (this change):
   - missing runs.
 
   These are carried into the worst/best-case bounds, and a decision that depends on them is inconclusive.
-- Each tier also reports `agent_failures` per arm and `decision_if_agent_failures_were_nonvalid`. `itt_dependent: true` marks a decision that rests on the scope-violation counting, so a "benefit" that comes from the control arm breaking the file rule is visible as such.
+- A confirmed tamper verdict counts only if it names exactly the scored code (`tamper_review_subject` equals the evaluation's `review_subject_sha256`) and has a `scorer_id`. Otherwise the slot stays non-valid. `analyze.py` records this as `tamper_verified`.
+- Two sensitivity results are reported for every tier, every discovery level and **every interaction**:
+  - with scope violations treated as non-valid (`decision_if_scope_violations_were_nonvalid` for a tier or level, `conclusion_if_scope_violations_were_nonvalid` for an interaction);
+  - with tamper-confirmed slots dropped (`decision_if_tamper_slots_were_dropped`, `conclusion_if_tamper_slots_were_dropped`). They are dropped, never imputed as successes.
+
+  `itt_dependent: true` marks a result that changes under either, next to `agent_failures` and `tamper_failures` per arm. A "benefit" or "effect larger in hard" that comes from one arm breaking the file rule, or from reviewers' tamper verdicts, is therefore visible as such.
 - Run validity, slot accounting and the Phase 3.2 effects in `analyze.py` are unchanged. The attribution exists only inside the difficulty analysis.
 
 **Counterbalanced run order.** In Phase 3.2 the treatment ran first in 4 of 4 pairs, a 1-in-16 chance under fair draws, so arm and position were confounded. Phase 3.3 schedules are created with `schedule.py create --counterbalance`. For every model and task, the treatment-first blocks number ⌊reps/2⌋ or ⌈reps/2⌉; across the schedule they differ from the control-first blocks by at most one; the assignment to blocks is random. `schedule.validate` refuses a counterbalanced schedule that is not balanced. Without the flag, `schedule.py` reproduces every Phase 3.2 schedule byte for byte (pinned by a test).
 
 ## 6. Stages, precision and gates
 
-**Stage 0: offline, no spend.** Build the eighteen tasks; private oracle packs; oracle validation (§4); two-rater ratings; feasibility runs by an engineer; freeze; sealed calibration/confirmatory draw. Also add the three harness changes (§5) with tests.
+**Stage 0: offline, no spend.** Build the eighteen tasks; private oracle packs; oracle validation (§4); two-rater ratings; feasibility runs by an engineer; freeze; sealed calibration/confirmatory draw. Also add the four harness changes (§5) with tests.
 
-**Stage 1: calibration (28 runs).** Two tasks per tier, two runs per arm (24 runs), plus two extra **control-only** runs on each hard calibration task (4 runs), so that the stop rule below has 8 hard-task control runs. Purpose: feasibility, oracle sanity on real agent code, cost per tier, and the manipulation check. It is not evidence about the skill and is never pooled with Stage 2.
+**Stage 1: calibration (28 runs).** Two tasks per tier, two runs per arm (24 runs), plus two extra **control-only** runs on each hard calibration task (4 runs; these need the control-only schedule kind in §5), so that the stop rule below has 8 hard-task control runs. Purpose: feasibility, oracle sanity on real agent code, cost per tier, and the manipulation check. It is not evidence about the skill and is never pooled with Stage 2.
 
 Stop rules after Stage 1, written before it runs:
 
@@ -205,13 +211,13 @@ What this means:
   - The `1912c0b` statement that "the interaction interval will be wider still" understated this.
 - **One run per arm defeats the guards.** With one run per arm, a task "discriminates" only by chance, so the ceiling and floor rules block most interactions (≤ 0.08 even at +0.40). Use at least 2 runs per arm. The `1912c0b` claim that more tasks with fewer repetitions is "strictly more precise" holds for the half-width of a tier, but not for the decisions.
 - **"No meaningful effect" is essentially unreachable at these sizes:** P ≤ 0.022 in every simulated design. At feasible sizes a true null will be reported as "inconclusive", and that is the honest report.
-- **False positives are controlled.** At zero effect, P(benefit) ≤ 0.033, and P(interaction in either direction) ≤ 0.031, in every simulated design.
+- **False positives are controlled.** At zero effect, in every simulated design, P(benefit) ≤ 0.033. P(interaction "larger in hard") and P("smaller in hard") are each ≤ 0.031, and both together ≤ 0.057.
 
 Recommendation:
 
 - Keep Stage 1 as above.
 - Run Stage 2 as **6 tasks × 2 runs per tier (72 runs)**, pre-registered as an *estimation* stage: plan `purpose: "estimation"`, so `difficulty.py` labels the report "estimation". Expect intervals of about ±0.4–0.5 per tier, and report the intervals, not the decisions.
-- A confirmatory claim needs a plan with `purpose: "confirmation"` and a recorded simulated power ≥ 0.8 for its primary contrast; `difficulty.py` refuses less:
+- A confirmatory claim needs a plan with `purpose: "confirmation"` whose `power` names one contrast (a tier, or `"<harder> - <easier>"`), its simulated power (≥ 0.8), the `assumed_tasks_per_tier` (each tier of the contrast must have at least that many inference tasks), and the simulation output pinned by SHA-256. `difficulty.py` refuses anything less, and labels **only that contrast on the primary outcome** "confirmatory". Everything else is "estimation". Rough sizes:
   - for a hard-tier benefit, about 25 tasks at 2 runs per arm, if the true effect is about +0.35;
   - for the interaction at +0.20, about 100 tasks per tier.
 - Building the tasks, not paying for model calls, is the binding constraint. Do not describe Stage 2 as powered.
@@ -236,7 +242,7 @@ Thresholds (owner to ratify; values in the frozen plan):
 | Acceptable overhead | median per-task treatment/control cost ratio ≤ 1.5 and wall-time ratio ≤ 1.5 | above that, users pay for process, not results |
 | Critical-regression limit | any critical defect class present in treatment and absent in control, on ≥ 2 tasks | flagged as H2 evidence whatever the means say |
 | Confidence | 95% two-sided | |
-| Minimum discriminating share for "no meaningful effect" | 0.45 of a tier's tasks | the smallest value on the grid whose worst-case rate of "no meaningful effect", when 10–85% of hard tasks sit at the ceiling and the skill has an effect of MID wherever there is room, is ≤ 0.05 (observed 0.026; 0.40 gives 0.082; without the rule, 0.745). The cost under a genuine null is negligible (P 0.026 vs 0.028). `power_sim.py share-sweep`, 1000 simulations. A rule with no parameter (concluding "no effect" only if it also holds on the discriminating tasks alone) was rejected: it removed false reassurance, but it also cut P(no meaningful effect) under a true null to 0.001 |
+| Minimum discriminating share for "no meaningful effect" | 0.45 of a tier's tasks | the smallest value on the grid whose worst-case rate of "no meaningful effect", when 10–85% of hard tasks sit at the ceiling and the skill has an effect of MID wherever there is room, is ≤ 0.05 (observed 0.026; 0.40 gives 0.082; without the rule, 0.745). The cost under a genuine null is negligible (P 0.026 vs 0.028). `power_sim.py share-sweep`, 1000 simulations. A rule with no parameter (concluding "no effect" only if it also holds on the discriminating tasks alone) was considered and rejected. In an exploratory run (not part of the committed output) it removed false reassurance, but it also made "no meaningful effect" practically unreachable under a true null |
 
 ## 8. Analysis
 
@@ -256,7 +262,7 @@ Thresholds (owner to ratify; values in the frozen plan):
 - discovery: when the rubric has a discovery axis, the same analysis runs by discovery level (`by_discovery`) with the contrast `discovered − specified` (`discovery_interaction`), next to the tiers;
 - the report records the SHA-256 of the plan, the rubric and every ratings file;
 - label:
-  - "confirmatory" only for a frozen plan whose inference set is exactly the confirmatory set with prospective ratings, **and** whose `purpose` is "confirmation" with a recorded simulated power ≥ 0.8;
+  - "confirmatory" only for a frozen plan whose inference set is exactly the confirmatory set with prospective ratings, **and** whose `purpose` is "confirmation" with a recorded, pinned simulated power ≥ 0.8. Even then, only the named contrast carries `inference: "confirmatory"`; every other tier, level and contrast carries "estimation";
   - "estimation" for the same plan without that purpose and power;
   - otherwise "exploratory".
 

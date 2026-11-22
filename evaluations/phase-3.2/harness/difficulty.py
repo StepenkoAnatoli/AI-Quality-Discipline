@@ -25,14 +25,17 @@ non-valid slot) and a frozen pre-registration plan, and reports
     ("immutable files changed or missing"), or whose code a reviewer confirmed
     as tampering, counts as a failure (0) of its arm in every estimate and in
     both bounds. Tamper is therefore never imputed as a success. Anything else,
-    including a suspected (unconfirmed) tamper verdict and a scope violation
+    including a suspected (unconfirmed) tamper verdict, a confirmed verdict that
+    does not name the scored code or has no scorer_id, and a scope violation
     reported together with any other reason, stays non-valid (see attribution());
   * bounds for the remaining non-valid slots (infrastructure or ambiguous):
     every invalid, excluded, unresolved or missing slot is imputed as a
     failure (0) or a success (1) in the direction least and most favourable to
     the treatment. A decision that changes under either imputation is reported
-    as inconclusive. The tier also reports the decision it would get if the
-    scope violations were treated as non-valid instead (itt_dependent);
+    as inconclusive. Every tier and every interaction also reports the result it
+    would get if scope violations were treated as non-valid, and if the
+    tamper-confirmed slots were dropped (never credited as successes);
+    itt_dependent is true when either differs;
   * a decision per tier against the plan's thresholds: benefit, harm,
     no_meaningful_effect or inconclusive. A tier is inconclusive, whatever its
     interval, when fewer than two of its tasks discriminate (a task where every
@@ -347,14 +350,28 @@ def check_plan_parameters(plan, where):
         raise DifficultyError(f"{where}: purpose must be one of {PURPOSES}")
     if purpose == "confirmation":
         power = plan.get("power")
-        if not (isinstance(power, dict) and isinstance(power.get("contrast"), str) and power["contrast"]
-                and isinstance(power.get("source"), str) and power["source"] and _is_number(power.get("power"))):
-            raise DifficultyError(f"{where}: a confirmation plan must record its simulated power "
-                                  "({contrast, power, source}) for the primary contrast")
+        source = power.get("source") if isinstance(power, dict) else None
+        if not (isinstance(power, dict) and isinstance(power.get("contrast"), str) and _is_number(power.get("power"))
+                and _is_int(power.get("assumed_tasks_per_tier")) and power["assumed_tasks_per_tier"] >= 2
+                and isinstance(source, dict) and isinstance(source.get("path"), str) and source["path"]
+                and isinstance(source.get("sha256"), str) and len(source["sha256"]) == 64):
+            raise DifficultyError(f"{where}: a confirmation plan must record its simulated power as {{contrast, power, "
+                                  "assumed_tasks_per_tier (>= 2), source: {path, sha256}}} for one contrast")
+        if power["contrast"] not in contrast_names(plan.get("tier_order") or []):
+            raise DifficultyError(f"{where}: power contrast {power['contrast']!r} is not a tier or a "
+                                  "'<harder> - <easier>' tier pair of tier_order")
         if not MIN_CONFIRMATION_POWER <= power["power"] <= 1:
             raise DifficultyError(f"{where}: recorded power {power['power']} is below {MIN_CONFIRMATION_POWER}; "
                                   "an under-powered stage is an estimation stage, not a confirmation")
     return share, purpose
+
+
+def contrast_names(tier_order):
+    """The contrasts a plan may power: one tier, or '<harder> - <easier>' for a pair of tiers."""
+    names = list(tier_order)
+    for i, low in enumerate(tier_order):
+        names += [f"{high} - {low}" for high in tier_order[i + 1:]]
+    return names
 
 
 def load_plan(path):
@@ -409,6 +426,15 @@ def load_plan(path):
             if task in tasks:
                 raise DifficultyError(f"{path}: task {task} is rated in more than one file")
             tasks[task] = info
+    if plan.get("purpose") == "confirmation":
+        power = plan["power"]
+        pinned(power["source"], "power source")
+        sides = [t.strip() for t in power["contrast"].split(" - ")]
+        for tier in sides:
+            have = sum(1 for m in tasks.values() if m["tier"] == tier and m["set"] in sets)
+            if have < power["assumed_tasks_per_tier"]:
+                raise DifficultyError(f"{path}: tier {tier} has {have} inference tasks, fewer than the "
+                                      f"{power['assumed_tasks_per_tier']} the power simulation assumed")
     levels = rubric.get("discovery_levels")
     return {"plan": plan, "plan_sha256": _sha256(path), "rubric": rubric, "rubric_sha256": rubric_sha,
             "ratings_sha256": ratings_sha, "tasks": tasks,
@@ -469,7 +495,8 @@ def attribution(item):
     """'agent' when a non-valid slot is unambiguously the agent's own failure; otherwise 'unattributed'.
 
     Agent: the run is invalid and its last attempt's only reasons are in AGENT_RUN_REASONS (a forbidden file was
-    changed or removed), or a reviewer confirmed tampering. Everything else (provider and harness failures,
+    changed or removed), or a reviewer confirmed tampering for exactly the scored code with a scorer_id
+    (tamper_verified, set by analyze.resolve_slots). Everything else (provider and harness failures,
     evaluator errors, suspected but unconfirmed tamper, pending review, missing runs, and a scope violation that
     comes with any other reason) is unattributed and stays in the non-valid bounds. Fail closed: unknown shapes
     are unattributed."""
@@ -478,7 +505,8 @@ def attribution(item):
 
 def _agent_kind(item):
     status = item.get("status")
-    if status == "excluded" and item.get("problem") == "tamper review: confirmed":
+    if (status == "excluded" and item.get("problem") == "tamper review: confirmed"
+            and item.get("tamper_verified") is True):
         return "tamper"
     if status == "invalid" and str(item.get("problem", "")).startswith("run invalid: "):
         attempts = item.get("attempts") or []
@@ -508,34 +536,41 @@ def _task_cells(rows, problems, outcome, tasks):
             cell["nonvalid"][item["group"]] += 1
         else:
             cell["agent_failures"][item["group"]] += 1
-            if kind == "scope":
-                cell["scope_failures"][item["group"]] += 1
+            cell[f"{kind}_failures"][item["group"]] += 1
     return cells
+
+
+# How agent-caused failures enter: "itt" (primary: every one is a 0 of its arm), "scope_nonvalid" (sensitivity:
+# scope violations become non-valid slots, imputed both ways) and "tamper_dropped" (sensitivity: tamper-confirmed
+# slots are left out; they are never imputed as successes).
+MODES = ("itt", "scope_nonvalid", "tamper_dropped")
 
 
 def _empty_cell():
     return {"control": [], "treatment": [], "nonvalid": {"control": 0, "treatment": 0},
-            "agent_failures": {"control": 0, "treatment": 0}, "scope_failures": {"control": 0, "treatment": 0}}
+            "agent_failures": {"control": 0, "treatment": 0}, "scope_failures": {"control": 0, "treatment": 0},
+            "tamper_failures": {"control": 0, "treatment": 0}}
 
 
-def _arms(cell, itt=True):
-    """(control, treatment, nonvalid) with agent failures as 0 (itt) or, for the sensitivity analysis, scope
-    violations moved to the non-valid slots. Confirmed tamper is a failure in both."""
+def _arms(cell, mode="itt"):
+    """(control, treatment, nonvalid) under one of MODES."""
     control, treatment = list(cell["control"]), list(cell["treatment"])
     nonvalid = dict(cell["nonvalid"])
-    agent = cell.get("agent_failures") or {"control": 0, "treatment": 0}
-    scope = cell.get("scope_failures") or {"control": 0, "treatment": 0}
+    zero = {"control": 0, "treatment": 0}
+    scope = cell.get("scope_failures") or zero
+    tamper = cell.get("tamper_failures") or zero
     for group, values in (("control", control), ("treatment", treatment)):
-        moved = 0 if itt else scope[group]
-        values += [0.0] * (agent[group] - moved)
+        moved = scope[group] if mode == "scope_nonvalid" else 0
+        dropped = tamper[group] if mode == "tamper_dropped" else 0
+        values += [0.0] * (scope[group] + tamper[group] - moved - dropped)
         nonvalid[group] += moved
     return control, treatment, nonvalid
 
 
-def _task_difference(cell, impute=None, itt=True):
+def _task_difference(cell, impute=None, mode="itt"):
     """impute=None: observed runs only (agent failures as 0); 'worst'/'best': remaining non-valid slots as 0/1
     against/for the treatment."""
-    control, treatment, nonvalid = _arms(cell, itt)
+    control, treatment, nonvalid = _arms(cell, mode)
     if impute is not None:
         bad_t, bad_c = (0.0, 1.0) if impute == "worst" else (1.0, 0.0)
         treatment += [bad_t] * nonvalid["treatment"]
@@ -545,8 +580,8 @@ def _task_difference(cell, impute=None, itt=True):
     return statistics.fmean(treatment) - statistics.fmean(control)
 
 
-def _discriminating(cell, itt=True):
-    control, treatment, _ = _arms(cell, itt)
+def _discriminating(cell, mode="itt"):
+    control, treatment, _ = _arms(cell, mode)
     if not control or not treatment:
         return False
     pooled = set(control) | set(treatment)
@@ -599,74 +634,87 @@ def _summary(values, n_discriminating, absent, plan):
 
 
 def _strata(per_task, cells, key, order, info, plan, missing):
-    """Summaries per stratum (tier or discovery level) and the pairwise interactions between strata."""
-    confidence = plan["confidence"]
-    share_min = plan.get("min_discriminating_share", MIN_DISCRIMINATING_SHARE)
-    pools = {s: {itt: {"valid": [], "worst": [], "best": [], "discriminating": 0} for itt in (True, False)}
-             for s in order}
-    agent = {s: {"control": 0, "treatment": 0} for s in order}
+    """Summaries per stratum (tier or discovery level) and the pairwise interactions between strata, under the
+    primary (itt) treatment of agent failures, with the two sensitivity results attached."""
+    pools = {m: {s: {"valid": [], "worst": [], "best": [], "discriminating": 0} for s in order} for m in MODES}
+    counts = {k: {s: {"control": 0, "treatment": 0} for s in order}
+              for k in ("agent_failures", "tamper_failures")}
     for task, entry in per_task.items():
         if not entry["in_inference"]:
             continue
         stratum, cell = info[task][key], cells[task]
-        for group in ARMS:
-            agent[stratum][group] += entry["agent_failures"][group]
-        for itt in (True, False):
-            pool = pools[stratum][itt]
-            pool["discriminating"] += _discriminating(cell, itt)
-            for mode, impute in (("valid", None), ("worst", "worst"), ("best", "best")):
-                value = _task_difference(cell, impute, itt)
+        for k in counts:
+            for group in ARMS:
+                counts[k][stratum][group] += cell[k][group]
+        for mode in MODES:
+            pool = pools[mode][stratum]
+            pool["discriminating"] += _discriminating(cell, mode)
+            for slot, impute in (("valid", None), ("worst", "worst"), ("best", "best")):
+                value = _task_difference(cell, impute, mode)
                 if value is not None:
-                    pool[mode].append(value)
-    summaries = {}
+                    pool[slot].append(value)
+    summaries = {m: {} for m in MODES}
+    for mode in MODES:
+        for s in order:
+            absent = sorted(t for t in missing if info[t][key] == s)
+            summaries[mode][s] = _summary(pools[mode][s], pools[mode][s]["discriminating"], absent, plan)
+    out_strata = {}
     for s in order:
-        absent = sorted(t for t in missing if info[t][key] == s)
-        summary = _summary(pools[s][True], pools[s][True]["discriminating"], absent, plan)
-        alternative = _summary(pools[s][False], pools[s][False]["discriminating"], absent, plan)
-        summary["agent_failures"] = agent[s]
-        summary["decision_if_agent_failures_were_nonvalid"] = alternative["decision"]
-        summary["itt_dependent"] = alternative["decision"] != summary["decision"]
-        summaries[s] = summary
-
-    # The interaction gets the same protections as each side: no ceiling/floor, ceiling-dominated or zero-spread
-    # stratum, no missing pre-registered task, and a direction only if it survives the non-valid-slot bounds.
+        summary = summaries["itt"][s]
+        summary["agent_failures"] = counts["agent_failures"][s]
+        summary["tamper_failures"] = counts["tamper_failures"][s]
+        summary["decision_if_scope_violations_were_nonvalid"] = summaries["scope_nonvalid"][s]["decision"]
+        summary["decision_if_tamper_slots_were_dropped"] = summaries["tamper_dropped"][s]["decision"]
+        summary["itt_dependent"] = any(summaries[m][s]["decision"] != summary["decision"] for m in MODES[1:])
+        out_strata[s] = summary
     interaction = {}
     for i, low in enumerate(order):
         for high in order[i + 1:]:
-            result = {mode: welch(pools[low][True][mode], pools[high][True][mode], confidence)
-                      for mode in ("valid", "worst", "best")}
-            entry = dict(result["valid"])
-            entry["bounds"] = {"worst_case": result["worst"], "best_case": result["best"]}
-            problems = []
-            for side in (low, high):
-                summary = summaries[side]
-                if summary.get("missing_tasks"):
-                    problems.append(f"{side}: missing pre-registered tasks")
-                elif summary.get("tasks", 0) >= 2 and summary.get("discriminating_tasks", 0) < 2:
-                    problems.append(f"{side}: fewer than two discriminating tasks (ceiling or floor)")
-                elif summary.get("tasks", 0) >= 2 and summary.get("sd") == 0:
-                    problems.append(f"{side}: zero spread across tasks (degenerate)")
-                elif summary.get("tasks", 0) >= 2 and summary["discriminating_share"] < share_min:
-                    problems.append(f"{side}: ceiling-dominated (discriminating share "
-                                    f"{summary['discriminating_share']} < {share_min}); a difference in effect "
-                                    "would reflect headroom, not difficulty")
-            lows = [r["ci"][0] for r in result.values() if r.get("ci")]
-            highs = [r["ci"][1] for r in result.values() if r.get("ci")]
-            if problems:
-                entry["conclusion"], entry["reason"] = "inconclusive", "; ".join(problems)
-            elif entry.get("ci") is None:
-                entry["conclusion"] = "inconclusive"
-                entry.setdefault("reason", "fewer than two tasks in a stratum: no interval")
-            elif len(lows) == 3 and min(lows) > 0:
-                entry["conclusion"] = "effect_larger_in_" + high
-            elif len(highs) == 3 and max(highs) < 0:
-                entry["conclusion"] = "effect_smaller_in_" + high
-            else:
-                entry["conclusion"] = "inconclusive"
-                entry["reason"] = ("the interval includes 0, or its sign changes when non-valid slots are imputed "
-                                   "as failures or successes")
+            results = {m: _interaction(pools[m], summaries[m], low, high, plan) for m in MODES}
+            entry = results["itt"]
+            entry["conclusion_if_scope_violations_were_nonvalid"] = results["scope_nonvalid"]["conclusion"]
+            entry["conclusion_if_tamper_slots_were_dropped"] = results["tamper_dropped"]["conclusion"]
+            entry["itt_dependent"] = any(results[m]["conclusion"] != entry["conclusion"] for m in MODES[1:])
             interaction[f"{high} - {low}"] = entry
-    return summaries, interaction
+    return out_strata, interaction
+
+
+def _interaction(pools, summaries, low, high, plan):
+    """high - low. The same protections as each side: no ceiling/floor, ceiling-dominated or zero-spread stratum,
+    no missing pre-registered task, and a direction only if it survives the non-valid-slot bounds."""
+    confidence = plan["confidence"]
+    share_min = plan.get("min_discriminating_share", MIN_DISCRIMINATING_SHARE)
+    result = {slot: welch(pools[low][slot], pools[high][slot], confidence) for slot in ("valid", "worst", "best")}
+    entry = dict(result["valid"])
+    entry["bounds"] = {"worst_case": result["worst"], "best_case": result["best"]}
+    problems = []
+    for side in (low, high):
+        summary = summaries[side]
+        if summary.get("missing_tasks"):
+            problems.append(f"{side}: missing pre-registered tasks")
+        elif summary.get("tasks", 0) >= 2 and summary.get("discriminating_tasks", 0) < 2:
+            problems.append(f"{side}: fewer than two discriminating tasks (ceiling or floor)")
+        elif summary.get("tasks", 0) >= 2 and summary.get("sd") == 0:
+            problems.append(f"{side}: zero spread across tasks (degenerate)")
+        elif summary.get("tasks", 0) >= 2 and summary["discriminating_share"] < share_min:
+            problems.append(f"{side}: ceiling-dominated (discriminating share {summary['discriminating_share']} "
+                            f"< {share_min}); a difference in effect would reflect headroom, not difficulty")
+    lows = [r["ci"][0] for r in result.values() if r.get("ci")]
+    highs = [r["ci"][1] for r in result.values() if r.get("ci")]
+    if problems:
+        entry["conclusion"], entry["reason"] = "inconclusive", "; ".join(problems)
+    elif entry.get("ci") is None:
+        entry["conclusion"] = "inconclusive"
+        entry.setdefault("reason", "fewer than two tasks in a stratum: no interval")
+    elif len(lows) == 3 and min(lows) > 0:
+        entry["conclusion"] = "effect_larger_in_" + high
+    elif len(highs) == 3 and max(highs) < 0:
+        entry["conclusion"] = "effect_smaller_in_" + high
+    else:
+        entry["conclusion"] = "inconclusive"
+        entry["reason"] = ("the interval includes 0, or its sign changes when non-valid slots are imputed "
+                           "as failures or successes")
+    return entry
 
 
 def analyse_outcome(cells_by_task, info, plan, outcome, missing=(), discovery_order=None):
@@ -674,8 +722,8 @@ def analyse_outcome(cells_by_task, info, plan, outcome, missing=(), discovery_or
     per_task = {}
     for task, cell in sorted(cells_by_task.items()):
         meta = info[task]
-        cell.setdefault("agent_failures", {"control": 0, "treatment": 0})
-        cell.setdefault("scope_failures", {"control": 0, "treatment": 0})
+        for k in ("agent_failures", "scope_failures", "tamper_failures"):
+            cell.setdefault(k, {"control": 0, "treatment": 0})
         control, treatment, _ = _arms(cell)
         entry = {"tier": meta["tier"], "set": meta["set"], "provenance": meta["provenance"],
                  "n_control": len(cell["control"]), "n_treatment": len(cell["treatment"]),
@@ -711,6 +759,7 @@ def analyse(rows, problems, loaded):
     sets = set(plan["inference_sets"])
     strict = _is_confirmatory_design(plan, info)
     label = ("confirmatory" if purpose == "confirmation" else "estimation") if strict else "exploratory"
+    contrast = plan["power"]["contrast"] if label == "confirmatory" else None
     primary = plan["primary_outcome"]
     outcomes = [primary] + [o for o in plan.get("secondary_outcomes") or [] if o != primary]
     by_factor = {}
@@ -727,6 +776,7 @@ def analyse(rows, problems, loaded):
         "label": label,
         "plan_status": plan["status"],
         "plan_purpose": purpose,
+        "confirmatory_contrast": contrast,
         "plan_sha256": loaded.get("plan_sha256"),
         "rubric_sha256": loaded["rubric_sha256"],
         "ratings_sha256": loaded.get("ratings_sha256"),
@@ -752,10 +802,11 @@ def analyse(rows, problems, loaded):
         missing = sorted(inference_tasks - set(cells[primary][model]))
         if missing and strict:
             raise DifficultyError(f"{model}: pre-registered confirmatory tasks have no slots: {missing}")
-        report["by_model"][model] = {
-            ("primary:" if o == primary else "secondary:") + o:
-                analyse_outcome(cells[o].get(model, {}), info, plan, o, missing, discovery_order)
-            for o in outcomes}
+        report["by_model"][model] = {}
+        for o in outcomes:
+            result = analyse_outcome(cells[o].get(model, {}), info, plan, o, missing, discovery_order)
+            _mark_inference(result, label, contrast if o == primary else None)
+            report["by_model"][model][("primary:" if o == primary else "secondary:") + o] = result
         report["by_model"][model]["missing_inference_tasks"] = missing
     report["interpretation"] = (
         "The skill effect is treatment - control within one model, estimated per task and averaged with equal task "
@@ -771,6 +822,16 @@ def analyse(rows, problems, loaded):
            "exploratory": "EXPLORATORY: the plan is not frozen, the inference set is not the confirmatory set, or a "
                           "rating was made after outcomes were seen."}[label])
     return report
+
+
+def _mark_inference(result, label, contrast):
+    """Every tier, level and contrast gets 'inference': only the one contrast the plan powered (primary outcome)
+    is 'confirmatory'; in a confirmatory plan everything else is 'estimation'."""
+    default = "estimation" if label in ("confirmatory", "estimation") else "exploratory"
+    for group in ("by_tier", "interaction", "by_discovery", "discovery_interaction"):
+        for name, entry in (result.get(group) or {}).items():
+            entry["inference"] = ("confirmatory" if contrast is not None and name == contrast
+                                  and group in ("by_tier", "interaction") else default)
 
 
 def calibration_feedback(rows, problems, loaded):

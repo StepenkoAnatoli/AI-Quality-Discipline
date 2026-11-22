@@ -329,8 +329,15 @@ def resolve_slots(schedule, captures, scores_dir):
             raise AnalysisError(f"{score_path}: blind_id {score.get('blind_id')!r} does not match its directory")
         resolution, detail = review_resolution(hidden, score)
         if resolution != "valid":
-            problems.append(dict(label, run_id=run["run_id"], status=resolution, problem=detail,
-                                 review_flags=hidden["review_flags"]))
+            item = dict(label, run_id=run["run_id"], status=resolution, problem=detail, review_flags=hidden["review_flags"])
+            if resolution == "excluded":
+                # Used only by the difficulty analysis: a confirmed verdict counts as the agent's failure only if it
+                # names exactly the scored code and has a scorer_id. Exclusion itself is unchanged.
+                item["tamper_verified"] = bool(
+                    score.get("tamper_review") == "confirmed"
+                    and score.get("tamper_review_subject") == hidden["review_subject_sha256"]
+                    and isinstance(score.get("scorer_id"), str) and score["scorer_id"].strip())
+            problems.append(item)
             continue
         primary = hidden["primary"]
         row = dict(label, run_id=run["run_id"], blind_id=run["blind_id"], status="valid",

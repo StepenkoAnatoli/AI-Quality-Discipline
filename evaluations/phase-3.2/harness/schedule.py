@@ -24,7 +24,7 @@ Design (pre-registered):
     schedule is reproduced byte for byte): which arm runs first is balanced
     instead of drawn independently per block. For every model and task, the
     treatment-first blocks number floor(reps/2) or ceil(reps/2); the odd extras
-    are split so the whole schedule differs by at most one; which blocks get
+    are split so each model, and the whole schedule, differ by at most one; which blocks get
     which order is random. This removes the arm/position confound (in Phase 3.2
     treatment ran first in 4/4 pairs by chance).
 The seed is generated with the OS CSPRNG unless given, and is recorded.
@@ -47,20 +47,30 @@ GROUPS = ("control", "treatment")
 
 
 def _balanced_first_arms(rng, blocks, repetitions):
-    """{block: arm that runs first}, balanced per (model, task) and overall (see the module docstring)."""
-    pairs = sorted({(model, task) for model, task, _ in blocks})
-    extras = []
-    if repetitions % 2:
-        extras = ["treatment"] * (len(pairs) // 2) + ["control"] * (len(pairs) - len(pairs) // 2)
-        rng.shuffle(extras)
+    """{block: arm that runs first}, balanced per (model, task), per model and overall (module docstring).
+
+    With odd repetitions each (model, task) has one 'extra' block. Within a model the extras are split evenly;
+    when a model has an odd number of tasks, its leftover extra alternates between arms across models (random
+    start), so the whole schedule also differs by at most one."""
+    models = sorted({model for model, _, _ in blocks})
+    odd_arm = rng.choice(GROUPS)
     first = {}
-    for index, (model, task) in enumerate(pairs):
-        arms = ["treatment"] * (repetitions // 2) + ["control"] * (repetitions // 2)
+    for model in models:
+        tasks = sorted({task for m, task, _ in blocks if m == model})
+        extras = []
         if repetitions % 2:
-            arms.append(extras[index])
-        rng.shuffle(arms)
-        for rep, arm in zip(range(1, repetitions + 1), arms):
-            first[(model, task, rep)] = arm
+            extras = ["treatment"] * (len(tasks) // 2) + ["control"] * (len(tasks) // 2)
+            if len(tasks) % 2:
+                extras.append(odd_arm)
+                odd_arm = "control" if odd_arm == "treatment" else "treatment"
+            rng.shuffle(extras)
+        for index, task in enumerate(tasks):
+            arms = ["treatment"] * (repetitions // 2) + ["control"] * (repetitions // 2)
+            if repetitions % 2:
+                arms.append(extras[index])
+            rng.shuffle(arms)
+            for rep, arm in zip(range(1, repetitions + 1), arms):
+                first[(model, task, rep)] = arm
     return first
 
 
@@ -177,6 +187,8 @@ def validate(schedule):
         if unbalanced(list(first.values())):
             problems.append("counterbalanced schedule: treatment-first and control-first blocks differ by more than one")
         for model in models:
+            if unbalanced([r for r in first.values() if r["model"] == model]):
+                problems.append(f"counterbalanced schedule: {model} first arms are not balanced")
             for task in tasks:
                 if unbalanced([r for r in first.values() if r["model"] == model and r["task"] == task]):
                     problems.append(f"counterbalanced schedule: {model}/{task} first arms are not balanced")

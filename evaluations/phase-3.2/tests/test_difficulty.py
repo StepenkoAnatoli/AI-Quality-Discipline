@@ -500,10 +500,17 @@ def scope_violation(task, group, reasons=("immutable files changed or missing",)
             "attempts": [{"run_id": f"{task}-{group}", "valid": False, "invalid_reasons": list(reasons)}]}
 
 
-def tamper(task, group, verdict, model=MODEL):
+def tamper(task, group, verdict, model=MODEL, verified=None):
+    """An excluded slot as analyze.resolve_slots reports it; tamper_verified means the confirmed verdict names the
+    scored code and has a scorer_id."""
     return {"model": model, "task": task, "group": group, "slot": f"{task}-{group}", "run_id": f"{task}-{group}",
             "status": "excluded", "problem": f"tamper review: {verdict}", "review_flags": {},
+            "tamper_verified": verdict == "confirmed" if verified is None else verified,
             "attempts": [{"run_id": f"{task}-{group}", "valid": True, "invalid_reasons": []}]}
+
+
+POWER = {"contrast": "hard - easy", "power": 0.85, "assumed_tasks_per_tier": 2,
+         "source": {"path": "power_sim-output.txt", "sha256": "ab" * 32}}
 
 
 def axis_rubric():
@@ -625,6 +632,43 @@ class ReviewDefectRegressionTests(unittest.TestCase):
         for item in ambiguous:
             self.assertEqual(d.attribution(item), "unattributed", item)
 
+    def test_unverified_confirmed_tamper_is_not_attributed(self):
+        # A confirmed verdict that does not name the scored code, or has no scorer_id, is not trusted as an outcome.
+        item = tamper("H1", "control", "confirmed", verified=False)
+        self.assertEqual(d.attribution(item), "unattributed")
+        self.assertEqual(d.attribution(dict(item, tamper_verified="yes")), "unattributed")
+        self.assertEqual(d.attribution(tamper("H1", "control", "confirmed")), "agent")
+
+    def test_tamper_dependence_is_reported(self):
+        # Valid runs identical in both arms; two verified tamper verdicts per task in control decide the result.
+        tasks = {k: self.hard[k] for k in sorted(self.hard)[:6]}
+        rows, problems = [], []
+        for i, task in enumerate(sorted(tasks)):
+            for group in ("control", "treatment"):
+                rows += [row(task, group, 1), row(task, group, 1 if i % 2 else 0)]
+            problems += [tamper(task, "control", "confirmed")] * 2
+        hard = self.primary(d.analyse(rows, problems, loaded(tasks)))["by_tier"]["hard"]
+        self.assertEqual(hard["decision"], "benefit")
+        self.assertEqual(hard["tamper_failures"], {"control": 12, "treatment": 0})
+        self.assertNotEqual(hard["decision_if_tamper_slots_were_dropped"], "benefit")
+        self.assertTrue(hard["itt_dependent"])
+
+    def test_interaction_reports_itt_dependence(self):
+        tasks = {f"E{i}": rated(scores(0, 0, i % 2)) for i in range(6)}
+        tasks.update({f"H{i}": rated(scores(3, 3, 2 + i % 2)) for i in range(6)})
+        rows, problems = [], []
+        easy_treatment = {0: (1, 1), 1: (0, 0)}  # easy differences +0.5, -0.5, 0, 0, 0, 0: no effect, some spread
+        for i in range(6):
+            rows += [row(f"E{i}", "control", 1), row(f"E{i}", "control", 0)]
+            rows += [row(f"E{i}", "treatment", v) for v in easy_treatment.get(i, (1, 0))]
+            for group in ("control", "treatment"):  # hard: identical valid runs in both arms
+                rows += [row(f"H{i}", group, 1), row(f"H{i}", group, 1 if i % 2 else 0)]
+            problems += [scope_violation(f"H{i}", "control")] * 2
+        inter = self.primary(d.analyse(rows, problems, loaded(tasks)))["interaction"]["hard - easy"]
+        self.assertEqual(inter["conclusion"], "effect_larger_in_hard")
+        self.assertEqual(inter["conclusion_if_scope_violations_were_nonvalid"], "inconclusive")
+        self.assertTrue(inter["itt_dependent"])
+
     def test_tamper_is_never_imputed_as_a_success(self):
         tasks = {"H1": self.hard["H00"]}
         rows = [row("H1", "control", 0)]
@@ -641,7 +685,7 @@ class ReviewDefectRegressionTests(unittest.TestCase):
         self.assertEqual(hard["agent_failures"], {"control": 4, "treatment": 0})
         # Counting the control scope violations as failures gives a benefit; treating them as missing would not.
         self.assertEqual(hard["decision"], "benefit")
-        self.assertEqual(hard["decision_if_agent_failures_were_nonvalid"], "inconclusive")
+        self.assertEqual(hard["decision_if_scope_violations_were_nonvalid"], "inconclusive")
         self.assertTrue(hard["itt_dependent"])
 
     # --- P1: intrinsic difficulty and requirement discovery are separate axes.
@@ -702,12 +746,64 @@ class ReviewDefectRegressionTests(unittest.TestCase):
         plan["plan"]["purpose"] = "confirmation"
         with self.assertRaisesRegex(d.DifficultyError, "power"):
             d.check_plan_parameters(plan["plan"], "plan")
-        plan["plan"]["power"] = {"contrast": "hard - easy", "power": 0.5, "source": "power_sim.py"}
+        plan["plan"]["power"] = dict(POWER, power=0.5)
         with self.assertRaisesRegex(d.DifficultyError, "0.8"):
             d.check_plan_parameters(plan["plan"], "plan")
         plan["plan"]["power"]["power"] = 0.85
         d.check_plan_parameters(plan["plan"], "plan")
-        self.assertEqual(d.analyse(rows, [], plan)["label"], "confirmatory")
+        report = d.analyse(rows, [], plan)
+        self.assertEqual((report["label"], report["confirmatory_contrast"]), ("confirmatory", "hard - easy"))
+
+    def test_only_the_powered_contrast_is_confirmatory(self):
+        tasks = {f"E{i}": rated(scores(0, 0, i % 2)) for i in range(2)}
+        tasks.update({f"H{i}": rated(scores(3, 3, 2 + i % 2)) for i in range(2)})
+        rows = [row(t, g, 1) for t in tasks for g in ("control", "treatment")]
+        plan = loaded(tasks)
+        plan["plan"].update(purpose="confirmation", power=dict(POWER))
+        out = self.primary(d.analyse(rows, [], plan))
+        self.assertEqual(out["interaction"]["hard - easy"]["inference"], "confirmatory")
+        self.assertEqual(out["interaction"]["medium - easy"]["inference"], "estimation")
+        self.assertEqual({t["inference"] for t in out["by_tier"].values()}, {"estimation"})
+        for bad in ("anything", "hard - medium - easy", "easy - hard", ""):
+            plan["plan"]["power"] = dict(POWER, contrast=bad)
+            with self.assertRaisesRegex(d.DifficultyError, "contrast"):
+                d.analyse(rows, [], plan)
+        plan["plan"]["power"] = dict(POWER, contrast="hard")  # a tier on its own is a valid contrast
+        out = self.primary(d.analyse(rows, [], plan))
+        self.assertEqual(out["by_tier"]["hard"]["inference"], "confirmatory")
+        self.assertEqual(out["interaction"]["hard - easy"]["inference"], "estimation")
+        for broken in ({"source": "power_sim.py"}, {"assumed_tasks_per_tier": 1}, {"assumed_tasks_per_tier": True}):
+            plan["plan"]["power"] = dict(POWER, **broken)
+            with self.assertRaises(d.DifficultyError):
+                d.check_plan_parameters(plan["plan"], "plan")
+
+    def test_load_plan_pins_the_power_source_and_checks_the_assumed_task_count(self):
+        tmp = tempfile.mkdtemp(prefix="aqd-power-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        for name in ("difficulty-rubric.json", "ratings-historical.json"):
+            shutil.copy(os.path.join(PHASE33, name), tmp)
+        sim = os.path.join(tmp, "sim.txt")
+        with open(sim, "w", encoding="utf-8") as h:
+            h.write("simulated\n")
+        with open(os.path.join(PHASE33, "analysis-plan-historical.json"), encoding="utf-8") as h:
+            base = json.load(h)
+
+        def attempt(power):
+            plan = dict(base, purpose="confirmation", power=power)
+            path = os.path.join(tmp, "plan.json")
+            with open(path, "w", encoding="utf-8") as h:
+                json.dump(plan, h)
+            return d.load_plan(path)
+
+        good = {"contrast": "medium", "power": 0.9, "assumed_tasks_per_tier": 3,
+                "source": {"path": "sim.txt", "sha256": hashlib.sha256(b"simulated\n").hexdigest()}}
+        self.assertEqual(attempt(good)["plan"]["power"]["contrast"], "medium")  # three historical medium tasks
+        with self.assertRaisesRegex(d.DifficultyError, "pins"):
+            attempt(dict(good, source={"path": "sim.txt", "sha256": "00" * 32}))
+        with self.assertRaisesRegex(d.DifficultyError, "assumed"):
+            attempt(dict(good, assumed_tasks_per_tier=4))
+        with self.assertRaisesRegex(d.DifficultyError, "assumed"):
+            attempt(dict(good, contrast="hard - medium"))  # NEW-04 alone is the hard tier
 
     # --- P1: calibration feedback to task authors is control-only.
     def test_calibration_feedback_never_contains_treatment_results(self):
@@ -752,6 +848,35 @@ class ReviewDefectRegressionTests(unittest.TestCase):
         problems = schedule.validate(sched)
         self.assertTrue(any("not balanced" in p or "more than one" in p for p in problems), problems)
 
+    def test_counterbalance_is_balanced_within_each_model(self):
+        models = [MODEL, "xai/grok-4"]
+        tasks = ["NEW-01", "NEW-02", "NEW-03", "NEW-04"]
+        for seed in range(60):
+            sched = schedule.make_schedule(f"{seed:032x}", models, tasks, 3, counterbalance=True)
+            self.assertEqual(schedule.validate(sched), [])
+            first = {}
+            for run in sorted(sched["runs"], key=lambda r: r["order"]):
+                first.setdefault(run["block"], run)
+            for model in models:
+                mine = [r for r in first.values() if r["model"] == model]
+                treat = sum(r["group"] == "treatment" for r in mine)
+                self.assertLessEqual(abs(2 * treat - len(mine)), 1, (seed, model))
+
+    def test_validate_refuses_imbalance_within_one_model(self):
+        models = [MODEL, "xai/grok-4"]
+        sched = schedule.make_schedule("12" * 16, models, ["NEW-01", "NEW-02"], 1, counterbalance=True)
+        blocks = {}
+        for run in sched["runs"]:
+            blocks.setdefault(run["block"], []).append(run)
+        # Make model 1 all treatment-first and model 2 all control-first: balanced overall, not per model.
+        for pair in blocks.values():
+            pair.sort(key=lambda r: r["order"])
+            want = "treatment" if pair[0]["model"] == MODEL else "control"
+            if pair[0]["group"] != want:
+                pair[0]["order"], pair[1]["order"] = pair[1]["order"], pair[0]["order"]
+        problems = schedule.validate(sched)
+        self.assertTrue(any(MODEL in p and "not balanced" in p for p in problems), problems)
+
     def test_default_schedule_is_byte_for_byte_what_phase_32_produced(self):
         for args, expected in (
                 (("12" * 16, [MODEL], ["NEW-01", "NEW-02", "NEW-03", "NEW-04"], 1),
@@ -778,6 +903,22 @@ class ReviewDefectIntegrationTests(IntegrationBase):
         report = d.analyse(rows, problems, d.load_plan(self.plan))
         task = report["by_model"][MODEL]["primary:fully_correct"]["by_task"]["NEW-04"]
         self.assertEqual((task["agent_failures"]["treatment"], task["difference"]), (1, -1.0))
+
+    def test_confirmed_tamper_is_attributed_only_when_it_names_the_scored_code(self):
+        runs = self.sched["runs"]
+        targets = [r for r in runs if r["group"] == "control" and r["task"] in ("NEW-03", "NEW-04")]
+        for run in runs:
+            self.helper.put(run, fraction=1.0)
+        good, stale = targets
+        self.helper.put(good, fraction=1.0, score={"tamper_review": "confirmed", "tamper_review_subject": "ab" * 32,
+                                                   "scorer_id": "s1"})
+        self.helper.put(stale, fraction=1.0, score={"tamper_review": "confirmed", "tamper_review_subject": "cd" * 32,
+                                                    "scorer_id": "s1"})
+        _, problems = analyze.resolve_slots(self.sched, self.caps, self.scores)
+        by_run = {p["run_id"]: p for p in problems}
+        self.assertEqual({p["status"] for p in problems}, {"excluded"})
+        self.assertEqual(d.attribution(by_run[good["run_id"]]), "agent")
+        self.assertEqual(d.attribution(by_run[stale["run_id"]]), "unattributed")
 
     def test_calibration_feedback_option_writes_a_control_only_file(self):
         for run in self.sched["runs"]:

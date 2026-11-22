@@ -21,8 +21,11 @@ sits near the ceiling (Beta(40, 1), no effect): tasks that turned out not to be
 hard for the model. On the others the per-task effect is the tier effect plus
 Normal(0, tau) heterogeneity; the treatment probability is clipped to [0, 1], so
 the realised effect ("true_effect", averaged over simulations) can be smaller
-than the nominal one. Runs are Bernoulli. Non-valid slots are not simulated
-(their bounds only make decisions more conservative).
+than the nominal one. Runs are Bernoulli. Non-valid slots are not simulated. Infrastructure
+slots only widen the bounds, so they make decisions more conservative.
+Agent-caused failures (scope violations, confirmed tamper) count as 0s and
+can move a decision in either direction; their rates are unknown, so they
+are left out here, and the analysis reports itt_dependent for them instead.
 
 Every parameter is an assumption, not a measurement: no calibration data exists
 yet. The output is deterministic for a given seed.
