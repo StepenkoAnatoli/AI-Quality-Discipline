@@ -45,6 +45,11 @@ Effects are computed only within a model: treatment - control per (model,
 task), their unweighted mean per model, and an exact permutation p-value with
 labels permuted within task. The p-value is descriptive. Models are never
 compared with each other's control or treatment.
+
+Difficulty tiers (optional, --difficulty-plan PLAN): the per-task, per-tier and
+tier-interaction analysis in difficulty.py, from the same resolved slots, with
+non-valid slots carried into worst/best-case bounds. A plan, rubric or rating
+file that fails its checks is an error (exit 3, no report).
 """
 import argparse
 import itertools
@@ -52,6 +57,10 @@ import json
 import os
 import re
 import statistics
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import difficulty  # noqa: E402
 
 SECONDARY_DIMENSIONS = ("request_compliance", "evidence_verification", "scope_economy", "clarity_usability")
 SCORE_KIND = "aqd-phase-3.2-hidden-score"  # must match score_run.py
@@ -390,13 +399,17 @@ def main(argv=None):
     p.add_argument("--scores", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--allow-incomplete", action="store_true")
+    p.add_argument("--difficulty-plan", help="frozen difficulty plan (difficulty.py); adds report['difficulty']")
     args = p.parse_args(argv)
     try:
+        loaded = difficulty.load_plan(args.difficulty_plan) if args.difficulty_plan else None
         rows, problems = resolve_slots(_load(args.schedule), args.captures, args.scores)
-    except AnalysisError as exc:
+        report = analyse(rows, problems)
+        if loaded is not None:
+            report["difficulty"] = difficulty.analyse(rows, problems, loaded)
+    except (AnalysisError, difficulty.DifficultyError) as exc:
         print(f"analyze.py: ERROR: {exc}")
         return 3
-    report = analyse(rows, problems)
     with open(args.out, "w", encoding="utf-8") as h:
         json.dump(report, h, indent=2)
         h.write("\n")

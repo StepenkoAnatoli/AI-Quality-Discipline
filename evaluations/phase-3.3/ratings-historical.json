@@ -1,0 +1,132 @@
+{
+  "kind": "aqd-difficulty-ratings",
+  "schema_version": 1,
+  "rubric_sha256": "a2d70c2762241880937b6749d29848e8be7e6af10e54cf137d9262223bc94858",
+  "note": "POST HOC. Rated on 2026-11-22 by one rater (the audit session) after the A/B outcomes were known (all four tasks at the ceiling in both arms). These ratings are historical description only: the validator refuses them in any set other than 'historical', and they must never select or calibrate confirmatory tasks. A second, independent rating is outstanding.",
+  "tasks": {
+    "NEW-01": {
+      "provenance": "post_hoc",
+      "set": "historical",
+      "raters": [
+        {
+          "rater_id": "post-hoc-audit-2026-11-22",
+          "scores": {
+            "F1_interacting_requirements": 2,
+            "F2_state_space": 1,
+            "F3_cross_module": 0,
+            "F4_concurrency_failure": 3,
+            "F5_compatibility": 0,
+            "F6_requirement_discovery": 0,
+            "F7_verification_demand": 2,
+            "F8_existing_coverage": 2
+          }
+        }
+      ],
+      "consensus": {
+        "F1_interacting_requirements": 2,
+        "F2_state_space": 1,
+        "F3_cross_module": 0,
+        "F4_concurrency_failure": 3,
+        "F5_compatibility": 0,
+        "F6_requirement_discovery": 0,
+        "F7_verification_demand": 2,
+        "F8_existing_coverage": 2
+      },
+      "tier": "medium",
+      "notes": "Idempotency, atomic rollback and multi-process duplicate delivery interact (F1, F4). The prompt states all eight obligations, including the processed_events record and the connection state (F6 = 0). One file changes; store/outbox are read for context."
+    },
+    "NEW-02": {
+      "provenance": "post_hoc",
+      "set": "historical",
+      "raters": [
+        {
+          "rater_id": "post-hoc-audit-2026-11-22",
+          "scores": {
+            "F1_interacting_requirements": 2,
+            "F2_state_space": 1,
+            "F3_cross_module": 0,
+            "F4_concurrency_failure": 3,
+            "F5_compatibility": 0,
+            "F6_requirement_discovery": 0,
+            "F7_verification_demand": 2,
+            "F8_existing_coverage": 2
+          }
+        }
+      ],
+      "consensus": {
+        "F1_interacting_requirements": 2,
+        "F2_state_space": 1,
+        "F3_cross_module": 0,
+        "F4_concurrency_failure": 3,
+        "F5_compatibility": 0,
+        "F6_requirement_discovery": 0,
+        "F7_verification_demand": 2,
+        "F8_existing_coverage": 2
+      },
+      "tier": "medium",
+      "notes": "Validation order, all-or-nothing and 8-process overselling interact. Every obligation, including error precedence and the reservation-id format, is in the prompt (F6 = 0)."
+    },
+    "NEW-03": {
+      "provenance": "post_hoc",
+      "set": "historical",
+      "raters": [
+        {
+          "rater_id": "post-hoc-audit-2026-11-22",
+          "scores": {
+            "F1_interacting_requirements": 3,
+            "F2_state_space": 2,
+            "F3_cross_module": 0,
+            "F4_concurrency_failure": 0,
+            "F5_compatibility": 2,
+            "F6_requirement_discovery": 0,
+            "F7_verification_demand": 1,
+            "F8_existing_coverage": 2
+          }
+        }
+      ],
+      "consensus": {
+        "F1_interacting_requirements": 3,
+        "F2_state_space": 2,
+        "F3_cross_module": 0,
+        "F4_concurrency_failure": 0,
+        "F5_compatibility": 2,
+        "F6_requirement_discovery": 0,
+        "F7_verification_demand": 1,
+        "F8_existing_coverage": 2
+      },
+      "tier": "medium",
+      "notes": "18 numbered clauses with an explicit precedence order; parser state (quoting, line numbers) and real-world CSV compatibility. No concurrency. The prompt is a complete contract (F6 = 0)."
+    },
+    "NEW-04": {
+      "provenance": "post_hoc",
+      "set": "historical",
+      "raters": [
+        {
+          "rater_id": "post-hoc-audit-2026-11-22",
+          "scores": {
+            "F1_interacting_requirements": 3,
+            "F2_state_space": 2,
+            "F3_cross_module": 0,
+            "F4_concurrency_failure": 3,
+            "F5_compatibility": 2,
+            "F6_requirement_discovery": 0,
+            "F7_verification_demand": 3,
+            "F8_existing_coverage": 2
+          }
+        }
+      ],
+      "consensus": {
+        "F1_interacting_requirements": 3,
+        "F2_state_space": 2,
+        "F3_cross_module": 0,
+        "F4_concurrency_failure": 3,
+        "F5_compatibility": 2,
+        "F6_requirement_discovery": 0,
+        "F7_verification_demand": 3,
+        "F8_existing_coverage": 2
+      },
+      "tier": "medium",
+      "notes": "Lease state machine with expiry, retries, dedupe, legacy NULL-lease jobs, multi-process claims. Intrinsically the most complex (composite 15 would be 'hard'), but the 18-clause prompt specifies every obligation including tie-break order (F6 = 0), so the hard-tier gate demotes it to medium."
+    }
+  }
+}

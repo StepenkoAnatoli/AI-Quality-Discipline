@@ -1,0 +1,6 @@
+# Canonical skills are hashed byte-for-byte (the Phase 3.2 run records and the
+# A/B treatment attach skills/code-discipline/SKILL.md by SHA-256), and
+# scripts/install.py requires LF front matter. A Windows checkout with
+# core.autocrlf=true would otherwise produce CRLF files that the installer
+# rejects and whose hash differs (Phase 3.2 risk R13).
+skills/**/SKILL.md text eol=lf

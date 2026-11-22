@@ -314,6 +314,8 @@ Exit gate: a new user can install one or all skills without silently losing exis
 
 Exit gate: validators are tested, and benchmark claims are reproducible from published methodology.
 
+- [ ] Phase 3.3 (draft, 2026-11-22): difficulty-aware evaluation. The four Phase 3.2 Claude A/B pairs ran on Linux (runs 44935143378, 44960610733, 44963571385, 44980786824) and reached the ceiling in both arms (`evaluations/phase-3.2/AB-RESULTS.md`), so the Phase 3.2 status sentence above ("there has been no Claude/Grok run yet") is out of date. Rubric, post-hoc tier ratings and the task-level tier analysis (`analyze.py --difficulty-plan`) are implemented offline. Design, stages, power and budget are in `evaluations/phase-3.3/DESIGN.md`; no Phase 3.3 run is approved.
+
 ### Phase 4 — MCP
 - [ ] Confirm use cases not adequately served by skills and scripts.
 - [ ] Specify narrow MCP tool contracts.

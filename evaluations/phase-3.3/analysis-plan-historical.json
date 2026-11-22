@@ -1,0 +1,31 @@
+{
+  "kind": "aqd-difficulty-plan",
+  "schema_version": 1,
+  "status": "draft",
+  "note": "Exploratory description of the historical Phase 3.2 tasks only. Not a confirmatory plan: the confirmatory plan is frozen (status 'frozen', inference_sets ['confirmatory'], prospective ratings by two raters) before any confirmatory run, per DESIGN.md section 9.",
+  "rubric": {
+    "path": "difficulty-rubric.json",
+    "sha256": "a2d70c2762241880937b6749d29848e8be7e6af10e54cf137d9262223bc94858"
+  },
+  "ratings": [
+    {
+      "path": "ratings-historical.json",
+      "sha256": "a067b09077873c0d3a059cfd2bb1d4c71f147ea5c689039fe2126d2d5880c138"
+    }
+  ],
+  "primary_outcome": "fully_correct",
+  "secondary_outcomes": [
+    "hidden_pass_fraction"
+  ],
+  "confidence": 0.95,
+  "mid": 0.2,
+  "harm": 0.1,
+  "inference_sets": [
+    "historical"
+  ],
+  "tier_order": [
+    "easy",
+    "medium",
+    "hard"
+  ]
+}

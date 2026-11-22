@@ -18,6 +18,7 @@ def make_repo(root: Path, version: str = "v1") -> Path:
         (folder / "SKILL.md").write_text(
             f"---\nname: {name}\ndescription: test skill\n---\n\n# {name}\n\n{version}\n",
             encoding="utf-8",
+            newline="\n",  # LF on every platform: write_text would emit CRLF on Windows (risk R13)
         )
     return repo
 

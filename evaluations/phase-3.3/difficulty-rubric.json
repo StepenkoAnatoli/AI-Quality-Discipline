@@ -1,0 +1,110 @@
+{
+  "kind": "aqd-difficulty-rubric",
+  "schema_version": 1,
+  "version": "1.0-draft",
+  "status_note": "DRAFT. Not ratified. Equal weights by default (no data exists to estimate weights). The require_min gate on the hard tier was added after seeing NEW-04 reach the ceiling with a complete specification; it must be validated on calibration tasks before the confirmatory set is rated. File count, lines of code and number of hidden checks are deliberately not factors.",
+  "scale": [0, 3],
+  "factors": [
+    {
+      "id": "F1_interacting_requirements",
+      "weight": 1,
+      "question": "How many behavioural requirements must hold at once, and how strongly does satisfying one constrain another?",
+      "measure": "Count requirements in the prompt plus repository obligations; mark pairs where one requirement changes how another must be implemented (e.g. idempotency x atomicity).",
+      "anchors": {
+        "0": "One requirement, or several independent ones.",
+        "1": "Several requirements, at most one interacting pair.",
+        "2": "Several interacting pairs; an ordering or precedence rule exists.",
+        "3": "Requirements form a web: most of them constrain each other's implementation."
+      }
+    },
+    {
+      "id": "F2_state_space",
+      "weight": 1,
+      "question": "How large is the state space the change must handle correctly?",
+      "measure": "Number of persistent states and legal transitions the correct solution must respect, including legacy states.",
+      "anchors": {
+        "0": "Stateless or a single state.",
+        "1": "A few states with obvious transitions.",
+        "2": "An explicit state machine with conditional transitions.",
+        "3": "A state machine with time-dependent or externally driven transitions (leases, retries, expiry) and legacy states."
+      }
+    },
+    {
+      "id": "F3_cross_module",
+      "weight": 1,
+      "question": "How many modules must be understood or changed for a correct solution?",
+      "measure": "Modules whose behaviour a correct solution depends on and that the prompt does not describe; modules that must change. Reading a module for context counts only if its behaviour is load-bearing.",
+      "anchors": {
+        "0": "One module, self-contained.",
+        "1": "One module changed; one other module's behaviour is load-bearing.",
+        "2": "Two or three modules changed, or several load-bearing callers.",
+        "3": "Changes across components with an interface between them that must stay consistent."
+      }
+    },
+    {
+      "id": "F4_concurrency_failure",
+      "weight": 1,
+      "question": "Must the solution be correct under concurrency, partial failure or crash recovery?",
+      "measure": "Which of: concurrent callers, partial failure mid-operation, crash and restart, retries from outside. Scored by the strongest that a correct solution must handle.",
+      "anchors": {
+        "0": "None.",
+        "1": "Errors must propagate cleanly; no concurrency.",
+        "2": "Concurrent callers or partial failure with rollback.",
+        "3": "Concurrency together with partial failure, crash recovery or time-based expiry."
+      }
+    },
+    {
+      "id": "F5_compatibility",
+      "weight": 1,
+      "question": "What existing data, interfaces or formats must keep working?",
+      "measure": "Public signatures, persisted data written by earlier versions, wire or file formats, behaviour callers rely on.",
+      "anchors": {
+        "0": "None beyond the signature.",
+        "1": "Public interface or one existing behaviour must be preserved.",
+        "2": "Legacy data or formats must be read correctly.",
+        "3": "Legacy data and live callers must both keep working during or after the change."
+      }
+    },
+    {
+      "id": "F6_requirement_discovery",
+      "weight": 1,
+      "question": "What share of the obligations a correct solution must meet is discoverable only from the repository rather than read from the prompt?",
+      "measure": "For each hidden-check obligation, the task author records whether the prompt states it or a repository artifact (file:line of code, caller, test, document) establishes it. Every obligation must have one of the two: hiding necessary information is forbidden. Score the repository-only share.",
+      "anchors": {
+        "0": "The prompt enumerates essentially every obligation (specification translation).",
+        "1": "A few obligations follow from the repository.",
+        "2": "Roughly a third to a half come from the repository (callers, invariants, existing tests, docs).",
+        "3": "Most edge-case obligations must be found in the repository; the prompt states the goal and constraints."
+      }
+    },
+    {
+      "id": "F7_verification_demand",
+      "weight": 1,
+      "question": "How hard is it for the agent to establish that its solution is correct?",
+      "measure": "Whether the visible tests already exercise the hard behaviour, or the agent must build its own harness (multi-process races, fault injection, clock control, legacy fixtures).",
+      "anchors": {
+        "0": "Visible tests or one obvious manual check suffice.",
+        "1": "A few new unit tests suffice.",
+        "2": "Needs a non-trivial harness (fault injection, fixtures for legacy data).",
+        "3": "Needs multi-process or timing harnesses whose own correctness is non-obvious."
+      }
+    },
+    {
+      "id": "F8_existing_coverage",
+      "weight": 1,
+      "question": "How well do the existing visible tests protect the behaviour that could regress?",
+      "measure": "Inverse coverage of the regression surface by the visible tests.",
+      "anchors": {
+        "0": "The regression surface is well covered.",
+        "1": "Mostly covered.",
+        "2": "Partly covered; regressions in important behaviour would pass the visible tests.",
+        "3": "Essentially uncovered."
+      }
+    }
+  ],
+  "tiers": [
+    {"name": "easy", "max_score": 7},
+    {"name": "medium", "max_score": 14},
+    {"name": "hard", "max_score": 24, "require_min": {"F6_requirement_discovery": 2}}
+  ]
+}
