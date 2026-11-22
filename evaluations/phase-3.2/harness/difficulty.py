@@ -12,8 +12,14 @@ non-valid slot) and a frozen pre-registration plan, and reports
   * per tier: mean of task differences with a t-interval over tasks
     (df = tasks - 1);
   * difficulty interaction: tier B - tier A (Welch interval over task
-    differences, df floored) for every pair of tiers, plus the hard - easy
-    contrast the hypothesis is about;
+    differences, df floored) for every pair of tiers, including the hard - easy
+    contrast the hypothesis is about. It gets the same protections as a tier:
+    no conclusion when either tier is at a ceiling or floor or has a missing
+    pre-registered task, no degenerate interval, and a direction only when the
+    interval excludes 0 under valid runs and under both non-valid-slot bounds;
+  * every pre-registered inference task must have slots for every model: a
+    frozen confirmatory plan with a missing task is an error, and in an
+    exploratory report the tier holding it is inconclusive;
   * bounds for non-valid slots: every invalid, excluded, unresolved or missing
     slot is imputed as a failure (0) or a success (1) in the direction least
     and most favourable to the treatment. A decision that changes under either
@@ -105,7 +111,7 @@ def t_quantile(p, df):
     """Inverse Student-t CDF by bisection (p in (0, 1), df >= 1)."""
     if not 0.0 < p < 1.0 or df < 1:
         raise ValueError("t_quantile needs 0 < p < 1 and df >= 1")
-    lo, hi = -1e4, 1e4
+    lo, hi = -1e7, 1e7
     for _ in range(200):
         mid = (lo + hi) / 2.0
         if t_cdf(mid, df) < p:
@@ -128,7 +134,8 @@ def _load_json(path, kind):
             data = json.load(handle)
     except (OSError, ValueError) as exc:
         raise DifficultyError(f"{path}: unreadable JSON ({exc})") from exc
-    if not isinstance(data, dict) or data.get("kind") != kind or data.get("schema_version") != 1:
+    version = data.get("schema_version") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("kind") != kind or not _is_int(version) or version != 1:
         raise DifficultyError(f"{path}: not a schema-1 {kind}")
     return data
 
@@ -170,7 +177,10 @@ def validate_rubric(rubric, where="rubric"):
         if previous is not None and tier["max_score"] <= previous:
             raise DifficultyError(f"{where}: tier max_score values must increase")
         previous = tier["max_score"]
-        for factor_id, minimum in (tier.get("require_min") or {}).items():
+        gate = tier.get("require_min", {})
+        if not isinstance(gate, dict):
+            raise DifficultyError(f"{where}: tier {tier['name']} require_min must be an object")
+        for factor_id, minimum in gate.items():
             if factor_id not in ids or not _is_int(minimum):
                 raise DifficultyError(f"{where}: tier {tier['name']} gate names unknown factor {factor_id!r}")
     top = sum(f["weight"] for f in factors) * scale[1]
@@ -245,19 +255,12 @@ def validate_ratings(ratings, rubric, rubric_sha, where="ratings"):
         if entry.get("tier") != computed:
             raise DifficultyError(f"{w}: stated tier {entry.get('tier')!r} but the rubric gives {computed!r} "
                                   f"(score {total}); tiers are computed, never overridden")
-        exact = within_one = pairs = 0
-        for i in range(len(raters)):
-            for j in range(i + 1, len(raters)):
-                for factor_id in consensus:
-                    gap = abs(raters[i]["scores"][factor_id] - raters[j]["scores"][factor_id])
-                    pairs += 1
-                    exact += gap == 0
-                    within_one += gap <= 1
+        # Per-factor rater gaps (one entry per rater pair), so a factor with poor anchors is visible.
+        gaps = {f["id"]: [abs(raters[i]["scores"][f["id"]] - raters[j]["scores"][f["id"]])
+                          for i in range(len(raters)) for j in range(i + 1, len(raters))]
+                for f in rubric["factors"]}
         out[task] = {"tier": computed, "score": total, "set": entry["set"], "provenance": entry["provenance"],
-                     "raters": len(raters),
-                     "agreement": None if not pairs else {"exact": round(exact / pairs, 4),
-                                                          "within_one": round(within_one / pairs, 4),
-                                                          "factor_pairs": pairs}}
+                     "raters": len(raters), "gaps": gaps}
     return out
 
 
@@ -269,14 +272,17 @@ def load_plan(path):
     for key in ("primary_outcome",):
         if plan.get(key) not in OUTCOMES:
             raise DifficultyError(f"{path}: {key} must be one of {OUTCOMES}")
-    for outcome in plan.get("secondary_outcomes") or []:
+    secondary = plan.get("secondary_outcomes", [])
+    if not isinstance(secondary, list):
+        raise DifficultyError(f"{path}: secondary_outcomes must be a list")
+    for outcome in secondary:
         if outcome not in OUTCOMES:
             raise DifficultyError(f"{path}: unknown secondary outcome {outcome!r}")
     for key in ("mid", "harm"):
         if not _is_number(plan.get(key)) or not 0 < plan[key] < 1:
             raise DifficultyError(f"{path}: {key} must be a number in (0, 1)")
-    if not _is_number(plan.get("confidence")) or not 0.5 < plan["confidence"] < 1:
-        raise DifficultyError(f"{path}: confidence must be in (0.5, 1)")
+    if not _is_number(plan.get("confidence")) or not 0.5 < plan["confidence"] <= 0.999:
+        raise DifficultyError(f"{path}: confidence must be in (0.5, 0.999]")
     sets = plan.get("inference_sets")
     if not isinstance(sets, list) or not sets or any(s not in SETS for s in sets):
         raise DifficultyError(f"{path}: inference_sets must name sets from {SETS}")
@@ -297,18 +303,20 @@ def load_plan(path):
     tier_order = plan.get("tier_order")
     if tier_order != [t["name"] for t in rubric["tiers"]]:
         raise DifficultyError(f"{path}: tier_order must list the rubric's tiers from easiest to hardest")
-    tasks = {}
+    tasks, ratings_sha = {}, []
     refs = plan.get("ratings")
     if not isinstance(refs, list) or not refs:
         raise DifficultyError(f"{path}: no rating files")
     for ref in refs:
-        ratings_path, _ = pinned(ref, "ratings")
+        ratings_path, digest = pinned(ref, "ratings")
+        ratings_sha.append(digest)
         for task, info in validate_ratings(_load_json(ratings_path, RATINGS_KIND), rubric, rubric_sha,
                                            ratings_path).items():
             if task in tasks:
                 raise DifficultyError(f"{path}: task {task} is rated in more than one file")
             tasks[task] = info
-    return {"plan": plan, "rubric": rubric, "rubric_sha256": rubric_sha, "tasks": tasks}
+    return {"plan": plan, "plan_sha256": _sha256(path), "rubric": rubric, "rubric_sha256": rubric_sha,
+            "ratings_sha256": ratings_sha, "tasks": tasks}
 
 
 # ------------------------------------------------------------ statistics
@@ -334,7 +342,8 @@ def welch(a, b, confidence):
     estimate = statistics.fmean(b) - statistics.fmean(a)
     se = math.sqrt(va + vb)
     if se == 0:
-        return {"estimate": round(estimate, 4), "ci": [round(estimate, 4)] * 2, "df": None}
+        return {"estimate": round(estimate, 4), "ci": None, "df": None,
+                "reason": "zero spread in both tiers: the interval is degenerate"}
     df = (va + vb) ** 2 / (va ** 2 / (len(a) - 1) + vb ** 2 / (len(b) - 1))
     df = max(1, math.floor(df))
     half = t_quantile(0.5 + confidence / 2, df) * se
@@ -394,7 +403,7 @@ def _task_difference(cell, impute=None):
     return statistics.fmean(treatment) - statistics.fmean(control)
 
 
-def analyse_outcome(cells_by_task, info, plan, outcome):
+def analyse_outcome(cells_by_task, info, plan, outcome, missing=()):
     confidence, mid, harm = plan["confidence"], plan["mid"], plan["harm"]
     sets = set(plan["inference_sets"])
     tier_order = plan["tier_order"]
@@ -426,9 +435,11 @@ def analyse_outcome(cells_by_task, info, plan, outcome):
     for tier in tier_order:
         values = by_tier[tier]
         if not values["valid"]:
-            tiers[tier] = {"tasks": 0, "decision": "inconclusive", "reason": "no task with valid runs in both arms"}
+            tiers[tier] = {"tasks": 0, "decision": "inconclusive", "reason": "no task with valid runs in both arms",
+                           "missing_tasks": sorted(t for t in missing if info[t]["tier"] == tier)}
             continue
         main = _interval(values["valid"], confidence)
+        absent = sorted(t for t in missing if info[t]["tier"] == tier)
         worst = _interval(values["worst"], confidence)
         best = _interval(values["best"], confidence)
         decisions = {"valid_only": decide(main, mid, harm), "worst_case": decide(worst, mid, harm),
@@ -439,10 +450,13 @@ def analyse_outcome(cells_by_task, info, plan, outcome):
                        "mean_task_difference": main["mean"], "sd": main["sd"],
                        "ci": main["ci"], "df": main["df"], "bounds_mean": [worst["mean"], best["mean"]],
                        "decisions": decisions, "robust_to_nonvalid": robust,
-                       "decision": decisions["valid_only"] if robust else "inconclusive"}
+                       "decision": decisions["valid_only"] if robust else "inconclusive",
+                       "missing_tasks": absent}
         # A ceiling (or floor) is not evidence of no effect, and a zero-spread interval is degenerate, not
         # precise. Both make the tier inconclusive whatever the interval says.
-        if main["n"] < 2:
+        if absent:
+            reason = f"pre-registered tasks have no slots for this model: {absent}"
+        elif main["n"] < 2:
             reason = "fewer than two tasks: no interval"
         elif discriminating < 2:
             reason = ("ceiling or floor: fewer than two tasks in which the runs were not all at the same extreme "
@@ -457,10 +471,34 @@ def analyse_outcome(cells_by_task, info, plan, outcome):
             tiers[tier]["decision"] = "inconclusive"
             tiers[tier]["reason"] = reason
 
+    # The interaction gets the same protections as a tier: no ceiling/floor tier, no missing pre-registered task,
+    # no degenerate interval, and a direction only if it survives the non-valid-slot bounds in both directions.
     interaction = {}
     for i, low in enumerate(tier_order):
         for high in tier_order[i + 1:]:
-            interaction[f"{high} - {low}"] = welch(by_tier[low]["valid"], by_tier[high]["valid"], confidence)
+            result = {key: welch(by_tier[low][key], by_tier[high][key], confidence)
+                      for key in ("valid", "worst", "best")}
+            entry = dict(result["valid"])
+            entry["bounds"] = {"worst_case": result["worst"], "best_case": result["best"]}
+            blocked = [t for t in (low, high)
+                       if tiers[t].get("missing_tasks") or tiers[t].get("discriminating_tasks", 0) < 2]
+            lows = [r["ci"][0] for r in result.values() if r.get("ci")]
+            highs = [r["ci"][1] for r in result.values() if r.get("ci")]
+            if blocked:
+                entry["conclusion"], entry["reason"] = "inconclusive", (
+                    f"tier(s) {blocked} have missing tasks or fewer than two discriminating tasks (ceiling or floor)")
+            elif entry.get("ci") is None:
+                entry["conclusion"] = "inconclusive"
+                entry.setdefault("reason", "fewer than two tasks in a tier: no interval")
+            elif len(lows) == 3 and min(lows) > 0:
+                entry["conclusion"] = "effect_larger_in_" + high
+            elif len(highs) == 3 and max(highs) < 0:
+                entry["conclusion"] = "effect_smaller_in_" + high
+            else:
+                entry["conclusion"] = "inconclusive"
+                entry["reason"] = ("the interval includes 0, or its sign changes when non-valid slots are imputed "
+                                   "as failures or successes")
+            interaction[f"{high} - {low}"] = entry
     return {"by_task": per_task, "by_tier": tiers, "interaction": interaction}
 
 
@@ -471,23 +509,43 @@ def analyse(rows, problems, loaded):
                     and all(m["provenance"] == "prospective" for m in info.values() if m["set"] in sets))
     primary = plan["primary_outcome"]
     outcomes = [primary] + [o for o in plan.get("secondary_outcomes") or [] if o != primary]
+    by_factor = {}
+    for meta in info.values():
+        for factor_id, gaps in (meta.get("gaps") or {}).items():
+            agg = by_factor.setdefault(factor_id, {"pairs": 0, "exact": 0, "within_one": 0})
+            agg["pairs"] += len(gaps)
+            agg["exact"] += sum(g == 0 for g in gaps)
+            agg["within_one"] += sum(g <= 1 for g in gaps)
+    agreement = {f: {"pairs": a["pairs"], "exact": round(a["exact"] / a["pairs"], 4),
+                     "within_one": round(a["within_one"] / a["pairs"], 4)}
+                 for f, a in sorted(by_factor.items()) if a["pairs"]}
     report = {
         "label": "confirmatory" if confirmatory else "exploratory",
         "plan_status": plan["status"],
+        "plan_sha256": loaded.get("plan_sha256"),
         "rubric_sha256": loaded["rubric_sha256"],
+        "ratings_sha256": loaded.get("ratings_sha256"),
         "inference_sets": sorted(sets),
         "thresholds": {"mid": plan["mid"], "harm": plan["harm"], "confidence": plan["confidence"]},
         "tiers": {t: sorted(k for k, m in info.items() if m["tier"] == t) for t in plan["tier_order"]},
-        "rating_agreement": {k: m["agreement"] for k, m in sorted(info.items())},
+        "rating_agreement_by_factor": agreement,
+        "rating_gaps_by_task": {k: m.get("gaps") for k, m in sorted(info.items())},
         "by_model": {},
     }
     cells = {outcome: _task_cells(rows, problems, outcome, info) for outcome in outcomes}
-    models = sorted(set(cells[plan["primary_outcome"]]))
+    models = sorted(set(cells[primary]))
+    inference_tasks = {t for t, m in info.items() if m["set"] in sets}
+    if confirmatory and not models:
+        raise DifficultyError("confirmatory plan, but no slot exists for any model")
     for model in models:
+        missing = sorted(inference_tasks - set(cells[primary][model]))
+        if missing and confirmatory:
+            raise DifficultyError(f"{model}: pre-registered confirmatory tasks have no slots: {missing}")
         report["by_model"][model] = {
-            ("primary:" if o == plan["primary_outcome"] else "secondary:") + o:
-                analyse_outcome(cells[o].get(model, {}), info, plan, o)
+            ("primary:" if o == primary else "secondary:") + o:
+                analyse_outcome(cells[o].get(model, {}), info, plan, o, missing)
             for o in outcomes}
+        report["by_model"][model]["missing_inference_tasks"] = missing
     report["interpretation"] = (
         "The skill effect is treatment - control within one model, estimated per task and averaged with equal task "
         "weight inside a tier. Intervals are over tasks (df = tasks - 1); repetitions narrow them only through the "

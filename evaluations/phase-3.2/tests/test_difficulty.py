@@ -5,6 +5,7 @@
 No network, no model, no Docker. Synthetic slots only; the committed Phase 3.3
 rubric, historical ratings and plan are loaded to pin them.
 """
+import hashlib
 import io
 import json
 import math
@@ -74,6 +75,9 @@ class TDistributionTests(unittest.TestCase):
         self.assertAlmostEqual(d.t_quantile(0.5, 7), 0.0, places=6)
         self.assertAlmostEqual(d.t_quantile(0.025, 3), -3.182446, places=5)
 
+    def test_extreme_quantiles_are_not_clamped(self):
+        self.assertAlmostEqual(d.t_quantile(0.9995, 1), 636.619, places=2)
+
     def test_rejects_bad_arguments(self):
         for p, df in ((0, 3), (1, 3), (0.5, 0)):
             with self.assertRaises(ValueError):
@@ -103,6 +107,7 @@ class RubricTests(unittest.TestCase):
         broken(lambda r: r["tiers"][1].update(max_score=2))
         broken(lambda r: r["tiers"][2].update(max_score=8))  # does not cover the maximum 9
         broken(lambda r: r["tiers"][2].update(require_min={"F9": 1}))
+        broken(lambda r: r["tiers"][2].update(require_min=["F3"]))
 
 
 class RatingsTests(unittest.TestCase):
@@ -122,7 +127,22 @@ class RatingsTests(unittest.TestCase):
         entry["consensus"] = scores(1, 1, 1)
         out = d.validate_ratings(self.ratings(T=entry), self.r, "ab" * 32)
         self.assertEqual(out["T"]["tier"], "easy")
-        self.assertEqual(out["T"]["agreement"], {"exact": round(1 / 3, 4), "within_one": 1.0, "factor_pairs": 3})
+        self.assertEqual(out["T"]["gaps"], {"F1": [0], "F2": [1], "F3": [1]})
+
+    def test_agreement_is_reported_per_factor_so_one_bad_factor_is_visible(self):
+        tasks = {}
+        for name in ("A", "B"):
+            entry = rated(scores(1, 1, 0))
+            entry["raters"][1]["scores"] = scores(1, 1, 3)
+            entry["consensus"] = scores(1, 1, 0)
+            entry["tier"] = d.tier_for(self.r, entry["consensus"])[0]
+            tasks[name] = entry
+        info = d.validate_ratings(self.ratings(**tasks), self.r, "ab" * 32)
+        report = d.analyse([], [], {"plan": loaded({})["plan"] | {"status": "draft"}, "rubric_sha256": "ab" * 32,
+                                    "tasks": info})
+        by_factor = report["rating_agreement_by_factor"]
+        self.assertEqual(by_factor["F1"], {"pairs": 2, "exact": 1.0, "within_one": 1.0})
+        self.assertEqual(by_factor["F3"], {"pairs": 2, "exact": 0.0, "within_one": 0.0})
 
     def test_post_hoc_rating_cannot_be_confirmatory_or_calibration(self):
         for task_set in ("confirmatory", "calibration"):
@@ -163,6 +183,35 @@ class CommittedPlanTests(unittest.TestCase):
         for info in out["tasks"].values():
             self.assertEqual((info["tier"], info["set"], info["provenance"]), ("medium", "historical", "post_hoc"))
 
+    def edited_plan(self, change):
+        tmp = tempfile.mkdtemp(prefix="aqd-diff-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        for name in ("difficulty-rubric.json", "ratings-historical.json"):
+            shutil.copy(os.path.join(PHASE33, name), tmp)
+        with open(os.path.join(PHASE33, "analysis-plan-historical.json"), encoding="utf-8") as h:
+            plan = json.load(h)
+        change(plan)
+        path = os.path.join(tmp, "plan.json")
+        with open(path, "w", encoding="utf-8") as h:
+            json.dump(plan, h)
+        return path
+
+    def test_malformed_plan_fields_are_difficulty_errors_not_crashes(self):
+        for change in (lambda p: p.update(secondary_outcomes=5), lambda p: p.update(schema_version=True),
+                       lambda p: p.update(confidence=0.9999), lambda p: p.update(ratings="x"),
+                       lambda p: p.update(rubric=[])):
+            with self.assertRaises(d.DifficultyError):
+                d.load_plan(self.edited_plan(change))
+
+    def test_report_records_plan_rubric_and_ratings_hashes(self):
+        path = os.path.join(PHASE33, "analysis-plan-historical.json")
+        out = d.load_plan(path)
+        with open(path, "rb") as h:
+            self.assertEqual(out["plan_sha256"], hashlib.sha256(h.read()).hexdigest())
+        report = d.analyse([], [], out)
+        self.assertEqual((report["plan_sha256"], report["ratings_sha256"]), (out["plan_sha256"], out["ratings_sha256"]))
+        self.assertEqual(len(report["ratings_sha256"]), 1)
+
     def test_plan_refuses_a_rubric_whose_hash_changed(self):
         tmp = tempfile.mkdtemp(prefix="aqd-diff-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
@@ -201,7 +250,7 @@ class AnalysisTests(unittest.TestCase):
         # Secondary outcome: pass fractions are already per task; a task with many checks has no extra weight.
         rows = [row("H1", "control", 0, frac=0.5), row("H1", "treatment", 0, frac=1.0),
                 row("H2", "control", 0, frac=0.9), row("H2", "treatment", 0, frac=0.9)]
-        report = d.analyse(rows, [], loaded(self.tasks))
+        report = d.analyse(rows, [], loaded({k: v for k, v in self.tasks.items() if k.startswith("H")}))
         secondary = report["by_model"][MODEL]["secondary:hidden_pass_fraction"]
         self.assertEqual(secondary["by_tier"]["hard"]["mean_task_difference"], 0.25)
 
@@ -223,22 +272,24 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(easy["decisions"]["valid_only"], "no_meaningful_effect")
         self.assertEqual(easy["decision"], "inconclusive")
         self.assertIn("ceiling or floor", easy["reason"])
+        # The easy tier is at the ceiling, so the interaction cannot be read even though hard shows a benefit.
         inter = out["interaction"]["hard - easy"]
         self.assertGreater(inter["estimate"], 0)
-        self.assertIsNotNone(inter["ci"])
-        self.assertEqual(out["by_tier"]["medium"], {"tasks": 0, "decision": "inconclusive",
+        self.assertEqual(inter["conclusion"], "inconclusive")
+        self.assertIn("ceiling or floor", inter["reason"])
+        self.assertEqual(out["by_tier"]["medium"], {"tasks": 0, "decision": "inconclusive", "missing_tasks": [],
                                                     "reason": "no task with valid runs in both arms"})
 
     def test_harm_is_detected(self):
         rows = []
         for task in ("H1", "H2"):
             rows += [row(task, "control", 1)] * 3 + [row(task, "treatment", 0)] * 3
-        tasks = dict(self.tasks, H3=rated(scores(3, 3, 2)))
+        tasks = dict({k: v for k, v in self.tasks.items() if k.startswith("H")}, H3=rated(scores(3, 3, 2)))
         rows += [row("H3", "control", 1)] * 2 + [row("H3", "treatment", 0), row("H3", "treatment", 1)]
         self.assertEqual(self.primary(d.analyse(rows, [], loaded(tasks)))["by_tier"]["hard"]["decision"], "harm")
 
     def test_nonvalid_slots_are_carried_into_bounds_and_can_force_inconclusive(self):
-        tasks = dict(self.tasks, H3=rated(scores(3, 3, 2)))
+        tasks = dict({k: v for k, v in self.tasks.items() if k.startswith("H")}, H3=rated(scores(3, 3, 2)))
         rows = []
         for task in ("H1", "H2"):
             rows += [row(task, "control", 0)] * 2 + [row(task, "treatment", 1)] * 2
@@ -266,7 +317,8 @@ class AnalysisTests(unittest.TestCase):
         for task in ("H1", "H2"):
             rows += [row(task, "control", 1), row(task, "control", 0),
                      row(task, "treatment", 1), row(task, "treatment", 0)]
-        hard = self.primary(d.analyse(rows, [], loaded(self.tasks)))["by_tier"]["hard"]
+        hard_tasks = {k: v for k, v in self.tasks.items() if k.startswith("H")}
+        hard = self.primary(d.analyse(rows, [], loaded(hard_tasks)))["by_tier"]["hard"]
         self.assertEqual((hard["sd"], hard["ci"]), (0.0, [0.0, 0.0]))
         self.assertEqual(hard["decision"], "inconclusive")
         self.assertIn("degenerate", hard["reason"])
@@ -274,7 +326,7 @@ class AnalysisTests(unittest.TestCase):
     def test_task_with_only_nonvalid_treatment_still_gets_worst_case_bound(self):
         rows = [row("H1", "control", 1), row("H1", "control", 1)]
         out = self.primary(d.analyse(rows, [problem("H1", "treatment"), problem("H1", "treatment")],
-                                     loaded(self.tasks)))
+                                     loaded({"H1": self.tasks["H1"]})))
         self.assertIsNone(out["by_task"]["H1"]["difference"])
         self.assertEqual(out["by_task"]["H1"]["bounds"], [-1.0, 0.0])
 
@@ -286,18 +338,70 @@ class AnalysisTests(unittest.TestCase):
 
     def test_label_is_exploratory_unless_frozen_confirmatory_and_prospective(self):
         rows = [row("E1", "control", 1), row("E1", "treatment", 1)]
-        self.assertEqual(d.analyse(rows, [], loaded(self.tasks))["label"], "confirmatory")
-        self.assertEqual(d.analyse(rows, [], loaded(self.tasks, status="draft"))["label"], "exploratory")
-        self.assertEqual(d.analyse(rows, [], loaded(self.tasks, sets=("confirmatory", "calibration")))["label"],
+        one = {"E1": self.tasks["E1"]}
+        self.assertEqual(d.analyse(rows, [], loaded(one))["label"], "confirmatory")
+        self.assertEqual(d.analyse(rows, [], loaded(one, status="draft"))["label"], "exploratory")
+        self.assertEqual(d.analyse(rows, [], loaded(one, sets=("confirmatory", "calibration")))["label"],
                          "exploratory")
 
     def test_tasks_outside_the_inference_sets_are_reported_but_not_inferred(self):
-        tasks = dict(self.tasks, C1=rated(scores(3, 3, 3), task_set="calibration"))
+        tasks = {"H1": self.tasks["H1"], "C1": rated(scores(3, 3, 3), task_set="calibration")}
         rows = [row("C1", "control", 0), row("C1", "treatment", 1), row("H1", "control", 1), row("H1", "treatment", 1)]
         out = self.primary(d.analyse(rows, [], loaded(tasks)))
         self.assertFalse(out["by_task"]["C1"]["in_inference"])
         self.assertEqual(out["by_tier"]["hard"]["tasks"], 1)
         self.assertEqual(out["by_tier"]["hard"]["mean_task_difference"], 0.0)
+
+    def test_interaction_needs_discriminating_tiers_and_is_never_degenerate(self):
+        rows = [row(t, g, 1) for t in self.tasks for g in ("control", "treatment")]
+        inter = self.primary(d.analyse(rows, [], loaded(self.tasks)))["interaction"]["hard - easy"]
+        self.assertIsNone(inter["ci"])
+        self.assertEqual(inter["conclusion"], "inconclusive")
+
+    def test_interaction_direction_must_survive_the_nonvalid_bounds(self):
+        tasks = {f"E{i}": rated(scores(0, 0, i % 2)) for i in range(4)}
+        tasks.update({f"H{i}": rated(scores(3, 3, 2 + i % 2)) for i in range(4)})
+        rows, problems = [], []
+        for i in range(4):  # easy: discriminating, no effect, a little spread
+            rows += [row(f"E{i}", "control", 1), row(f"E{i}", "control", 0)]
+            rows += [row(f"E{i}", "treatment", 1), row(f"E{i}", "treatment", i % 2)]
+        for i in range(4):  # hard: control fails, one treatment pass, two treatment slots excluded
+            rows += [row(f"H{i}", "control", 0)] * 2 + [row(f"H{i}", "treatment", 1)]
+            problems += [problem(f"H{i}", "treatment", "excluded")] * 2
+        inter = self.primary(d.analyse(rows, problems, loaded(tasks)))["interaction"]["hard - easy"]
+        self.assertGreater(inter["ci"][0], 0)  # valid runs alone would suggest a larger effect on hard tasks
+        self.assertIn("worst_case", inter["bounds"])
+        self.assertEqual(inter["conclusion"], "inconclusive")
+        self.assertIn("non-valid", inter["reason"])
+
+    def test_clear_interaction_is_reported(self):
+        tasks = {f"E{i}": rated(scores(0, 0, i % 2)) for i in range(4)}
+        tasks.update({f"H{i}": rated(scores(3, 3, 2 + i % 2)) for i in range(4)})
+        rows = []
+        for i in range(4):
+            rows += [row(f"E{i}", "control", 1), row(f"E{i}", "control", 0)]
+            rows += [row(f"E{i}", "treatment", 1), row(f"E{i}", "treatment", 0)] if i % 2 else \
+                    [row(f"E{i}", "treatment", 1), row(f"E{i}", "treatment", 1)]
+            rows += [row(f"H{i}", "control", 0)] * 2 + [row(f"H{i}", "treatment", 1)] * 2
+        rows[-1] = row("H3", "treatment", 0)
+        inter = self.primary(d.analyse(rows, [], loaded(tasks)))["interaction"]["hard - easy"]
+        self.assertEqual(inter["conclusion"], "effect_larger_in_hard")
+
+    def test_missing_preregistered_task_fails_confirmatory_and_blocks_exploratory_tiers(self):
+        rows = []
+        for task in ("H1", "H2"):
+            rows += [row(task, "control", 0)] * 2 + [row(task, "treatment", 1)] * 2
+        tasks = dict({k: v for k, v in self.tasks.items() if k.startswith("H")}, H3=rated(scores(3, 3, 2)))
+        with self.assertRaisesRegex(d.DifficultyError, r"no slots: \['H3'\]"):
+            d.analyse(rows, [], loaded(tasks))
+        report = d.analyse(rows, [], loaded(tasks, status="draft"))
+        self.assertEqual(report["by_model"][MODEL]["missing_inference_tasks"], ["H3"])
+        hard = self.primary(report)["by_tier"]["hard"]
+        self.assertEqual(hard["decisions"]["valid_only"], "benefit")
+        self.assertEqual(hard["decision"], "inconclusive")
+        self.assertIn("no slots", hard["reason"])
+        with self.assertRaisesRegex(d.DifficultyError, "no slot exists"):
+            d.analyse([], [], loaded(tasks))
 
     def test_decide(self):
         self.assertEqual(d.decide({"mean": 0.3, "ci": [0.05, 0.55]}, 0.2, 0.1), "benefit")

@@ -53,7 +53,7 @@ Not factors, on purpose: file count, lines of code, number of hidden checks, pro
 
 **Validating the tiers.**
 
-1. Two raters score each task independently, from the task repository and the private oracle map, before any model run on it and without seeing any model output. `difficulty.py` refuses a confirmatory task with fewer than two raters and reports per-factor agreement (exact and within one point). Agreement below 0.6 within one point on a factor means rewriting that factor's anchors, not averaging.
+1. Two raters score each task independently, from the task repository and the private oracle map, before any model run on it and without seeing any model output. `difficulty.py` refuses a confirmatory task with fewer than two raters and reports agreement per factor, pooled over tasks (exact and within one point, `rating_agreement_by_factor`), plus the raw rater gaps per task. Agreement below 0.6 within one point on a factor means rewriting that factor's anchors, not averaging.
 2. Feasibility: a competent engineer (not the rater) solves each task from the public material only, within the agent time budget, and the time is recorded. A task nobody solves within budget is dropped.
 3. Manipulation check, calibration tasks only: control success should fall from easy to hard. This checks the rubric. It never selects confirmatory tasks.
 
@@ -116,7 +116,7 @@ Stop rules after Stage 1, written before it runs:
 - Any oracle rejects an agent solution that an independent reviewer judges correct: fix the oracle in a new version, re-score separately (both scores kept, as for NEW-04), and re-validate that task family.
 - Any invalid-run rate above 10% from infrastructure: fix the harness before Stage 2.
 
-**Stage 2: confirmatory.** Precision from `power_sim.py` (seed 20261122, 3000 simulations; control success varying widely across hard tasks, Beta(1.5, 1.5); MID 0.20). These are assumptions, not measurements:
+**Stage 2: confirmatory.** Precision from `power_sim.py` (seed 20261122, 3000 simulations; control success varying widely across hard tasks, Beta(1.5, 1.5); MID 0.20). These are assumptions, not measurements. The simulation omits the ceiling, zero-spread and estimate ≥ MID guards, so its P(lower bound > 0) is an upper bound on the chance of a "benefit" decision:
 
 | Tasks/tier × runs/arm | Runs/tier | 95% half-width | P(lower bound > 0), true +0.20 | true +0.40 |
 |---|---|---|---|---|
@@ -160,8 +160,10 @@ Thresholds (owner to ratify; values in the frozen plan):
 
 - per task: arm means, `d_t`, non-valid slot counts, worst/best-case bounds;
 - per tier: mean of `d_t` with a t-interval over tasks (df = tasks − 1);
-- interaction: Welch intervals for every tier pair (df floored);
+- interaction: Welch intervals for every tier pair (df floored). It concludes `effect_larger_in_<tier>` or `effect_smaller_in_<tier>` only when the interval excludes 0 under valid runs **and** under both non-valid-slot bounds, and neither tier is at a ceiling or floor or missing a task. Otherwise it is inconclusive;
+- missing tasks: every pre-registered inference task must have slots for every model. A frozen confirmatory plan with a missing task is an error. In an exploratory report the tier is inconclusive and the task is listed;
 - decision per tier: **benefit** (lower bound > 0 and estimate ≥ MID), **harm** (upper bound < 0 and estimate ≤ −harm), **no_meaningful_effect** (interval inside (−harm, MID)), otherwise **inconclusive**. It is forced to inconclusive when the tier has fewer than two discriminating tasks (a task where every run in both arms is at the same extreme is at the ceiling or floor), when the task differences have zero spread (a degenerate interval), or when the decision changes under the non-valid-slot bounds;
+- the report records the SHA-256 of the plan, the rubric and every ratings file;
 - label "confirmatory" only for a frozen plan whose inference set is exactly the confirmatory set with prospective ratings, otherwise "exploratory".
 
 Run on the historical Phase 3.2 tasks, this rule reports the medium tier as **inconclusive (ceiling)**. It does not report "no effect" (pinned by `test_ceiling_result_is_reported_as_inconclusive_not_as_no_effect`).

@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Precision and power of the task-level paired analysis (offline, no model calls).
 
-    python evaluations/phase-3.3/power_sim.py [--sims 4000] [--seed 20261122]
+    python evaluations/phase-3.3/power_sim.py [--sims 3000] [--seed 20261122]
 
 Model. For each task, the control success probability is drawn from a Beta
 distribution (between-task heterogeneity); the treatment probability is the
 control probability plus a true effect `delta`, clipped to [0, 1]. Each arm
 gets `reps` independent runs (Bernoulli). The analysis is the one implemented
-in `evaluations/phase-3.2/harness/difficulty.py`: per-task difference of arm
-means, tier mean of task differences, t-interval over tasks (df = tasks - 1).
+in `evaluations/phase-3.2/harness/difficulty.py` without its extra guards:
+per-task difference of arm means, tier mean of task differences, t-interval
+over tasks (df = tasks - 1). The ceiling/floor, zero-spread and estimate >= MID
+rules are not applied, so P(lower > 0) is an upper bound on the probability of
+a "benefit" decision.
 
 What it answers. How wide the 95% interval for one tier is, and how often its
 lower bound clears 0 and the pre-registered minimum important difference, for
@@ -42,7 +45,7 @@ def simulate(rng, tasks, reps, delta, a, b):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--sims", type=int, default=4000)
+    p.add_argument("--sims", type=int, default=3000)
     p.add_argument("--seed", type=int, default=20261122)
     p.add_argument("--mid", type=float, default=0.20)
     args = p.parse_args(argv)
