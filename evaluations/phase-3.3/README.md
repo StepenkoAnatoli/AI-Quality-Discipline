@@ -6,10 +6,11 @@
 |---|---|
 | [AUDIT-2026-11-22.md](AUDIT-2026-11-22.md) | Verified state of Phase 3, contradicted documentation, why the four tasks hit the ceiling, evaluator gaps, risks |
 | [DESIGN.md](DESIGN.md) | Proposed design: hypotheses, rubric, 18-task portfolio, stages and stop rules, precision, metrics, thresholds, analysis, budget |
-| `difficulty-rubric.json` | Eight-factor difficulty rubric (0–3 anchors, equal weights, tier cut-points), machine-checked |
-| `ratings-historical.json` | **Post-hoc**, single-rater ratings of NEW-01..04 (all rate medium). Historical description only |
+| `difficulty-rubric.json` | Eight-factor difficulty rubric v1.1 (0–3 anchors, equal weights), machine-checked. Two axes: seven intrinsic factors set the tier; F6 (requirement discovery) is a separate level |
+| `ratings-historical.json` | **Post-hoc, exploratory**, single-rater ratings of NEW-01..04 (NEW-01..03 medium, NEW-04 hard; all "specified"). Historical description only |
 | `analysis-plan-historical.json` | Draft plan pinning the rubric and ratings by SHA-256, for an exploratory tier report of the Phase 3.2 data |
-| `power_sim.py` | Precision and power of the task-level analysis under stated assumptions |
+| `power_sim.py` | Operating characteristics of the real decision code (all guards, two tiers, interaction) under several variance assumptions; the share sweep behind `min_discriminating_share`; the stop-rule table |
+| `sim-output-2026-11-22.txt` | Output of the four `power_sim.py` reports quoted in DESIGN.md §6–§7 |
 
 The analysis code lives with the existing harness, so there is one evaluator and one analysis entry point:
 
@@ -17,7 +18,8 @@ The analysis code lives with the existing harness, so there is one evaluator and
 python evaluations/phase-3.2/harness/analyze.py --schedule S --captures C --scores D --out R.json \
     --difficulty-plan evaluations/phase-3.3/analysis-plan-historical.json
 python -m unittest discover -s evaluations/phase-3.2/tests -p "test_difficulty.py" -v
-python evaluations/phase-3.3/power_sim.py
+python evaluations/phase-3.3/power_sim.py designs      # also: share-sweep, scale, stop-rule
+python evaluations/phase-3.2/harness/schedule.py create --counterbalance ...   # Phase 3.3 schedules
 ```
 
 Changing the rubric or a ratings file changes its SHA-256, and the plan then refuses to load until the pin is updated deliberately.

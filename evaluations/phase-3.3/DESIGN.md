@@ -4,6 +4,18 @@
 
 Implemented offline in this change: the difficulty rubric (`difficulty-rubric.json`), post-hoc ratings of the historical tasks (`ratings-historical.json`), the task-level tier analysis (`../phase-3.2/harness/difficulty.py`, reached through `analyze.py --difficulty-plan`), its tests (`../phase-3.2/tests/test_difficulty.py`), and the power simulation (`power_sim.py`). Everything else below is a proposal.
 
+**Revision 2026-11-22 (review of `1912c0b`).** Seven defects were found and fixed, each with a regression test that failed on `1912c0b`:
+
+1. A tier mostly at the ceiling could read as "no meaningful effect". It now needs a minimum share of discriminating tasks, chosen by simulation (§6, §8).
+2. The interaction skipped each side's zero-spread guard. Both sides now get every tier guard (§8).
+3. Agent-caused failures were pooled with infrastructure failures in the 0/1 bounds. They now count as failures, intention to treat (§5, §8).
+4. The rubric mixed intrinsic difficulty and requirement discovery, and gated the hard tier on discovery after seeing NEW-04. These are now separate axes (§3, §4).
+5. The Stage 1 stop rule cited 8 control runs where the design had 4. The run count is now real and the rule's error rates are stated (§6).
+6. Calibration feedback could expose treatment results. Feedback is now control-only (§6).
+7. The power table omitted the decision guards and the interaction. It now runs the real decision code for two tiers under several variance assumptions (§6).
+
+In addition, future schedules can counterbalance run order (§5), and a frozen plan is labelled "estimation" unless it records adequate power (§8).
+
 ## 1. Question, hypotheses and estimands
 
 For one model M, interface version V and frozen skill S (`skills/code-discipline/SKILL.md`, SHA-256 `d050d00f…7ebc842`):
@@ -24,11 +36,11 @@ A higher control error rate on hard tasks is **not** evidence for H1. Only treat
 
 ## 2. Why Phase 3.2 hit the ceiling
 
-Section 3 of the audit report (`AUDIT-2026-11-22.md`) has the evidence. In short: the prompts are near-complete specifications (NEW-03 and NEW-04 enumerate 18 clauses each, including error precedence and tie-breaks). Each task changes one file. Every hidden check traces to a stated sentence. The NEW-04 "hard" task took both agent sessions together 6 min 45 s of a 45-min-per-run budget. With one run per arm and 4 tasks, a 100% vs 100% result cannot distinguish H0 from a small H1 or H2. Under the rubric below, all four historical tasks rate **medium**, and none is easy or hard.
+Section 3 of the audit report (`AUDIT-2026-11-22.md`) has the evidence. In short: the prompts are near-complete specifications (NEW-03 and NEW-04 enumerate 18 clauses each, including error precedence and tie-breaks). Each task changes one file. Every hidden check traces to a stated sentence. The NEW-04 "hard" task took both agent sessions together 6 min 45 s of a 45-min-per-run budget. With one run per arm and 4 tasks, a 100% vs 100% result cannot distinguish H0 from a small H1 or H2. Under the rubric below (v1.1, post-hoc), NEW-01..03 rate **medium** and NEW-04 rates **hard**. All four are at discovery level **specified**: the prompts state every obligation. The historical data therefore says nothing about tasks where requirements must be discovered.
 
 ## 3. Difficulty rubric
 
-`difficulty-rubric.json` (machine-checked by `difficulty.py`). Eight factors, each scored 0–3 against written anchors, equal weight (composite 0–24):
+`difficulty-rubric.json` (v1.1-draft, machine-checked by `difficulty.py`). Eight factors, each scored 0–3 against written anchors, equal weight. **Two axes:** F1–F5, F7 and F8 measure *intrinsic technical difficulty* (composite 0–21, which alone sets the tier). F6 measures *requirement-discovery burden*, a separate axis that is never added to the composite and never gates a tier:
 
 | Factor | What is measured |
 |---|---|
@@ -41,13 +53,15 @@ Section 3 of the audit report (`AUDIT-2026-11-22.md`) has the evidence. In short
 | F7 verification demand | how hard it is for the agent to establish correctness itself |
 | F8 existing coverage (inverse) | how little the visible tests protect the regression surface |
 
-Tiers: easy ≤ 7, medium 8–14, hard ≥ 15 **and** F6 ≥ 2. Below the gate a task is demoted to medium.
+Tiers (intrinsic composite): easy ≤ 6, medium 7–12, hard ≥ 13. These are the v1.0 cut-points (7/24 and 14/24 of the maximum) rescaled to 21, not fitted to data. Discovery level (F6): **specified** (0–1, the prompt states the obligations) or **discovered** (2–3, most obligations must be found in the repository). `difficulty.py` refuses a tier gate on a discovery factor.
 
 Not factors, on purpose: file count, lines of code, number of hidden checks, prompt length.
 
 **Weights.** Equal, because no data exists to estimate weights, and any other choice would be tuned by hand. Reweighting is allowed only before the confirmatory set is rated, and only with the reason recorded.
 
-**The F6 gate was informed by an observed outcome.** NEW-04 scores 15 on intrinsic complexity yet reached the ceiling in both arms, apparently because its prompt specified every obligation. That makes the gate a hypothesis: "a complete specification reduces hard engineering to translation". The calibration stage must test it (§6) before any confirmatory rating.
+**Why two axes.** Rubric v1.0-draft counted F6 in the composite *and* required F6 ≥ 2 for the hard tier. That gate was added after NEW-04 (intrinsic 15) reached the ceiling with a complete specification. It mixed two different explanations of difficulty, and it could rate a maximally complex but fully specified task as medium (21 points) and a task with no concurrency and no state machine but F6 = 3 as hard (18 points). The hypothesis behind the gate ("a complete specification reduces hard engineering to translation") is now a contrast the design measures: the effect by discovery level, and its interaction with the intrinsic tier (§4, §8). It is not an assumption built into the tiers.
+
+**Historical ratings are post hoc and exploratory.** NEW-01..04 were rated after their outcomes were known, by one rater, and re-scored against v1.1 without changing any factor score. `difficulty.py` refuses them in any set but "historical". The report lists them under `post_hoc_tasks`, and they never select, calibrate or tune confirmatory tasks.
 
 **F6 must not become hidden information.** For every hidden check the task author records where its obligation is established: a prompt sentence, or a repository artifact (`file:line` of code, a caller, a test, a document). An independent reviewer confirms each mapping before freezing. A check with no source is removed. This is the existing Phase 3.2 rule ("every hidden check traces to a stated requirement"), widened from the prompt to the repository.
 
@@ -60,6 +74,13 @@ Not factors, on purpose: file count, lines of code, number of hidden checks, pro
 ## 4. Task portfolio
 
 Eighteen tasks: six per tier. After all eighteen are built, oracle-validated, rated and frozen, a sealed random draw (seed recorded in advance, as in `schedule.py`) assigns two per tier to **calibration** and four per tier to **confirmatory**. The author therefore cannot steer hard tasks into either set, and calibration outcomes cannot select confirmatory tasks. If §6 recommends 6 confirmatory tasks per tier, build 8 per tier.
+
+**Discovery crossed with the tier.** Every task is built in two prompt variants over the same repository and the same private oracle:
+
+- **S (specified):** the prompt states every obligation behind a hidden check.
+- **D (discovered):** the prompt states the goal, the constraints and the acceptance criteria. Each other obligation is established by a repository artifact recorded in the oracle source map.
+
+Both variants are rated (they differ only in F6). The same sealed draw assigns each task one variant, half S and half D within each tier and set. This gives a balanced tier × discovery design at the task level. The author cannot choose which tasks get the harder prompt, and the effects of intrinsic difficulty (`by_tier`, `interaction`) and of discovery burden (`by_discovery`, `discovery_interaction`) are estimated separately. Running both variants of a task is not proposed: it doubles the runs, and the paired contrast would sit outside the task-level analysis.
 
 Public briefs only. The defect classes each oracle targets, the hidden checks and the reference solutions belong in the private pack, never here.
 
@@ -98,40 +119,102 @@ Reused unchanged from Phase 3.2 (SPECIFICATION.md §2, §4, §6; `.github/workfl
 
 Required harness changes. These are not implemented here, because they change the semantics of run validity, which must stay fixed for the historical Phase 3.2 records. Each needs its own version and tests:
 
-1. **Scope violations become an outcome, not an exclusion.** Today an edit to any immutable file makes the run INVALID (`run_status.py`), so a scope violation leaves the comparison. That is backwards for a skill whose rules include scope control. In 3.3: a valid run with `scope_violation: true` is scored on its mutable files, and `strictly_correct = fully_correct ∧ ¬scope_violation` is reported next to `fully_correct`.
+1. **Scope violations become an outcome, not an exclusion.** Today an edit to any immutable file makes the run INVALID (`run_status.py`), so a scope violation leaves the comparison. That is backwards for a skill whose rules include scope control. In 3.3: a valid run with `scope_violation: true` is scored on its mutable files, and `strictly_correct = fully_correct ∧ ¬scope_violation` is reported next to `fully_correct`. (Since the 2026-11-22 revision, the difficulty analysis already counts such a run as a failure of its arm, intention to treat; see below. What remains for the harness is scoring the run's mutable files, so `fully_correct` and `strictly_correct` can be reported separately.)
 2. **Unexpected new files** (recorded today in `workspace_findings.unexpected` but never reported) become a secondary outcome.
 3. **Results retention.** The Phase 3.2 encrypted artifacts have 1-day retention, so the evidence behind AB-RESULTS.md expires within a day of each run. In 3.3 the operator archives each encrypted bundle and records its SHA-256 next to the results, and a machine-readable per-run results file (scores, costs, validity, no code or transcripts) is committed with the report.
 
-Already handled in analysis (this change): a run that crashes the scorer, times out every check, is tamper-flagged, or is otherwise non-valid is carried into worst/best-case bounds. A tier decision that depends on how those slots are treated is reported as inconclusive.
+Already handled in analysis (this change):
+
+- **Agent-caused failures are outcomes, intention to treat.** The prompts say "Do not modify any other file". A slot whose run is invalid *only* because it changed or removed an immutable file counts as a failure (0) of its arm, and so does a run whose code a reviewer *confirmed* as tampering. They count in the estimate and in both bounds, so tampering is never imputed as a success.
+- **The ambiguous cases stay non-valid:**
+  - a scope violation that comes with any other invalidity reason;
+  - a suspected (unconfirmed) tamper verdict;
+  - a pending review;
+  - a crashed or erroring evaluator;
+  - provider or harness failures;
+  - missing runs.
+
+  These are carried into the worst/best-case bounds, and a decision that depends on them is inconclusive.
+- Each tier also reports `agent_failures` per arm and `decision_if_agent_failures_were_nonvalid`. `itt_dependent: true` marks a decision that rests on the scope-violation counting, so a "benefit" that comes from the control arm breaking the file rule is visible as such.
+- Run validity, slot accounting and the Phase 3.2 effects in `analyze.py` are unchanged. The attribution exists only inside the difficulty analysis.
+
+**Counterbalanced run order.** In Phase 3.2 the treatment ran first in 4 of 4 pairs, a 1-in-16 chance under fair draws, so arm and position were confounded. Phase 3.3 schedules are created with `schedule.py create --counterbalance`. For every model and task, the treatment-first blocks number ⌊reps/2⌋ or ⌈reps/2⌉; across the schedule they differ from the control-first blocks by at most one; the assignment to blocks is random. `schedule.validate` refuses a counterbalanced schedule that is not balanced. Without the flag, `schedule.py` reproduces every Phase 3.2 schedule byte for byte (pinned by a test).
 
 ## 6. Stages, precision and gates
 
 **Stage 0: offline, no spend.** Build the eighteen tasks; private oracle packs; oracle validation (§4); two-rater ratings; feasibility runs by an engineer; freeze; sealed calibration/confirmatory draw. Also add the three harness changes (§5) with tests.
 
-**Stage 1: calibration (24 runs).** Two tasks per tier, two runs per arm. Purpose: feasibility, oracle sanity on real agent code, cost per tier, and the manipulation check. It is not evidence about the skill and is never pooled with Stage 2.
+**Stage 1: calibration (28 runs).** Two tasks per tier, two runs per arm (24 runs), plus two extra **control-only** runs on each hard calibration task (4 runs), so that the stop rule below has 8 hard-task control runs. Purpose: feasibility, oracle sanity on real agent code, cost per tier, and the manipulation check. It is not evidence about the skill and is never pooled with Stage 2.
 
 Stop rules after Stage 1, written before it runs:
 
-- Calibration hard-task control success ≥ 0.9 (8 control runs on hard tasks): stop. The tasks are not hard for this model. Return to Stage 0 and do not spend on Stage 2.
-- Any oracle rejects an agent solution that an independent reviewer judges correct: fix the oracle in a new version, re-score separately (both scores kept, as for NEW-04), and re-validate that task family.
+- **Hard-task control success in ≥ 7 of the 8 hard control runs: stop.** The tasks are not hard for this model. Return to Stage 0 and do not spend on Stage 2. Operating characteristics (`power_sim.py stop-rule`), as P(stop | true control success p):
+
+  | Rule | p = 0.95 | 0.90 | 0.80 | 0.70 | 0.60 | 0.50 |
+  |---|---|---|---|---|---|---|
+  | **≥ 7 of 8 (adopted)** | 0.94 | 0.81 | 0.50 | 0.26 | 0.11 | 0.04 |
+  | ≥ 0.9 of 4 = 4/4 (the `1912c0b` rule as the runs actually were) | 0.81 | 0.66 | 0.41 | 0.24 | 0.13 | 0.06 |
+  | ≥ 0.9 of 8 = 8/8 | 0.66 | 0.43 | 0.17 | 0.06 | 0.02 | 0.00 |
+
+  The `1912c0b` text said "≥ 0.9 (8 control runs on hard tasks)", but Stage 1 had 2 × 2 = 4 hard control runs. With 4 runs, "≥ 0.9" only fires at 4/4, so a task that is really 90% solvable went on to Stage 2 34% of the time. A false stop costs a rebuild of tasks. A false continue spends Stage 2 (cap $140) on tasks that will hit the ceiling. "≥ 7 of 8" goes on with a 90%-solvable task 19% of the time and stops a 60%-solvable one 11% of the time.
+- Any oracle rejects an agent solution that an independent reviewer judges correct: fix the oracle in a new version, re-score separately (both scores kept, as for NEW-04), and re-validate that task family. The reviewer sees the code under its `blind_id`, never its arm.
 - Any invalid-run rate above 10% from infrastructure: fix the harness before Stage 2.
 
-**Stage 2: confirmatory.** Precision from `power_sim.py` (seed 20261122, 3000 simulations; control success varying widely across hard tasks, Beta(1.5, 1.5); MID 0.20). These are assumptions, not measurements. The simulation omits the ceiling, zero-spread and estimate ≥ MID guards, so its P(lower bound > 0) is an upper bound on the chance of a "benefit" decision:
+**Calibration feedback is control-only.** Task authors, and anyone else who can still change a task, see only the file written by `analyze.py --calibration-feedback` (`difficulty.calibration_feedback`):
 
-| Tasks/tier × runs/arm | Runs/tier | 95% half-width | P(lower bound > 0), true +0.20 | true +0.40 |
-|---|---|---|---|---|
-| 4 × 3 (proposed) | 24 | ±0.50 | 0.06 | 0.19 |
-| 6 × 2 | 24 | ±0.42 | 0.15 | 0.40 |
-| 12 × 1 | 24 | ±0.37 | 0.17 | 0.51 |
-| 8 × 3 | 48 | ±0.28 | 0.30 | 0.75 |
+- what it contains: per calibration task, control runs, successes, mean hidden pass fraction, agent failures and non-valid slots;
+- what it never contains: a treatment result, a treatment slot count or a treatment − control contrast.
+
+The full report and the treatment results stay sealed with the operator until the confirmatory analysis is complete. Nobody can therefore tune a task, its oracle or its prompt toward the arm that is winning.
+
+Any change to a task after Stage 1 needs three things:
+
+- a new task version;
+- a recorded reason that cites control-only evidence or a blind oracle dispute;
+- for a confirmatory task, a re-freeze of the plan before Stage 2, listed in the report.
+
+**Protecting the skill and the unseen tasks:**
+
+- The skill stays frozen at `d050d00f…` for the whole phase, and no Stage 1 result may revise it (§12).
+- Confirmatory task repositories, prompts and oracles stay unpublished until their Stage 2 runs are complete. Only the public briefs in §4 are released early.
+
+**Stage 2: estimation.** Operating characteristics from `power_sim.py designs` (seed 20261122, 2000 simulations per row). Every simulated data set goes through the real decision code, `difficulty.analyse_outcome`, with all its guards and on two tiers. The easy tier has no effect; the effect is on the hard tier. Two of the variance assumptions are shown here; the script prints a third, skewed toward easy tasks, where clipping shrinks the effect further:
+
+| Tasks/tier × runs/arm | Runs/tier | 95% half-width | P(benefit), nominal +0.20 / +0.40 | P(interaction "larger in hard"), +0.20 / +0.40 | P(false benefit), effect 0 |
+|---|---|---|---|---|---|
+| *Control success across tasks Beta(4, 4), heterogeneity τ = 0.15* | | | | | |
+| 4 × 3 | 24 | ±0.57 | 0.06 / 0.21 | 0.07 / 0.17 | 0.01 |
+| 6 × 2 | 24 | ±0.47 | 0.16 / 0.44 | 0.08 / 0.20 | 0.03 |
+| 12 × 1 | 24 | ±0.40 | 0.15 / 0.47 | 0.02 / 0.06 | 0.02 |
+| 8 × 3 | 48 | ±0.32 | 0.25 / 0.69 | 0.15 / 0.39 | 0.03 |
+| 25 × 2 | 100 | ±0.19 | 0.48 / 0.97 | 0.28 / 0.77 | 0.02 |
+| *Control success Beta(1.5, 1.5), τ = 0* | | | | | |
+| 4 × 3 | 24 | ±0.50 | 0.05 / 0.16 | 0.07 / 0.15 | 0.01 |
+| 6 × 2 | 24 | ±0.42 | 0.14 / 0.38 | 0.07 / 0.17 | 0.02 |
+| 12 × 1 | 24 | ±0.37 | 0.18 / 0.50 | 0.01 / 0.03 | 0.03 |
+| 8 × 3 | 48 | ±0.28 | 0.28 / 0.74 | 0.16 / 0.43 | 0.03 |
+| 25 × 2 | 100 | ±0.17 | 0.48 / 0.97 | 0.32 / 0.78 | 0.01 |
 
 What this means:
 
-- The proposed 72-run stage (4 tasks × 3 runs × 2 arms × 3 tiers) **cannot** detect a +20-point effect. Its chance of a positive lower bound is about the false-positive rate. Most outcomes will be "inconclusive", and the interaction interval will be wider still.
-- At equal spend, more tasks with fewer repetitions is strictly more precise, because the inference unit is the task and repetitions only reduce noise inside a task.
-- A decisive answer for one tier at ±0.15 needs roughly 25–30 tasks in that tier at 2 runs per arm. Building the tasks, not paying for model calls, is the binding constraint.
+- **Clipping.** A nominal +0.20 is a realised +0.14 to +0.20, depending on how close the control is to the ceiling. Every rate is for the realised effect.
+- **"Benefit" power at a true effect of exactly MID is capped near 0.5 at any size.** The rule requires the point estimate to be ≥ MID (`power_sim.py scale`: 0.34–0.53 at 100 tasks per tier). A design powered to show "benefit" must assume a true effect well above MID: 25 × 2 gives 0.94–0.99 at a realised +0.32 to +0.37 (0.71–0.80 at +0.23 when control success is skewed toward easy).
+- **The difficulty-by-treatment interaction, which is the question, is the hardest part.**
+  - At +0.20 it is detected 5–9% of the time with 6 × 2, and 18–33% of the time with 25 × 2, across the three variance assumptions.
+  - About 0.8 needs **roughly 100 tasks per tier at 2 runs per arm** (0.82–0.87 in `power_sim.py scale`), which is 800 runs for two tiers.
+  - The `1912c0b` statement that "the interaction interval will be wider still" understated this.
+- **One run per arm defeats the guards.** With one run per arm, a task "discriminates" only by chance, so the ceiling and floor rules block most interactions (≤ 0.08 even at +0.40). Use at least 2 runs per arm. The `1912c0b` claim that more tasks with fewer repetitions is "strictly more precise" holds for the half-width of a tier, but not for the decisions.
+- **"No meaningful effect" is essentially unreachable at these sizes:** P ≤ 0.022 in every simulated design. At feasible sizes a true null will be reported as "inconclusive", and that is the honest report.
+- **False positives are controlled.** At zero effect, P(benefit) ≤ 0.033, and P(interaction in either direction) ≤ 0.031, in every simulated design.
 
-Recommendation: keep Stage 1 as proposed. Run Stage 2 as **6 tasks × 2 runs per tier (72 runs)**, pre-registered honestly as an *estimation* stage, expected to give intervals of about ±0.4 per tier. A decision-grade claim about hard tasks needs a later hard-only stage of 25+ tasks. Do not describe Stage 2 as powered.
+Recommendation:
+
+- Keep Stage 1 as above.
+- Run Stage 2 as **6 tasks × 2 runs per tier (72 runs)**, pre-registered as an *estimation* stage: plan `purpose: "estimation"`, so `difficulty.py` labels the report "estimation". Expect intervals of about ±0.4–0.5 per tier, and report the intervals, not the decisions.
+- A confirmatory claim needs a plan with `purpose: "confirmation"` and a recorded simulated power ≥ 0.8 for its primary contrast; `difficulty.py` refuses less:
+  - for a hard-tier benefit, about 25 tasks at 2 runs per arm, if the true effect is about +0.35;
+  - for the interaction at +0.20, about 100 tasks per tier.
+- Building the tasks, not paying for model calls, is the binding constraint. Do not describe Stage 2 as powered.
 
 ## 7. Outcomes and thresholds (pre-registered when frozen)
 
@@ -153,6 +236,7 @@ Thresholds (owner to ratify; values in the frozen plan):
 | Acceptable overhead | median per-task treatment/control cost ratio ≤ 1.5 and wall-time ratio ≤ 1.5 | above that, users pay for process, not results |
 | Critical-regression limit | any critical defect class present in treatment and absent in control, on ≥ 2 tasks | flagged as H2 evidence whatever the means say |
 | Confidence | 95% two-sided | |
+| Minimum discriminating share for "no meaningful effect" | 0.45 of a tier's tasks | the smallest value on the grid whose worst-case rate of "no meaningful effect", when 10–85% of hard tasks sit at the ceiling and the skill has an effect of MID wherever there is room, is ≤ 0.05 (observed 0.026; 0.40 gives 0.082; without the rule, 0.745). The cost under a genuine null is negligible (P 0.026 vs 0.028). `power_sim.py share-sweep`, 1000 simulations. A rule with no parameter (concluding "no effect" only if it also holds on the discriminating tasks alone) was rejected: it removed false reassurance, but it also cut P(no meaningful effect) under a true null to 0.001 |
 
 ## 8. Analysis
 
@@ -162,11 +246,21 @@ Thresholds (owner to ratify; values in the frozen plan):
 - per tier: mean of `d_t` with a t-interval over tasks (df = tasks − 1);
 - interaction: Welch intervals for every tier pair (df floored). It concludes `effect_larger_in_<tier>` or `effect_smaller_in_<tier>` only when the interval excludes 0 under valid runs **and** under both non-valid-slot bounds, and neither tier is at a ceiling or floor or missing a task. Otherwise it is inconclusive;
 - missing tasks: every pre-registered inference task must have slots for every model. A frozen confirmatory plan with a missing task is an error. In an exploratory report the tier is inconclusive and the task is listed;
-- decision per tier: **benefit** (lower bound > 0 and estimate ≥ MID), **harm** (upper bound < 0 and estimate ≤ −harm), **no_meaningful_effect** (interval inside (−harm, MID)), otherwise **inconclusive**. It is forced to inconclusive when the tier has fewer than two discriminating tasks (a task where every run in both arms is at the same extreme is at the ceiling or floor), when the task differences have zero spread (a degenerate interval), or when the decision changes under the non-valid-slot bounds;
+- decision per tier: **benefit** (lower bound > 0 and estimate ≥ MID), **harm** (upper bound < 0 and estimate ≤ −harm), **no_meaningful_effect** (interval inside (−harm, MID)), otherwise **inconclusive**. It is forced to inconclusive when:
+  - the tier has fewer than two discriminating tasks (a task where every run in both arms is at the same extreme is at the ceiling or floor);
+  - the task differences have zero spread (a degenerate interval);
+  - the decision changes under the non-valid-slot bounds;
+  - for "no_meaningful_effect" only, fewer than `min_discriminating_share` (0.45) of the tier's tasks discriminate ("ceiling-dominated"). Zeros from ceiling tasks would otherwise make the interval look precise. A ceiling-heavy tier dilutes "benefit" and "harm" toward 0, so it cannot produce a false one;
+- agent-caused failures count as failures (§5). Each tier reports `agent_failures`, `decision_if_agent_failures_were_nonvalid` and `itt_dependent`;
+- the interaction applies every tier guard to **each side**: missing tasks, fewer than two discriminating tasks, zero spread, ceiling-dominated. A difference in effect between a ceiling-dominated tier and another tier measures headroom, not difficulty. In `1912c0b`, an easy tier with zero spread still produced `effect_larger_in_hard`;
+- discovery: when the rubric has a discovery axis, the same analysis runs by discovery level (`by_discovery`) with the contrast `discovered − specified` (`discovery_interaction`), next to the tiers;
 - the report records the SHA-256 of the plan, the rubric and every ratings file;
-- label "confirmatory" only for a frozen plan whose inference set is exactly the confirmatory set with prospective ratings, otherwise "exploratory".
+- label:
+  - "confirmatory" only for a frozen plan whose inference set is exactly the confirmatory set with prospective ratings, **and** whose `purpose` is "confirmation" with a recorded simulated power ≥ 0.8;
+  - "estimation" for the same plan without that purpose and power;
+  - otherwise "exploratory".
 
-Run on the historical Phase 3.2 tasks, this rule reports the medium tier as **inconclusive (ceiling)**. It does not report "no effect" (pinned by `test_ceiling_result_is_reported_as_inconclusive_not_as_no_effect`).
+Run on the historical Phase 3.2 tasks with the post-hoc v1.1 ratings, the analysis reports the medium tier (NEW-01..03) as **inconclusive (ceiling)** and the hard tier (NEW-04 alone) as **inconclusive (one task)**. It does not report "no effect" (pinned by `test_ceiling_result_is_reported_as_inconclusive_not_as_no_effect` and `test_historical_all_valid_records_are_unaffected`).
 
 Planned sensitivity analysis, not implemented: a mixed-effects logistic model (task random intercept and random treatment slope, tier × condition fixed effects), fitted offline with a standard statistics package and reported next to, never instead of, the task-level analysis. The existing exact permutation p-value in `analyze.py` stays descriptive.
 
@@ -177,7 +271,7 @@ Before the first Stage 2 run, and recorded in one commit:
 1. Rubric, ratings (two raters, `prospective`), task projects, prompts and the plan with `status: "frozen"` and `inference_sets: ["confirmatory"]`. The plan pins the rubric and every rating file by SHA-256, and `difficulty.py` refuses any mismatch.
 2. Private: hidden tests, inventories, references, alternative designs, mutants and the oracle source map, with their hashes recorded in the private key.
 3. Skill SHA-256, model ID and variant, OpenCode version, sandbox image digest.
-4. Thresholds (§7), stop rules (§6) and the seeded schedule.
+4. Thresholds (§7, including `min_discriminating_share`), the plan's `purpose` (and, for "confirmation", its recorded power), stop rules (§6), the seeded schedule created with `--counterbalance`, and the S/D variant draw (§4).
 
 An evaluator defect found later is fixed in a new oracle version. Both scores are kept and the re-score is reported separately (the NEW-04 precedent). Re-scoring both arms is required, and the decision is made blind to the arm.
 
@@ -187,7 +281,7 @@ Observed: $0.25–$0.68 per run on the medium-rated Phase 3.2 tasks, with treatm
 
 | Stage | Runs | Expected | Cap to approve (invalid runs and reruns included) |
 |---|---|---|---|
-| 1 calibration (2 tasks × 2 runs/arm × 3 tiers) | 24 | ≈ $23 | $50 |
+| 1 calibration (2 tasks × 2 runs/arm × 3 tiers, + 4 hard control-only runs) | 28 | ≈ $29 | $60 |
 | 2 estimation (6 × 2 × 2 × 3) | 72 | ≈ $69 | $140 |
 | Later hard-only stage (25 tasks × 2 × 2) | 100 | ≈ $180 | to be estimated from Stage 1 costs |
 
@@ -195,11 +289,14 @@ No paid invocation without written approval of model, run count and cap. GitHub 
 
 ## 11. Threats to validity
 
-- **Selection bias:** prevented by the sealed calibration/confirmatory draw and by never choosing tasks because the control failed.
-- **Difficulty misclassification:** two raters, written anchors, agreement reported, manipulation check on calibration tasks only. The F6 gate is a hypothesis informed by NEW-04.
-- **Low power:** §6. Stage 2 is an estimation stage; report intervals and "inconclusive" honestly.
+- **Selection bias:** prevented by the sealed calibration/confirmatory draw, the sealed S/D variant draw, and never choosing tasks because the control failed.
+- **Arm/position confound:** counterbalanced run order (§5). In Phase 3.2 the treatment ran first in 4/4 pairs.
+- **Tuning tasks toward the winning arm:** calibration feedback is control-only. Treatment results stay sealed until the confirmatory analysis (§6).
+- **Requirement discovery confounded with difficulty:** two rubric axes and a crossed S/D design (§3, §4).
+- **Difficulty misclassification:** two raters, written anchors, agreement reported, manipulation check on calibration tasks only. The historical ratings are post hoc, single-rater and exploratory.
+- **Low power:** §6. Stage 2 is an estimation stage, labelled as such by the analysis. Report intervals and "inconclusive" honestly. The interaction needs about 100 tasks per tier.
 - **Model drift:** pinned model ID and variant, both arms of a block run back to back, provider model metadata recorded (R05). Blocks spread over days are a residual risk; report the run dates.
-- **Ceiling or floor:** made explicit by the discriminating-task rule.
+- **Ceiling or floor:** made explicit by the discriminating-task rule and the ceiling-dominated share rule. Both apply to each side of an interaction.
 - **Oracle over-strictness:** an alternative correct design must pass before freezing (R09).
 - **Benchmark overfitting of the skill:** a revised skill (§12) is evaluated only on tasks it was not developed on.
 - **Prompt leakage:** prompts are public by design (R11). Hidden checks, references and the oracle source map are private.

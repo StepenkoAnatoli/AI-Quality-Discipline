@@ -176,12 +176,14 @@ class RatingsTests(unittest.TestCase):
 class CommittedPlanTests(unittest.TestCase):
     """Pins the committed Phase 3.3 draft files: they load, hash-match and keep the post-hoc labels."""
 
-    def test_historical_plan_loads_and_all_four_tasks_are_post_hoc_medium(self):
+    def test_historical_plan_loads_and_all_four_tasks_are_post_hoc_and_specified(self):
         out = d.load_plan(os.path.join(PHASE33, "analysis-plan-historical.json"))
         self.assertEqual(out["plan"]["status"], "draft")
         self.assertEqual(sorted(out["tasks"]), ["NEW-01", "NEW-02", "NEW-03", "NEW-04"])
-        for info in out["tasks"].values():
-            self.assertEqual((info["tier"], info["set"], info["provenance"]), ("medium", "historical", "post_hoc"))
+        tiers = {"NEW-01": "medium", "NEW-02": "medium", "NEW-03": "medium", "NEW-04": "hard"}
+        for task, info in out["tasks"].items():
+            self.assertEqual((info["tier"], info["discovery"], info["set"], info["provenance"]),
+                             (tiers[task], "specified", "historical", "post_hoc"))
 
     def edited_plan(self, change):
         tmp = tempfile.mkdtemp(prefix="aqd-diff-")
@@ -269,7 +271,7 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual((easy["mean_task_difference"], easy["sd"]), (0.0, 0.0))
         # Both easy tasks are at the ceiling in both arms: not evidence of no effect.
         self.assertEqual(easy["discriminating_tasks"], 0)
-        self.assertEqual(easy["decisions"]["valid_only"], "no_meaningful_effect")
+        self.assertEqual(easy["decisions"]["observed"], "no_meaningful_effect")
         self.assertEqual(easy["decision"], "inconclusive")
         self.assertIn("ceiling or floor", easy["reason"])
         # The easy tier is at the ceiling, so the interaction cannot be read even though hard shows a benefit.
@@ -277,8 +279,10 @@ class AnalysisTests(unittest.TestCase):
         self.assertGreater(inter["estimate"], 0)
         self.assertEqual(inter["conclusion"], "inconclusive")
         self.assertIn("ceiling or floor", inter["reason"])
-        self.assertEqual(out["by_tier"]["medium"], {"tasks": 0, "decision": "inconclusive", "missing_tasks": [],
-                                                    "reason": "no task with valid runs in both arms"})
+        medium = out["by_tier"]["medium"]
+        self.assertEqual({k: medium[k] for k in ("tasks", "decision", "missing_tasks", "reason")},
+                         {"tasks": 0, "decision": "inconclusive", "missing_tasks": [],
+                          "reason": "no task with valid runs in both arms"})
 
     def test_harm_is_detected(self):
         rows = []
@@ -306,7 +310,7 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(h3["difference"], 0.5)
         self.assertEqual(h3["bounds"], [0.25, 0.75])
         hard = out["by_tier"]["hard"]
-        self.assertEqual(hard["decisions"]["valid_only"], "benefit")
+        self.assertEqual(hard["decisions"]["observed"], "benefit")
         self.assertNotEqual(hard["decisions"]["worst_case"], "benefit")
         self.assertFalse(hard["robust_to_nonvalid"])
         self.assertEqual(hard["decision"], "inconclusive")
@@ -339,7 +343,9 @@ class AnalysisTests(unittest.TestCase):
     def test_label_is_exploratory_unless_frozen_confirmatory_and_prospective(self):
         rows = [row("E1", "control", 1), row("E1", "treatment", 1)]
         one = {"E1": self.tasks["E1"]}
-        self.assertEqual(d.analyse(rows, [], loaded(one))["label"], "confirmatory")
+        # Frozen, confirmatory set, prospective: "estimation" unless the plan records adequate power (see
+        # test_frozen_plan_is_labelled_estimation_unless_it_records_adequate_power).
+        self.assertEqual(d.analyse(rows, [], loaded(one))["label"], "estimation")
         self.assertEqual(d.analyse(rows, [], loaded(one, status="draft"))["label"], "exploratory")
         self.assertEqual(d.analyse(rows, [], loaded(one, sets=("confirmatory", "calibration")))["label"],
                          "exploratory")
@@ -365,8 +371,8 @@ class AnalysisTests(unittest.TestCase):
         for i in range(4):  # easy: discriminating, no effect, a little spread
             rows += [row(f"E{i}", "control", 1), row(f"E{i}", "control", 0)]
             rows += [row(f"E{i}", "treatment", 1), row(f"E{i}", "treatment", i % 2)]
-        for i in range(4):  # hard: control fails, one treatment pass, two treatment slots excluded
-            rows += [row(f"H{i}", "control", 0)] * 2 + [row(f"H{i}", "treatment", 1)]
+        for i in range(4):  # hard: control fails (once passes, for spread), one treatment pass, two excluded
+            rows += [row(f"H{i}", "control", 0), row(f"H{i}", "control", int(i == 3)), row(f"H{i}", "treatment", 1)]
             problems += [problem(f"H{i}", "treatment", "excluded")] * 2
         inter = self.primary(d.analyse(rows, problems, loaded(tasks)))["interaction"]["hard - easy"]
         self.assertGreater(inter["ci"][0], 0)  # valid runs alone would suggest a larger effect on hard tasks
@@ -397,7 +403,7 @@ class AnalysisTests(unittest.TestCase):
         report = d.analyse(rows, [], loaded(tasks, status="draft"))
         self.assertEqual(report["by_model"][MODEL]["missing_inference_tasks"], ["H3"])
         hard = self.primary(report)["by_tier"]["hard"]
-        self.assertEqual(hard["decisions"]["valid_only"], "benefit")
+        self.assertEqual(hard["decisions"]["observed"], "benefit")
         self.assertEqual(hard["decision"], "inconclusive")
         self.assertIn("no slots", hard["reason"])
         with self.assertRaisesRegex(d.DifficultyError, "no slot exists"):
@@ -412,7 +418,7 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(d.decide({"mean": 0.5, "ci": None}, 0.2, 0.1), "inconclusive")
 
 
-class AnalyzeIntegrationTests(th.TempDirTest):
+class IntegrationBase(th.TempDirTest):
     """analyze.py --difficulty-plan over real slot resolution and the committed historical plan."""
 
     def setUp(self):
@@ -434,6 +440,8 @@ class AnalyzeIntegrationTests(th.TempDirTest):
                                  "--out", self.out, *extra])
         return code, buf.getvalue()
 
+
+class AnalyzeIntegrationTests(IntegrationBase):
     def test_ceiling_result_is_reported_as_inconclusive_not_as_no_effect(self):
         for run in self.sched["runs"]:
             self.helper.put(run, fraction=1.0)
@@ -443,11 +451,14 @@ class AnalyzeIntegrationTests(th.TempDirTest):
             report = json.load(h)
         diff = report["difficulty"]
         self.assertEqual(diff["label"], "exploratory")
-        self.assertEqual(diff["tiers"]["medium"], ["NEW-01", "NEW-02", "NEW-03", "NEW-04"])
+        self.assertEqual(diff["tiers"]["medium"], ["NEW-01", "NEW-02", "NEW-03"])
+        self.assertEqual(diff["tiers"]["hard"], ["NEW-04"])
+        self.assertEqual(diff["discovery_levels"], {"specified": ["NEW-01", "NEW-02", "NEW-03", "NEW-04"],
+                                                    "discovered": []})
         medium = diff["by_model"][MODEL]["primary:fully_correct"]["by_tier"]["medium"]
-        self.assertEqual((medium["tasks"], medium["mean_task_difference"], medium["sd"]), (4, 0.0, 0.0))
-        # The four-task ceiling (every run passed in both arms) must never read as "no effect".
-        self.assertEqual(medium["decisions"]["valid_only"], "no_meaningful_effect")
+        self.assertEqual((medium["tasks"], medium["mean_task_difference"], medium["sd"]), (3, 0.0, 0.0))
+        # The ceiling (every run passed in both arms) must never read as "no effect".
+        self.assertEqual(medium["decisions"]["observed"], "no_meaningful_effect")
         self.assertEqual(medium["discriminating_tasks"], 0)
         self.assertEqual(medium["decision"], "inconclusive")
         self.assertIn("ceiling or floor", medium["reason"])
@@ -480,6 +491,353 @@ class AnalyzeIntegrationTests(th.TempDirTest):
         self.assertEqual(code, 0)
         with open(self.out, encoding="utf-8") as h:
             self.assertNotIn("difficulty", json.load(h))
+
+
+def scope_violation(task, group, reasons=("immutable files changed or missing",), model=MODEL):
+    """A slot exactly as analyze.resolve_slots reports a run that edited a file the prompt forbids."""
+    return {"model": model, "task": task, "group": group, "slot": f"{task}-{group}", "status": "invalid",
+            "problem": "run invalid: " + "; ".join(reasons),
+            "attempts": [{"run_id": f"{task}-{group}", "valid": False, "invalid_reasons": list(reasons)}]}
+
+
+def tamper(task, group, verdict, model=MODEL):
+    return {"model": model, "task": task, "group": group, "slot": f"{task}-{group}", "run_id": f"{task}-{group}",
+            "status": "excluded", "problem": f"tamper review: {verdict}", "review_flags": {},
+            "attempts": [{"run_id": f"{task}-{group}", "valid": True, "invalid_reasons": []}]}
+
+
+def axis_rubric():
+    """F1, F2 intrinsic; F3 requirement discovery (its own axis, never in the tier composite)."""
+    r = rubric()
+    for f in r["factors"]:
+        f["axis"] = "discovery" if f["id"] == "F3" else "intrinsic"
+    r["tiers"] = [{"name": "easy", "max_score": 2}, {"name": "medium", "max_score": 4},
+                  {"name": "hard", "max_score": 6}]
+    r["discovery_levels"] = [{"name": "specified", "max_score": 1}, {"name": "discovered", "max_score": 3}]
+    return r
+
+
+class ReviewDefectRegressionTests(unittest.TestCase):
+    """Regression tests for the defects found in the review of 1912c0b (each failed on that commit)."""
+
+    def setUp(self):
+        self.hard = {f"H{i:02d}": rated(scores(3, 3, 2 + i % 2)) for i in range(13)}
+
+    def primary(self, report):
+        return report["by_model"][MODEL]["primary:fully_correct"]
+
+    # --- P0 1: a tier mostly at the ceiling must not read as "no meaningful effect".
+    def test_ceiling_dominated_tier_is_inconclusive_not_no_meaningful_effect(self):
+        rows = []
+        names = sorted(self.hard)
+        for task in names[:10]:  # ten tasks: every run passes in both arms
+            rows += [row(task, "control", 1)] * 2 + [row(task, "treatment", 1)] * 2
+        # three discriminating tasks: differences +0.5, 0, 0
+        rows += [row(names[10], "control", 1), row(names[10], "control", 0)] + [row(names[10], "treatment", 1)] * 2
+        for task in names[11:]:
+            rows += [row(task, g, v) for g in ("control", "treatment") for v in (1, 0)]
+        hard = self.primary(d.analyse(rows, [], loaded(self.hard)))["by_tier"]["hard"]
+        self.assertEqual((hard["tasks"], hard["discriminating_tasks"]), (13, 3))
+        self.assertEqual(hard["ci"], [-0.0453, 0.1223])  # the interval the review reproduced
+        self.assertEqual(hard["decisions"]["observed"], "no_meaningful_effect")
+        self.assertEqual(hard["decision"], "inconclusive")
+        self.assertIn("ceiling-dominated", hard["reason"])
+        self.assertAlmostEqual(hard["discriminating_share"], 3 / 13, places=4)
+
+    def test_discriminating_tier_can_still_conclude_no_meaningful_effect(self):
+        # Twelve tasks, all discriminating, differences 0 except two at +0.25 and two at -0.25: a genuine null.
+        tasks = {k: v for k, v in sorted(self.hard.items())[:12]}
+        treatment = {0: (1, 1, 1, 0), 1: (1, 1, 1, 0), 2: (1, 0, 0, 0), 3: (1, 0, 0, 0)}
+        rows = []
+        for i, task in enumerate(sorted(tasks)):
+            rows += [row(task, "control", v) for v in (1, 0, 1, 0)]
+            rows += [row(task, "treatment", v) for v in treatment.get(i, (1, 0, 1, 0))]
+        hard = self.primary(d.analyse(rows, [], loaded(tasks)))["by_tier"]["hard"]
+        self.assertEqual(hard["discriminating_tasks"], 12)
+        self.assertEqual(hard["decision"], "no_meaningful_effect")
+
+    def test_min_discriminating_share_is_a_validated_plan_parameter(self):
+        for bad in (0, 1.5, "0.5", True):
+            plan = loaded(self.hard)
+            plan["plan"]["min_discriminating_share"] = bad
+            with self.assertRaises(d.DifficultyError):
+                d.check_plan_parameters(plan["plan"], "plan")
+
+    # --- P0 2: the interaction must apply each tier's zero-spread (and share) guard.
+    def test_interaction_refuses_a_zero_spread_side(self):
+        tasks = {f"E{i}": rated(scores(0, 0, i % 2)) for i in range(4)}
+        tasks.update({f"H{i}": rated(scores(3, 3, 2 + i % 2)) for i in range(4)})
+        rows = []
+        for i in range(4):  # easy: every task discriminates, every difference is exactly 0 -> zero spread
+            rows += [row(f"E{i}", g, v) for g in ("control", "treatment") for v in (1, 0)]
+            rows += [row(f"H{i}", "control", 0)] * 2 + [row(f"H{i}", "treatment", 1)] * 2
+        rows[-1] = row("H3", "treatment", 0)
+        out = self.primary(d.analyse(rows, [], loaded(tasks)))
+        self.assertIn("degenerate", out["by_tier"]["easy"]["reason"])
+        inter = out["interaction"]["hard - easy"]
+        self.assertEqual(inter["conclusion"], "inconclusive")
+        self.assertIn("zero spread", inter["reason"])
+
+    def test_interaction_refuses_a_ceiling_dominated_side(self):
+        tasks = {f"E{i:02d}": rated(scores(0, 0, i % 2)) for i in range(10)}
+        tasks.update({f"H{i}": rated(scores(3, 3, 2 + i % 2)) for i in range(4)})
+        rows = []
+        for i in range(10):
+            if i < 2:  # two easy tasks discriminate, a little spread; eight are at the ceiling
+                rows += [row(f"E{i:02d}", "control", 1), row(f"E{i:02d}", "control", 0)]
+                rows += [row(f"E{i:02d}", "treatment", 1), row(f"E{i:02d}", "treatment", i)]
+            else:
+                rows += [row(f"E{i:02d}", g, 1) for g in ("control", "treatment")] * 2
+        for i in range(4):
+            rows += [row(f"H{i}", "control", 0)] * 2 + [row(f"H{i}", "treatment", 1), row(f"H{i}", "treatment", i % 2)]
+        inter = self.primary(d.analyse(rows, [], loaded(tasks)))["interaction"]["hard - easy"]
+        self.assertEqual(inter["conclusion"], "inconclusive")
+        self.assertIn("ceiling-dominated", inter["reason"])
+
+    # --- P0 3: agent-caused failures are outcomes (intention to treat); infrastructure stays in the bounds.
+    def test_scope_violation_and_confirmed_tamper_count_as_failures_not_as_missing(self):
+        tasks = {"H1": self.hard["H00"], "H2": self.hard["H01"]}
+        rows = [row("H1", "control", 1), row("H1", "control", 1), row("H1", "treatment", 1),
+                row("H2", "control", 1), row("H2", "treatment", 1), row("H2", "treatment", 1)]
+        problems = [scope_violation("H1", "treatment"), tamper("H2", "control", "confirmed")]
+        out = self.primary(d.analyse(rows, problems, loaded(tasks)))
+        h1, h2 = out["by_task"]["H1"], out["by_task"]["H2"]
+        self.assertEqual(h1["agent_failures"], {"control": 0, "treatment": 1})
+        self.assertEqual(h1["nonvalid"], {"control": 0, "treatment": 0})
+        self.assertEqual(h1["difference"], -0.5)
+        self.assertEqual(h1["bounds"], [-0.5, -0.5])  # nothing left to impute
+        self.assertEqual(h2["agent_failures"], {"control": 1, "treatment": 0})
+        self.assertEqual(h2["difference"], 0.5)
+        self.assertEqual(out["by_tier"]["hard"]["agent_failures"], {"control": 1, "treatment": 1})
+
+    def test_infrastructure_and_ambiguous_slots_stay_in_the_bounds(self):
+        tasks = {"H1": self.hard["H00"]}
+        rows = [row("H1", "control", 1), row("H1", "treatment", 1)]
+        ambiguous = [problem("H1", "treatment", "invalid"),  # e.g. a provider error
+                     tamper("H1", "treatment", "suspected"),  # not confirmed
+                     problem("H1", "treatment", "unresolved"), problem("H1", "treatment", "missing"),
+                     scope_violation("H1", "treatment", ("immutable files changed or missing", "api_checks exit 1")),
+                     dict(problem("H1", "treatment", "invalid"), problem="evaluation invalid: x",
+                          attempts=[{"run_id": "r", "valid": True, "invalid_reasons": []}])]
+        out = self.primary(d.analyse(rows, ambiguous, loaded(tasks)))["by_task"]["H1"]
+        self.assertEqual(out["agent_failures"], {"control": 0, "treatment": 0})
+        self.assertEqual(out["nonvalid"], {"control": 0, "treatment": 6})
+        for item in ambiguous:
+            self.assertEqual(d.attribution(item), "unattributed", item)
+
+    def test_tamper_is_never_imputed_as_a_success(self):
+        tasks = {"H1": self.hard["H00"]}
+        rows = [row("H1", "control", 0)]
+        out = self.primary(d.analyse(rows, [tamper("H1", "treatment", "confirmed")], loaded(tasks)))
+        self.assertEqual(out["by_task"]["H1"]["bounds"], [0.0, 0.0])
+
+    def test_itt_sensitivity_is_reported_when_agent_failures_change_the_decision(self):
+        tasks = {k: self.hard[k] for k in ("H00", "H01", "H02", "H03")}
+        rows = []
+        for i, task in enumerate(sorted(tasks)):
+            rows += [row(task, "control", 0), row(task, "treatment", 1), row(task, "treatment", 1 - i % 2)]
+        problems = [scope_violation(t, "control") for t in tasks]
+        hard = self.primary(d.analyse(rows, problems, loaded(tasks)))["by_tier"]["hard"]
+        self.assertEqual(hard["agent_failures"], {"control": 4, "treatment": 0})
+        # Counting the control scope violations as failures gives a benefit; treating them as missing would not.
+        self.assertEqual(hard["decision"], "benefit")
+        self.assertEqual(hard["decision_if_agent_failures_were_nonvalid"], "inconclusive")
+        self.assertTrue(hard["itt_dependent"])
+
+    # --- P1: intrinsic difficulty and requirement discovery are separate axes.
+    def test_discovery_is_its_own_axis_and_never_moves_the_tier(self):
+        r = d.validate_rubric(axis_rubric())
+        self.assertEqual(d.tier_for(r, scores(3, 3, 0)), ("hard", 6))  # maximum complexity, full specification
+        self.assertEqual(d.tier_for(r, scores(0, 0, 3)), ("easy", 0))  # trivial, but must be discovered
+        self.assertEqual(d.discovery_for(r, scores(3, 3, 0)), ("specified", 0))
+        self.assertEqual(d.discovery_for(r, scores(0, 0, 3)), ("discovered", 3))
+
+    def test_a_tier_gate_on_a_discovery_factor_is_refused(self):
+        r = axis_rubric()
+        r["tiers"][2]["require_min"] = {"F3": 2}
+        with self.assertRaisesRegex(d.DifficultyError, "discovery"):
+            d.validate_rubric(r)
+        r = axis_rubric()
+        r["factors"][0]["axis"] = "other"
+        with self.assertRaises(d.DifficultyError):
+            d.validate_rubric(r)
+
+    def test_committed_rubric_separates_the_axes_and_rates_new04_hard_and_specified(self):
+        loaded_plan = d.load_plan(os.path.join(PHASE33, "analysis-plan-historical.json"))
+        factors = {f["id"]: f["axis"] for f in loaded_plan["rubric"]["factors"]}
+        self.assertEqual(factors.pop("F6_requirement_discovery"), "discovery")
+        self.assertEqual(set(factors.values()), {"intrinsic"})
+        self.assertFalse(any(t.get("require_min") for t in loaded_plan["rubric"]["tiers"]))
+        info = loaded_plan["tasks"]
+        self.assertEqual({k: (v["tier"], v["discovery"]) for k, v in info.items()},
+                         {"NEW-01": ("medium", "specified"), "NEW-02": ("medium", "specified"),
+                          "NEW-03": ("medium", "specified"), "NEW-04": ("hard", "specified")})
+        self.assertEqual({v["provenance"] for v in info.values()}, {"post_hoc"})
+
+    def test_effect_is_also_reported_by_discovery_level(self):
+        r = d.validate_rubric(axis_rubric())
+        tasks = {}
+        for i in range(3):
+            for level, f3 in (("S", 0), ("D", 3)):
+                entry = rated(scores(3, 3, f3))
+                entry["tier"] = d.tier_for(r, entry["consensus"])[0]
+                tasks[f"H{i}{level}"] = dict(entry, discovery=d.discovery_for(r, entry["consensus"])[0])
+        plan = loaded(tasks)
+        plan["tasks"] = {k: dict(plan["tasks"][k], discovery=v["discovery"]) for k, v in tasks.items()}
+        plan["discovery_order"] = ["specified", "discovered"]
+        rows = []
+        for i in range(3):
+            rows += [row(f"H{i}S", g, v) for g in ("control", "treatment") for v in (1, 0)]
+            rows += [row(f"H{i}D", "control", 0)] * 2 + [row(f"H{i}D", "treatment", 1), row(f"H{i}D", "treatment", i % 2)]
+        out = self.primary(d.analyse(rows, [], plan))
+        self.assertEqual(set(out["by_discovery"]), {"specified", "discovered"})
+        self.assertIn("discovered - specified", out["discovery_interaction"])
+
+    # --- P2: an estimation stage is never labelled confirmatory.
+    def test_frozen_plan_is_labelled_estimation_unless_it_records_adequate_power(self):
+        one = {"E1": rated(scores(1, 0, 0))}
+        rows = [row("E1", "control", 1), row("E1", "treatment", 1)]
+        self.assertEqual(d.analyse(rows, [], loaded(one))["label"], "estimation")
+        plan = loaded(one)
+        plan["plan"]["purpose"] = "confirmation"
+        with self.assertRaisesRegex(d.DifficultyError, "power"):
+            d.check_plan_parameters(plan["plan"], "plan")
+        plan["plan"]["power"] = {"contrast": "hard - easy", "power": 0.5, "source": "power_sim.py"}
+        with self.assertRaisesRegex(d.DifficultyError, "0.8"):
+            d.check_plan_parameters(plan["plan"], "plan")
+        plan["plan"]["power"]["power"] = 0.85
+        d.check_plan_parameters(plan["plan"], "plan")
+        self.assertEqual(d.analyse(rows, [], plan)["label"], "confirmatory")
+
+    # --- P1: calibration feedback to task authors is control-only.
+    def test_calibration_feedback_never_contains_treatment_results(self):
+        tasks = {"C1": rated(scores(3, 3, 3), task_set="calibration"), "H1": self.hard["H00"]}
+        rows = [row("C1", "control", 0), row("C1", "control", 1), row("C1", "treatment", 1),
+                row("H1", "control", 1), row("H1", "treatment", 0)]
+        problems = [problem("C1", "treatment", "invalid"), scope_violation("C1", "treatment")]
+        feedback = d.calibration_feedback(rows, problems, loaded(tasks))
+        self.assertEqual(list(feedback["by_model"][MODEL]), ["C1"])  # calibration tasks only
+        c1 = feedback["by_model"][MODEL]["C1"]
+        self.assertEqual((c1["control_runs"], c1["control_successes"]), (2, 1))
+        text = json.dumps(feedback)
+        self.assertNotIn("treatment", text.replace("treatment results are withheld", ""))
+
+    # --- P2: future schedules counterbalance which arm runs first; the default design is unchanged.
+    def test_counterbalanced_schedule_balances_first_arm_within_task_and_overall(self):
+        tasks = ["NEW-01", "NEW-02", "NEW-03", "NEW-04"]
+        for seed in ("12" * 16, "ab" * 16, "07" * 16):
+            for reps in (1, 2, 3):
+                sched = schedule.make_schedule(seed, [MODEL], tasks, reps, counterbalance=True)
+                self.assertEqual(schedule.validate(sched), [])
+                first = {}
+                for run in sched["runs"]:
+                    first.setdefault(run["block"], (run["task"], run["group"]))
+                firsts = list(first.values())
+                treat_first = sum(g == "treatment" for _, g in firsts)
+                self.assertLessEqual(abs(2 * treat_first - len(firsts)), 1)
+                for task in tasks:
+                    n = sum(g == "treatment" for t, g in firsts if t == task)
+                    self.assertLessEqual(abs(2 * n - reps), 1, (seed, reps, task))
+                self.assertTrue(sched["design"]["counterbalanced"])
+
+    def test_validate_refuses_an_unbalanced_counterbalanced_schedule(self):
+        sched = schedule.make_schedule("12" * 16, [MODEL], ["NEW-01", "NEW-02"], 2, counterbalance=True)
+        # Make every block treatment-first by swapping the order of the control-first ones.
+        by_block = {}
+        for run in sched["runs"]:
+            by_block.setdefault(run["block"], []).append(run)
+        for first, second in by_block.values():
+            if first["group"] == "control":
+                first["order"], second["order"] = second["order"], first["order"]
+        problems = schedule.validate(sched)
+        self.assertTrue(any("not balanced" in p or "more than one" in p for p in problems), problems)
+
+    def test_default_schedule_is_byte_for_byte_what_phase_32_produced(self):
+        for args, expected in (
+                (("12" * 16, [MODEL], ["NEW-01", "NEW-02", "NEW-03", "NEW-04"], 1),
+                 "0bb4ce052d7a02b945772c66c1b0fc9f888baae15ffbc48113120df134879a98"),
+                (("ab" * 16, [MODEL, "xai/grok-4"], ["NEW-01", "NEW-02", "NEW-03"], 3),
+                 "b9cec665bfb3815f8aae88d39c2ca2c8501ad60deaac81c903299ee44e69cc97")):
+            sched = schedule.make_schedule(*args)
+            sched.pop("created_utc")
+            self.assertEqual(hashlib.sha256(json.dumps(sched, sort_keys=True).encode()).hexdigest(), expected)
+
+
+class ReviewDefectIntegrationTests(IntegrationBase):
+    """The same defects through analyze.py's real slot resolution."""
+
+    def test_scope_violation_through_resolve_slots_is_an_agent_failure(self):
+        runs = self.sched["runs"]
+        for run in runs:
+            self.helper.put(run, fraction=1.0)
+        target = next(r for r in runs if r["task"] == "NEW-04" and r["group"] == "treatment")
+        with open(os.path.join(self.caps, target["run_id"], "run-status.json"), "w", encoding="utf-8") as h:
+            json.dump({"valid": False, "invalid_reasons": ["immutable files changed or missing"]}, h)
+        rows, problems = analyze.resolve_slots(self.sched, self.caps, self.scores)
+        self.assertEqual([d.attribution(p) for p in problems], ["agent"])
+        report = d.analyse(rows, problems, d.load_plan(self.plan))
+        task = report["by_model"][MODEL]["primary:fully_correct"]["by_task"]["NEW-04"]
+        self.assertEqual((task["agent_failures"]["treatment"], task["difference"]), (1, -1.0))
+
+    def test_calibration_feedback_option_writes_a_control_only_file(self):
+        for run in self.sched["runs"]:
+            self.helper.put(run, fraction=1.0)
+        feedback = os.path.join(self.tmp, "feedback.json")
+        self.assertEqual(self.run_analyze("--calibration-feedback", feedback)[0], 3)  # needs a plan
+        self.assertFalse(os.path.exists(feedback))
+        code, _ = self.run_analyze("--difficulty-plan", self.plan, "--calibration-feedback", feedback)
+        self.assertEqual(code, 0)
+        with open(feedback, encoding="utf-8") as h:
+            data = json.load(h)
+        self.assertEqual(data["kind"], "aqd-calibration-feedback")
+        self.assertEqual(data["by_model"], {})  # the historical plan has no calibration-set task
+
+    def test_historical_all_valid_records_are_unaffected(self):
+        for run in self.sched["runs"]:
+            self.helper.put(run, fraction=1.0)
+        rows, problems = analyze.resolve_slots(self.sched, self.caps, self.scores)
+        self.assertEqual(problems, [])
+        base = analyze.analyse(rows, problems)
+        self.assertEqual(base["status"], "COMPLETE")
+        report = d.analyse(rows, problems, d.load_plan(self.plan))
+        out = report["by_model"][MODEL]["primary:fully_correct"]
+        self.assertEqual(report["label"], "exploratory")
+        for task in out["by_task"].values():
+            self.assertEqual((task["difference"], task["agent_failures"], task["nonvalid"]),
+                             (0.0, {"control": 0, "treatment": 0}, {"control": 0, "treatment": 0}))
+        self.assertTrue(all(t["decision"] == "inconclusive" for t in out["by_tier"].values()))
+        self.assertTrue(all(i["conclusion"] == "inconclusive" for i in out["interaction"].values()))
+
+
+class PowerSimulationTests(unittest.TestCase):
+    """power_sim.py runs the real decision rules (difficulty.analyse_outcome), not a simplified copy."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, PHASE33)
+        import power_sim
+        cls.ps = power_sim
+
+    def test_stop_rule_operating_characteristics(self):
+        oc = self.ps.stop_probability
+        self.assertAlmostEqual(oc(4, 4, 0.9), 0.6561, places=4)  # "≥ 0.9 of 4" is 4/4: a 0.9 task stops only 66%
+        self.assertAlmostEqual(oc(8, 7, 0.9), 0.8131, places=4)
+        self.assertAlmostEqual(oc(8, 7, 0.5), 0.0352, places=4)
+
+    def test_simulation_uses_the_real_guards_and_controls_false_positives(self):
+        res = self.ps.run_design(self.ps.Scenario("t", (1.5, 1.5), (1.5, 1.5), 0.0, 0.0, 0.0), tasks=6, reps=2,
+                                 sims=150, seed=1)
+        self.assertLessEqual(res["hard"]["benefit"], 0.06)
+        self.assertLessEqual(res["interaction"]["larger_in_hard"], 0.06)
+        self.assertIn("inconclusive", res["hard"])
+        again = self.ps.run_design(self.ps.Scenario("t", (1.5, 1.5), (1.5, 1.5), 0.0, 0.0, 0.0), tasks=6, reps=2,
+                                   sims=150, seed=1)
+        self.assertEqual(res, again)
+
+    def test_realized_effect_accounts_for_clipping(self):
+        res = self.ps.run_design(self.ps.Scenario("t", (1.5, 1.5), (8, 1), 0.0, 0.2, 0.0), tasks=4, reps=1,
+                                 sims=50, seed=2)
+        self.assertLess(res["true_effect"]["hard"], 0.2)
 
 
 if __name__ == "__main__":

@@ -47,9 +47,18 @@ labels permuted within task. The p-value is descriptive. Models are never
 compared with each other's control or treatment.
 
 Difficulty tiers (optional, --difficulty-plan PLAN): the per-task, per-tier and
-tier-interaction analysis in difficulty.py, from the same resolved slots, with
-non-valid slots carried into worst/best-case bounds. A plan, rubric or rating
-file that fails its checks is an error (exit 3, no report).
+tier-interaction analysis in difficulty.py, from the same resolved slots. There,
+and only there, agent-caused failures (a run invalid solely because it changed a
+file the prompt forbids, or a confirmed tamper verdict) count as failures; every
+other non-valid slot is carried into worst/best-case bounds. The slot accounting
+and effects above are unchanged. A plan, rubric or rating file that fails its
+checks is an error (exit 3, no report).
+
+Calibration feedback (optional, --calibration-feedback OUT, needs
+--difficulty-plan): a separate file for task authors with control-arm results
+of calibration-set tasks only (difficulty.calibration_feedback). The full report
+holds treatment results and must not be given to anyone who can still change
+tasks.
 """
 import argparse
 import itertools
@@ -400,19 +409,30 @@ def main(argv=None):
     p.add_argument("--out", required=True)
     p.add_argument("--allow-incomplete", action="store_true")
     p.add_argument("--difficulty-plan", help="frozen difficulty plan (difficulty.py); adds report['difficulty']")
+    p.add_argument("--calibration-feedback", help="also write control-only calibration feedback for task authors")
     args = p.parse_args(argv)
+    if args.calibration_feedback and not args.difficulty_plan:
+        print("analyze.py: ERROR: --calibration-feedback needs --difficulty-plan")
+        return 3
     try:
         loaded = difficulty.load_plan(args.difficulty_plan) if args.difficulty_plan else None
         rows, problems = resolve_slots(_load(args.schedule), args.captures, args.scores)
         report = analyse(rows, problems)
+        feedback = None
         if loaded is not None:
             report["difficulty"] = difficulty.analyse(rows, problems, loaded)
+            if args.calibration_feedback:
+                feedback = difficulty.calibration_feedback(rows, problems, loaded)
     except (AnalysisError, difficulty.DifficultyError) as exc:
         print(f"analyze.py: ERROR: {exc}")
         return 3
     with open(args.out, "w", encoding="utf-8") as h:
         json.dump(report, h, indent=2)
         h.write("\n")
+    if feedback is not None:
+        with open(args.calibration_feedback, "w", encoding="utf-8") as h:
+            json.dump(feedback, h, indent=2)
+            h.write("\n")
     counts = report["slot_accounting"]["by_status"]
     print(f"{report['status']}: " + ", ".join(f"{counts[s]} {s}" for s in SLOT_STATUSES)
           + " (only 'valid' slots enter the primary outcome)")

@@ -20,28 +20,49 @@ non-valid slot) and a frozen pre-registration plan, and reports
   * every pre-registered inference task must have slots for every model: a
     frozen confirmatory plan with a missing task is an error, and in an
     exploratory report the tier holding it is inconclusive;
-  * bounds for non-valid slots: every invalid, excluded, unresolved or missing
-    slot is imputed as a failure (0) or a success (1) in the direction least
-    and most favourable to the treatment. A decision that changes under either
-    imputation is reported as inconclusive. Exclusions are never silently
-    dropped: a crashed, scope-violating or tamper-flagged run is a non-valid
-    slot under analyze.py and is carried into these bounds;
+  * agent-caused failures are outcomes (intention to treat). A slot whose run
+    is invalid ONLY because it changed or removed a file the prompt forbids
+    ("immutable files changed or missing"), or whose code a reviewer confirmed
+    as tampering, counts as a failure (0) of its arm in every estimate and in
+    both bounds. Tamper is therefore never imputed as a success. Anything else,
+    including a suspected (unconfirmed) tamper verdict and a scope violation
+    reported together with any other reason, stays non-valid (see attribution());
+  * bounds for the remaining non-valid slots (infrastructure or ambiguous):
+    every invalid, excluded, unresolved or missing slot is imputed as a
+    failure (0) or a success (1) in the direction least and most favourable to
+    the treatment. A decision that changes under either imputation is reported
+    as inconclusive. The tier also reports the decision it would get if the
+    scope violations were treated as non-valid instead (itt_dependent);
   * a decision per tier against the plan's thresholds: benefit, harm,
     no_meaningful_effect or inconclusive. A tier is inconclusive, whatever its
     interval, when fewer than two of its tasks discriminate (a task where every
     run in both arms passed, or every run failed, is at the ceiling or floor and
     says nothing about the skill), when the task differences have zero spread
     (a degenerate interval), or when the decision is not robust to the
-    non-valid-slot bounds.
+    non-valid-slot bounds. "no_meaningful_effect" additionally needs at least
+    min_discriminating_share of the tier's tasks to discriminate; otherwise the
+    tier is "ceiling-dominated" and inconclusive (see MIN_DISCRIMINATING_SHARE).
+
+Two difficulty axes. A rubric may give each factor an "axis": "intrinsic"
+(technical difficulty; only these factors form the tier composite) or
+"discovery" (requirement-discovery burden: how much the agent must learn from
+the repository rather than the prompt). Discovery factors give a separate
+level ("discovery_levels"), are never part of the tier composite and may not
+gate a tier, so the two effects can be estimated separately (by_discovery and
+discovery_interaction, next to by_tier and interaction).
 
 Plan (JSON, kind "aqd-difficulty-plan") pins the rubric and the rating files by
 SHA-256, so the tier of every task is fixed before results are opened. A task's
 tier must equal the tier its consensus factor scores give under the rubric; a
 mismatch is an error, never an override. Ratings made after outcomes were seen
 carry provenance "post_hoc" and may only be in the "historical" set, which is
-never confirmatory.
+never confirmatory. A frozen plan over prospective confirmatory ratings is
+labelled "estimation" unless its purpose is "confirmation" and it records a
+simulated power of at least 0.8 for its primary contrast.
 """
+import functools
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -55,6 +76,19 @@ PROVENANCE = ("prospective", "post_hoc")
 OUTCOMES = ("fully_correct", "hidden_pass_fraction")
 DECISIONS = ("benefit", "harm", "no_meaningful_effect", "inconclusive")
 ARMS = ("control", "treatment")
+AXES = ("intrinsic", "discovery")
+PURPOSES = ("estimation", "confirmation")
+MIN_CONFIRMATION_POWER = 0.8
+# Run-status reasons that are the agent's own doing. Only a slot whose last attempt has no other reason is
+# attributed to the agent; the prompts say "Do not modify any other file", so this breaks the task contract.
+AGENT_RUN_REASONS = frozenset({"immutable files changed or missing"})
+# Smallest share of a tier's tasks that must discriminate before "no_meaningful_effect" may be concluded.
+# Chosen by `power_sim.py share-sweep` (1000 sims, seed 20261122; DESIGN.md section 6): the smallest value on the
+# grid (0.30, 0.40, 0.45, ...) whose worst-case rate of "no_meaningful_effect", when 10-85% of the tasks sit at
+# the ceiling and the skill has an effect of MID on every task with room, is <= 0.05 (observed 0.026; 0.40 gives
+# 0.082; no rule gives 0.745). It costs almost nothing under a genuine null (P(nme) 0.026 vs 0.028 without it).
+# A plan may set its own value (min_discriminating_share) before it is frozen.
+MIN_DISCRIMINATING_SHARE = 0.45
 
 
 class DifficultyError(Exception):
@@ -107,8 +141,9 @@ def t_cdf(t, df):
     return 1.0 - tail if t >= 0 else tail
 
 
+@functools.lru_cache(maxsize=1024)
 def t_quantile(p, df):
-    """Inverse Student-t CDF by bisection (p in (0, 1), df >= 1)."""
+    """Inverse Student-t CDF by bisection (p in (0, 1), df >= 1). Pure, so cached (power_sim.py calls it often)."""
     if not 0.0 < p < 1.0 or df < 1:
         raise ValueError("t_quantile needs 0 < p < 1 and df >= 1")
     lo, hi = -1e7, 1e7
@@ -167,6 +202,25 @@ def validate_rubric(rubric, where="rubric"):
         ids.append(factor["id"])
     if len(ids) != len(set(ids)):
         raise DifficultyError(f"{where}: duplicate factor ids")
+    axes = [f.get("axis") for f in factors]
+    if any(a is not None for a in axes):
+        if any(a not in AXES for a in axes):
+            raise DifficultyError(f"{where}: every factor needs an axis from {AXES} once any factor has one")
+        if "intrinsic" not in axes:
+            raise DifficultyError(f"{where}: at least one intrinsic factor is needed")
+    discovery_ids = {f["id"] for f in factors if f.get("axis") == "discovery"}
+    levels = rubric.get("discovery_levels")
+    if discovery_ids:
+        top_d = sum(f["weight"] for f in factors if f["id"] in discovery_ids) * scale[1]
+        if (not isinstance(levels, list) or len(levels) < 2
+                or not all(isinstance(v, dict) and isinstance(v.get("name"), str) and _is_number(v.get("max_score"))
+                           for v in levels)
+                or any(b["max_score"] <= a["max_score"] for a, b in itertools.pairwise(levels))
+                or levels[-1]["max_score"] < top_d or len({v["name"] for v in levels}) != len(levels)):
+            raise DifficultyError(f"{where}: discovery_levels must be at least two named levels with increasing "
+                                  f"max_score covering the maximum discovery score {top_d}")
+    elif levels is not None:
+        raise DifficultyError(f"{where}: discovery_levels given but no factor has axis 'discovery'")
     tiers = rubric.get("tiers")
     if not isinstance(tiers, list) or len(tiers) < 2:
         raise DifficultyError(f"{where}: at least two tiers are needed")
@@ -183,7 +237,10 @@ def validate_rubric(rubric, where="rubric"):
         for factor_id, minimum in gate.items():
             if factor_id not in ids or not _is_int(minimum):
                 raise DifficultyError(f"{where}: tier {tier['name']} gate names unknown factor {factor_id!r}")
-    top = sum(f["weight"] for f in factors) * scale[1]
+            if factor_id in discovery_ids:
+                raise DifficultyError(f"{where}: tier {tier['name']} is gated on the discovery factor {factor_id}; "
+                                      "discovery is its own axis and must not move the intrinsic tier")
+    top = sum(f["weight"] for f in factors if f["id"] not in discovery_ids) * scale[1]
     if tiers[-1]["max_score"] < top:
         raise DifficultyError(f"{where}: the last tier must cover the maximum score {top}")
     if len({t["name"] for t in tiers}) != len(tiers):
@@ -192,7 +249,17 @@ def validate_rubric(rubric, where="rubric"):
 
 
 def composite(rubric, scores):
-    return sum(f["weight"] * scores[f["id"]] for f in rubric["factors"])
+    """Intrinsic composite: discovery-axis factors never count towards the tier."""
+    return sum(f["weight"] * scores[f["id"]] for f in rubric["factors"] if f.get("axis") != "discovery")
+
+
+def discovery_for(rubric, scores):
+    """(level, score) on the requirement-discovery axis, or (None, None) if the rubric has no such axis."""
+    factors = [f for f in rubric["factors"] if f.get("axis") == "discovery"]
+    if not factors:
+        return None, None
+    total = sum(f["weight"] * scores[f["id"]] for f in factors)
+    return next(v["name"] for v in rubric["discovery_levels"] if total <= v["max_score"]), total
 
 
 def tier_for(rubric, scores):
@@ -255,13 +322,39 @@ def validate_ratings(ratings, rubric, rubric_sha, where="ratings"):
         if entry.get("tier") != computed:
             raise DifficultyError(f"{w}: stated tier {entry.get('tier')!r} but the rubric gives {computed!r} "
                                   f"(score {total}); tiers are computed, never overridden")
+        level, discovery_score = discovery_for(rubric, consensus)
+        if "discovery" in entry and entry["discovery"] != level:
+            raise DifficultyError(f"{w}: stated discovery level {entry['discovery']!r} but the rubric gives "
+                                  f"{level!r}; levels are computed, never overridden")
         # Per-factor rater gaps (one entry per rater pair), so a factor with poor anchors is visible.
         gaps = {f["id"]: [abs(raters[i]["scores"][f["id"]] - raters[j]["scores"][f["id"]])
                           for i in range(len(raters)) for j in range(i + 1, len(raters))]
                 for f in rubric["factors"]}
         out[task] = {"tier": computed, "score": total, "set": entry["set"], "provenance": entry["provenance"],
                      "raters": len(raters), "gaps": gaps}
+        if level is not None:
+            out[task].update(discovery=level, discovery_score=discovery_score)
     return out
+
+
+def check_plan_parameters(plan, where):
+    """Optional plan fields added after review: min_discriminating_share, purpose and recorded power."""
+    share = plan.get("min_discriminating_share", MIN_DISCRIMINATING_SHARE)
+    if not _is_number(share) or not 0 < share <= 1:
+        raise DifficultyError(f"{where}: min_discriminating_share must be a number in (0, 1]")
+    purpose = plan.get("purpose", "estimation")
+    if purpose not in PURPOSES:
+        raise DifficultyError(f"{where}: purpose must be one of {PURPOSES}")
+    if purpose == "confirmation":
+        power = plan.get("power")
+        if not (isinstance(power, dict) and isinstance(power.get("contrast"), str) and power["contrast"]
+                and isinstance(power.get("source"), str) and power["source"] and _is_number(power.get("power"))):
+            raise DifficultyError(f"{where}: a confirmation plan must record its simulated power "
+                                  "({contrast, power, source}) for the primary contrast")
+        if not MIN_CONFIRMATION_POWER <= power["power"] <= 1:
+            raise DifficultyError(f"{where}: recorded power {power['power']} is below {MIN_CONFIRMATION_POWER}; "
+                                  "an under-powered stage is an estimation stage, not a confirmation")
+    return share, purpose
 
 
 def load_plan(path):
@@ -286,6 +379,7 @@ def load_plan(path):
     sets = plan.get("inference_sets")
     if not isinstance(sets, list) or not sets or any(s not in SETS for s in sets):
         raise DifficultyError(f"{path}: inference_sets must name sets from {SETS}")
+    check_plan_parameters(plan, path)
 
     def pinned(ref, what):
         if not isinstance(ref, dict) or not isinstance(ref.get("path"), str) or not isinstance(ref.get("sha256"), str):
@@ -315,8 +409,10 @@ def load_plan(path):
             if task in tasks:
                 raise DifficultyError(f"{path}: task {task} is rated in more than one file")
             tasks[task] = info
+    levels = rubric.get("discovery_levels")
     return {"plan": plan, "plan_sha256": _sha256(path), "rubric": rubric, "rubric_sha256": rubric_sha,
-            "ratings_sha256": ratings_sha, "tasks": tasks}
+            "ratings_sha256": ratings_sha, "tasks": tasks,
+            "discovery_order": [v["name"] for v in levels] if levels else None}
 
 
 # ------------------------------------------------------------ statistics
@@ -369,6 +465,30 @@ def decide(summary, mid, harm):
 
 # ------------------------------------------------------------ analysis
 
+def attribution(item):
+    """'agent' when a non-valid slot is unambiguously the agent's own failure; otherwise 'unattributed'.
+
+    Agent: the run is invalid and its last attempt's only reasons are in AGENT_RUN_REASONS (a forbidden file was
+    changed or removed), or a reviewer confirmed tampering. Everything else (provider and harness failures,
+    evaluator errors, suspected but unconfirmed tamper, pending review, missing runs, and a scope violation that
+    comes with any other reason) is unattributed and stays in the non-valid bounds. Fail closed: unknown shapes
+    are unattributed."""
+    return "agent" if _agent_kind(item) else "unattributed"
+
+
+def _agent_kind(item):
+    status = item.get("status")
+    if status == "excluded" and item.get("problem") == "tamper review: confirmed":
+        return "tamper"
+    if status == "invalid" and str(item.get("problem", "")).startswith("run invalid: "):
+        attempts = item.get("attempts") or []
+        last = attempts[-1] if attempts else {}
+        reasons = last.get("invalid_reasons") if isinstance(last, dict) else None
+        if last.get("valid") is False and isinstance(reasons, list) and reasons and set(reasons) <= AGENT_RUN_REASONS:
+            return "scope"
+    return None
+
+
 def _task_cells(rows, problems, outcome, tasks):
     cells = {}
     for row in rows:
@@ -383,113 +503,160 @@ def _task_cells(rows, problems, outcome, tasks):
         if item["task"] not in tasks:
             raise DifficultyError(f"task {item['task']} has slots but no difficulty rating")
         cell = cells.setdefault(item["model"], {}).setdefault(item["task"], _empty_cell())
-        cell["nonvalid"][item["group"]] += 1
+        kind = _agent_kind(item)
+        if kind is None:
+            cell["nonvalid"][item["group"]] += 1
+        else:
+            cell["agent_failures"][item["group"]] += 1
+            if kind == "scope":
+                cell["scope_failures"][item["group"]] += 1
     return cells
 
 
 def _empty_cell():
-    return {"control": [], "treatment": [], "nonvalid": {"control": 0, "treatment": 0}}
+    return {"control": [], "treatment": [], "nonvalid": {"control": 0, "treatment": 0},
+            "agent_failures": {"control": 0, "treatment": 0}, "scope_failures": {"control": 0, "treatment": 0}}
 
 
-def _task_difference(cell, impute=None):
-    """impute=None: valid runs only; 'worst'/'best': non-valid slots as 0/1 against/for the treatment."""
+def _arms(cell, itt=True):
+    """(control, treatment, nonvalid) with agent failures as 0 (itt) or, for the sensitivity analysis, scope
+    violations moved to the non-valid slots. Confirmed tamper is a failure in both."""
     control, treatment = list(cell["control"]), list(cell["treatment"])
+    nonvalid = dict(cell["nonvalid"])
+    agent = cell.get("agent_failures") or {"control": 0, "treatment": 0}
+    scope = cell.get("scope_failures") or {"control": 0, "treatment": 0}
+    for group, values in (("control", control), ("treatment", treatment)):
+        moved = 0 if itt else scope[group]
+        values += [0.0] * (agent[group] - moved)
+        nonvalid[group] += moved
+    return control, treatment, nonvalid
+
+
+def _task_difference(cell, impute=None, itt=True):
+    """impute=None: observed runs only (agent failures as 0); 'worst'/'best': remaining non-valid slots as 0/1
+    against/for the treatment."""
+    control, treatment, nonvalid = _arms(cell, itt)
     if impute is not None:
         bad_t, bad_c = (0.0, 1.0) if impute == "worst" else (1.0, 0.0)
-        treatment += [bad_t] * cell["nonvalid"]["treatment"]
-        control += [bad_c] * cell["nonvalid"]["control"]
+        treatment += [bad_t] * nonvalid["treatment"]
+        control += [bad_c] * nonvalid["control"]
     if not control or not treatment:
         return None
     return statistics.fmean(treatment) - statistics.fmean(control)
 
 
-def analyse_outcome(cells_by_task, info, plan, outcome, missing=()):
+def _discriminating(cell, itt=True):
+    control, treatment, _ = _arms(cell, itt)
+    if not control or not treatment:
+        return False
+    pooled = set(control) | set(treatment)
+    return not (len(pooled) == 1 and pooled <= {0.0, 1.0})
+
+
+def _summary(values, n_discriminating, absent, plan):
+    """One stratum (a tier or a discovery level): interval, decisions and every guard."""
     confidence, mid, harm = plan["confidence"], plan["mid"], plan["harm"]
-    sets = set(plan["inference_sets"])
-    tier_order = plan["tier_order"]
-    per_task = {}
-    by_tier = {tier: {"valid": [], "worst": [], "best": [], "discriminating": 0} for tier in tier_order}
-    for task, cell in sorted(cells_by_task.items()):
-        meta = info[task]
-        entry = {"tier": meta["tier"], "set": meta["set"], "provenance": meta["provenance"],
-                 "n_control": len(cell["control"]), "n_treatment": len(cell["treatment"]),
-                 "nonvalid": dict(cell["nonvalid"]),
-                 "control_mean": round(statistics.fmean(cell["control"]), 4) if cell["control"] else None,
-                 "treatment_mean": round(statistics.fmean(cell["treatment"]), 4) if cell["treatment"] else None,
-                 "in_inference": meta["set"] in sets}
-        diff = _task_difference(cell)
-        entry["difference"] = None if diff is None else round(diff, 4)
-        pooled = set(cell["control"]) | set(cell["treatment"])
-        entry["discriminating"] = diff is not None and not (len(pooled) == 1 and pooled <= {0.0, 1.0})
-        entry["bounds"] = [None if v is None else round(v, 4)
-                           for v in (_task_difference(cell, "worst"), _task_difference(cell, "best"))]
-        per_task[task] = entry
+    share_min = plan.get("min_discriminating_share", MIN_DISCRIMINATING_SHARE)
+    if not values["valid"]:
+        return {"tasks": 0, "decision": "inconclusive", "reason": "no task with valid runs in both arms",
+                "missing_tasks": absent}
+    main = _interval(values["valid"], confidence)
+    worst = _interval(values["worst"], confidence)
+    best = _interval(values["best"], confidence)
+    decisions = {"observed": decide(main, mid, harm), "worst_case": decide(worst, mid, harm),
+                 "best_case": decide(best, mid, harm)}
+    robust = len(set(decisions.values())) == 1
+    share = n_discriminating / main["n"]
+    out = {"tasks": main["n"], "discriminating_tasks": n_discriminating, "discriminating_share": round(share, 4),
+           "mean_task_difference": main["mean"], "sd": main["sd"],
+           "ci": main["ci"], "df": main["df"], "bounds_mean": [worst["mean"], best["mean"]],
+           "decisions": decisions, "robust_to_nonvalid": robust,
+           "decision": decisions["observed"] if robust else "inconclusive",
+           "missing_tasks": absent}
+    # A ceiling (or floor) is not evidence of no effect, and a zero-spread interval is degenerate, not
+    # precise. Both make the stratum inconclusive whatever the interval says.
+    if absent:
+        reason = f"pre-registered tasks have no slots for this model: {absent}"
+    elif main["n"] < 2:
+        reason = "fewer than two tasks: no interval"
+    elif n_discriminating < 2:
+        reason = ("ceiling or floor: fewer than two tasks in which the runs were not all at the same extreme "
+                  "(every run passing, or every run failing, in both arms)")
+    elif main["sd"] == 0:
+        reason = "zero spread across tasks: the interval is degenerate"
+    elif not robust:
+        reason = "the decision changes when non-valid slots are imputed as failures or successes"
+    elif out["decision"] == "no_meaningful_effect" and share < share_min:
+        reason = (f"ceiling-dominated: only {n_discriminating} of {main['n']} tasks discriminate (share "
+                  f"{share:.2f} < {share_min}); tasks at the same extreme in both arms cannot show an effect, so "
+                  "their zero differences make the interval look precise")
+    else:
+        reason = None
+    if reason is not None:
+        out["decision"] = "inconclusive"
+        out["reason"] = reason
+    return out
+
+
+def _strata(per_task, cells, key, order, info, plan, missing):
+    """Summaries per stratum (tier or discovery level) and the pairwise interactions between strata."""
+    confidence = plan["confidence"]
+    share_min = plan.get("min_discriminating_share", MIN_DISCRIMINATING_SHARE)
+    pools = {s: {itt: {"valid": [], "worst": [], "best": [], "discriminating": 0} for itt in (True, False)}
+             for s in order}
+    agent = {s: {"control": 0, "treatment": 0} for s in order}
+    for task, entry in per_task.items():
         if not entry["in_inference"]:
             continue
-        by_tier[meta["tier"]]["discriminating"] += entry["discriminating"]
-        for key, value in (("valid", diff), ("worst", entry["bounds"][0]), ("best", entry["bounds"][1])):
-            if value is not None:
-                by_tier[meta["tier"]][key].append(value)
+        stratum, cell = info[task][key], cells[task]
+        for group in ARMS:
+            agent[stratum][group] += entry["agent_failures"][group]
+        for itt in (True, False):
+            pool = pools[stratum][itt]
+            pool["discriminating"] += _discriminating(cell, itt)
+            for mode, impute in (("valid", None), ("worst", "worst"), ("best", "best")):
+                value = _task_difference(cell, impute, itt)
+                if value is not None:
+                    pool[mode].append(value)
+    summaries = {}
+    for s in order:
+        absent = sorted(t for t in missing if info[t][key] == s)
+        summary = _summary(pools[s][True], pools[s][True]["discriminating"], absent, plan)
+        alternative = _summary(pools[s][False], pools[s][False]["discriminating"], absent, plan)
+        summary["agent_failures"] = agent[s]
+        summary["decision_if_agent_failures_were_nonvalid"] = alternative["decision"]
+        summary["itt_dependent"] = alternative["decision"] != summary["decision"]
+        summaries[s] = summary
 
-    tiers = {}
-    for tier in tier_order:
-        values = by_tier[tier]
-        if not values["valid"]:
-            tiers[tier] = {"tasks": 0, "decision": "inconclusive", "reason": "no task with valid runs in both arms",
-                           "missing_tasks": sorted(t for t in missing if info[t]["tier"] == tier)}
-            continue
-        main = _interval(values["valid"], confidence)
-        absent = sorted(t for t in missing if info[t]["tier"] == tier)
-        worst = _interval(values["worst"], confidence)
-        best = _interval(values["best"], confidence)
-        decisions = {"valid_only": decide(main, mid, harm), "worst_case": decide(worst, mid, harm),
-                     "best_case": decide(best, mid, harm)}
-        robust = len(set(decisions.values())) == 1
-        discriminating = values["discriminating"]
-        tiers[tier] = {"tasks": main["n"], "discriminating_tasks": discriminating,
-                       "mean_task_difference": main["mean"], "sd": main["sd"],
-                       "ci": main["ci"], "df": main["df"], "bounds_mean": [worst["mean"], best["mean"]],
-                       "decisions": decisions, "robust_to_nonvalid": robust,
-                       "decision": decisions["valid_only"] if robust else "inconclusive",
-                       "missing_tasks": absent}
-        # A ceiling (or floor) is not evidence of no effect, and a zero-spread interval is degenerate, not
-        # precise. Both make the tier inconclusive whatever the interval says.
-        if absent:
-            reason = f"pre-registered tasks have no slots for this model: {absent}"
-        elif main["n"] < 2:
-            reason = "fewer than two tasks: no interval"
-        elif discriminating < 2:
-            reason = ("ceiling or floor: fewer than two tasks in which the runs were not all at the same extreme "
-                      "(every run passing, or every run failing, in both arms)")
-        elif main["sd"] == 0:
-            reason = "zero spread across tasks: the interval is degenerate"
-        elif not robust:
-            reason = "the decision changes when non-valid slots are imputed as failures or successes"
-        else:
-            reason = None
-        if reason is not None:
-            tiers[tier]["decision"] = "inconclusive"
-            tiers[tier]["reason"] = reason
-
-    # The interaction gets the same protections as a tier: no ceiling/floor tier, no missing pre-registered task,
-    # no degenerate interval, and a direction only if it survives the non-valid-slot bounds in both directions.
+    # The interaction gets the same protections as each side: no ceiling/floor, ceiling-dominated or zero-spread
+    # stratum, no missing pre-registered task, and a direction only if it survives the non-valid-slot bounds.
     interaction = {}
-    for i, low in enumerate(tier_order):
-        for high in tier_order[i + 1:]:
-            result = {key: welch(by_tier[low][key], by_tier[high][key], confidence)
-                      for key in ("valid", "worst", "best")}
+    for i, low in enumerate(order):
+        for high in order[i + 1:]:
+            result = {mode: welch(pools[low][True][mode], pools[high][True][mode], confidence)
+                      for mode in ("valid", "worst", "best")}
             entry = dict(result["valid"])
             entry["bounds"] = {"worst_case": result["worst"], "best_case": result["best"]}
-            blocked = [t for t in (low, high)
-                       if tiers[t].get("missing_tasks") or tiers[t].get("discriminating_tasks", 0) < 2]
+            problems = []
+            for side in (low, high):
+                summary = summaries[side]
+                if summary.get("missing_tasks"):
+                    problems.append(f"{side}: missing pre-registered tasks")
+                elif summary.get("tasks", 0) >= 2 and summary.get("discriminating_tasks", 0) < 2:
+                    problems.append(f"{side}: fewer than two discriminating tasks (ceiling or floor)")
+                elif summary.get("tasks", 0) >= 2 and summary.get("sd") == 0:
+                    problems.append(f"{side}: zero spread across tasks (degenerate)")
+                elif summary.get("tasks", 0) >= 2 and summary["discriminating_share"] < share_min:
+                    problems.append(f"{side}: ceiling-dominated (discriminating share "
+                                    f"{summary['discriminating_share']} < {share_min}); a difference in effect "
+                                    "would reflect headroom, not difficulty")
             lows = [r["ci"][0] for r in result.values() if r.get("ci")]
             highs = [r["ci"][1] for r in result.values() if r.get("ci")]
-            if blocked:
-                entry["conclusion"], entry["reason"] = "inconclusive", (
-                    f"tier(s) {blocked} have missing tasks or fewer than two discriminating tasks (ceiling or floor)")
+            if problems:
+                entry["conclusion"], entry["reason"] = "inconclusive", "; ".join(problems)
             elif entry.get("ci") is None:
                 entry["conclusion"] = "inconclusive"
-                entry.setdefault("reason", "fewer than two tasks in a tier: no interval")
+                entry.setdefault("reason", "fewer than two tasks in a stratum: no interval")
             elif len(lows) == 3 and min(lows) > 0:
                 entry["conclusion"] = "effect_larger_in_" + high
             elif len(highs) == 3 and max(highs) < 0:
@@ -499,14 +666,51 @@ def analyse_outcome(cells_by_task, info, plan, outcome, missing=()):
                 entry["reason"] = ("the interval includes 0, or its sign changes when non-valid slots are imputed "
                                    "as failures or successes")
             interaction[f"{high} - {low}"] = entry
-    return {"by_task": per_task, "by_tier": tiers, "interaction": interaction}
+    return summaries, interaction
+
+
+def analyse_outcome(cells_by_task, info, plan, outcome, missing=(), discovery_order=None):
+    sets = set(plan["inference_sets"])
+    per_task = {}
+    for task, cell in sorted(cells_by_task.items()):
+        meta = info[task]
+        cell.setdefault("agent_failures", {"control": 0, "treatment": 0})
+        cell.setdefault("scope_failures", {"control": 0, "treatment": 0})
+        control, treatment, _ = _arms(cell)
+        entry = {"tier": meta["tier"], "set": meta["set"], "provenance": meta["provenance"],
+                 "n_control": len(cell["control"]), "n_treatment": len(cell["treatment"]),
+                 "nonvalid": dict(cell["nonvalid"]), "agent_failures": dict(cell["agent_failures"]),
+                 "control_mean": round(statistics.fmean(control), 4) if control else None,
+                 "treatment_mean": round(statistics.fmean(treatment), 4) if treatment else None,
+                 "in_inference": meta["set"] in sets}
+        if meta.get("discovery") is not None:
+            entry["discovery"] = meta["discovery"]
+        diff = _task_difference(cell)
+        entry["difference"] = None if diff is None else round(diff, 4)
+        entry["discriminating"] = _discriminating(cell)
+        entry["bounds"] = [None if v is None else round(v, 4)
+                           for v in (_task_difference(cell, "worst"), _task_difference(cell, "best"))]
+        per_task[task] = entry
+    tiers, interaction = _strata(per_task, cells_by_task, "tier", plan["tier_order"], info, plan, missing)
+    out = {"by_task": per_task, "by_tier": tiers, "interaction": interaction}
+    if discovery_order and all(info[t].get("discovery") in discovery_order for t in info):
+        out["by_discovery"], out["discovery_interaction"] = _strata(
+            per_task, cells_by_task, "discovery", discovery_order, info, plan, missing)
+    return out
+
+
+def _is_confirmatory_design(plan, info):
+    sets = set(plan["inference_sets"])
+    return (plan["status"] == "frozen" and sets == {"confirmatory"}
+            and all(m["provenance"] == "prospective" for m in info.values() if m["set"] in sets))
 
 
 def analyse(rows, problems, loaded):
     plan, info = loaded["plan"], loaded["tasks"]
+    _, purpose = check_plan_parameters(plan, "plan")
     sets = set(plan["inference_sets"])
-    confirmatory = (plan["status"] == "frozen" and sets == {"confirmatory"}
-                    and all(m["provenance"] == "prospective" for m in info.values() if m["set"] in sets))
+    strict = _is_confirmatory_design(plan, info)
+    label = ("confirmatory" if purpose == "confirmation" else "estimation") if strict else "exploratory"
     primary = plan["primary_outcome"]
     outcomes = [primary] + [o for o in plan.get("secondary_outcomes") or [] if o != primary]
     by_factor = {}
@@ -520,38 +724,76 @@ def analyse(rows, problems, loaded):
                      "within_one": round(a["within_one"] / a["pairs"], 4)}
                  for f, a in sorted(by_factor.items()) if a["pairs"]}
     report = {
-        "label": "confirmatory" if confirmatory else "exploratory",
+        "label": label,
         "plan_status": plan["status"],
+        "plan_purpose": purpose,
         "plan_sha256": loaded.get("plan_sha256"),
         "rubric_sha256": loaded["rubric_sha256"],
         "ratings_sha256": loaded.get("ratings_sha256"),
         "inference_sets": sorted(sets),
-        "thresholds": {"mid": plan["mid"], "harm": plan["harm"], "confidence": plan["confidence"]},
+        "thresholds": {"mid": plan["mid"], "harm": plan["harm"], "confidence": plan["confidence"],
+                       "min_discriminating_share": plan.get("min_discriminating_share", MIN_DISCRIMINATING_SHARE)},
         "tiers": {t: sorted(k for k, m in info.items() if m["tier"] == t) for t in plan["tier_order"]},
+        "post_hoc_tasks": sorted(k for k, m in info.items() if m["provenance"] == "post_hoc"),
         "rating_agreement_by_factor": agreement,
         "rating_gaps_by_task": {k: m.get("gaps") for k, m in sorted(info.items())},
         "by_model": {},
     }
+    discovery_order = loaded.get("discovery_order")
+    if discovery_order:
+        report["discovery_levels"] = {v: sorted(k for k, m in info.items() if m.get("discovery") == v)
+                                      for v in discovery_order}
     cells = {outcome: _task_cells(rows, problems, outcome, info) for outcome in outcomes}
     models = sorted(set(cells[primary]))
     inference_tasks = {t for t, m in info.items() if m["set"] in sets}
-    if confirmatory and not models:
+    if strict and not models:
         raise DifficultyError("confirmatory plan, but no slot exists for any model")
     for model in models:
         missing = sorted(inference_tasks - set(cells[primary][model]))
-        if missing and confirmatory:
+        if missing and strict:
             raise DifficultyError(f"{model}: pre-registered confirmatory tasks have no slots: {missing}")
         report["by_model"][model] = {
             ("primary:" if o == primary else "secondary:") + o:
-                analyse_outcome(cells[o].get(model, {}), info, plan, o, missing)
+                analyse_outcome(cells[o].get(model, {}), info, plan, o, missing, discovery_order)
             for o in outcomes}
         report["by_model"][model]["missing_inference_tasks"] = missing
     report["interpretation"] = (
         "The skill effect is treatment - control within one model, estimated per task and averaged with equal task "
         "weight inside a tier. Intervals are over tasks (df = tasks - 1); repetitions narrow them only through the "
-        "task means. A tier decision is 'inconclusive' unless it survives imputing every non-valid slot both ways. "
+        "task means. Agent-caused failures (a forbidden file changed, confirmed tampering) count as failures; a tier "
+        "decision is 'inconclusive' unless it survives imputing every other non-valid slot both ways, and "
+        "'itt_dependent' marks a decision that would differ if scope violations were treated as non-valid. "
         "A larger model error rate on harder tasks says nothing about the skill; only the treatment - control "
         "difference and its change across tiers do. "
-        + ("" if confirmatory else "EXPLORATORY: the plan is not frozen, the inference set is not the confirmatory "
-                                   "set, or a rating was made after outcomes were seen."))
+        + {"confirmatory": "",
+           "estimation": "ESTIMATION: the plan does not record adequate power for a confirmatory claim; report the "
+                         "intervals, not the decisions, as the result.",
+           "exploratory": "EXPLORATORY: the plan is not frozen, the inference set is not the confirmatory set, or a "
+                          "rating was made after outcomes were seen."}[label])
     return report
+
+
+def calibration_feedback(rows, problems, loaded):
+    """What task authors may see after the calibration stage: control-arm results of calibration tasks only.
+
+    Treatment results, treatment slot counts and any treatment - control contrast are withheld, so nobody who can
+    still change tasks can tune them toward the arm that is winning (DESIGN.md section 6)."""
+    info = loaded["tasks"]
+    calibration = {t for t, m in info.items() if m["set"] == "calibration"}
+    out = {"kind": "aqd-calibration-feedback", "rubric_sha256": loaded["rubric_sha256"],
+           "note": "control arm only; treatment results are withheld until the confirmatory analysis",
+           "by_model": {}}
+    cells = _task_cells(rows, problems, "fully_correct", info)
+    fractions = _task_cells(rows, problems, "hidden_pass_fraction", info)
+    for model in sorted(cells):
+        for task in sorted(calibration & set(cells[model])):
+            cell = cells[model][task]
+            control, _, nonvalid = _arms(cell)
+            frac, _, _ = _arms(fractions[model][task])
+            out["by_model"].setdefault(model, {})[task] = {
+                "tier": info[task]["tier"], "discovery": info[task].get("discovery"),
+                "control_runs": len(control), "control_successes": int(sum(control)),
+                "control_mean_hidden_pass_fraction": round(statistics.fmean(frac), 4) if frac else None,
+                "control_agent_failures": cell["agent_failures"]["control"],
+                "control_nonvalid_slots": nonvalid["control"]}
+    return out

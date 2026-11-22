@@ -2,7 +2,7 @@
 """Create and read the sealed run schedule.
 
     schedule.py create --out SEALED_DIR/schedule.json --models REF[,REF...]
-                       [--tasks NEW-01,NEW-02,NEW-03] [--repetitions N] [--seed HEX]
+                       [--tasks NEW-01,NEW-02,NEW-03] [--repetitions N] [--seed HEX] [--counterbalance]
     schedule.py next   --schedule FILE --captures DIR     # first run without run-status.json (exit 3: none)
     schedule.py get    --schedule FILE --run-id ID --key model|task|group|env|blind_id|repetition|block
     schedule.py rerun  --schedule FILE --run-id ID --reason TEXT
@@ -20,6 +20,13 @@ Design (pre-registered):
   * run_id (r-<10 hex>) appears in operator files and in the agent's working
     path; blind_id (b-<8 hex>) is a second, independent label used only in
     scorer packets, so packets cannot be matched to run order or logs.
+  * --counterbalance (Phase 3.3 proposal; off by default, so every Phase 3.2
+    schedule is reproduced byte for byte): which arm runs first is balanced
+    instead of drawn independently per block. For every model and task, the
+    treatment-first blocks number floor(reps/2) or ceil(reps/2); the odd extras
+    are split so the whole schedule differs by at most one; which blocks get
+    which order is random. This removes the arm/position confound (in Phase 3.2
+    treatment ran first in 4/4 pairs by chance).
 The seed is generated with the OS CSPRNG unless given, and is recorded.
 """
 import argparse
@@ -39,7 +46,25 @@ REPETITIONS = 3
 GROUPS = ("control", "treatment")
 
 
-def make_schedule(seed_hex, models, tasks=TASKS, repetitions=REPETITIONS):
+def _balanced_first_arms(rng, blocks, repetitions):
+    """{block: arm that runs first}, balanced per (model, task) and overall (see the module docstring)."""
+    pairs = sorted({(model, task) for model, task, _ in blocks})
+    extras = []
+    if repetitions % 2:
+        extras = ["treatment"] * (len(pairs) // 2) + ["control"] * (len(pairs) - len(pairs) // 2)
+        rng.shuffle(extras)
+    first = {}
+    for index, (model, task) in enumerate(pairs):
+        arms = ["treatment"] * (repetitions // 2) + ["control"] * (repetitions // 2)
+        if repetitions % 2:
+            arms.append(extras[index])
+        rng.shuffle(arms)
+        for rep, arm in zip(range(1, repetitions + 1), arms):
+            first[(model, task, rep)] = arm
+    return first
+
+
+def make_schedule(seed_hex, models, tasks=TASKS, repetitions=REPETITIONS, counterbalance=False):
     for ref in models:
         parse_model(ref)
     if len(set(models)) != len(models) or not models:
@@ -53,6 +78,7 @@ def make_schedule(seed_hex, models, tasks=TASKS, repetitions=REPETITIONS):
     env_for = dict(zip(GROUPS, envs))
     blocks = [(model, task, rep) for model in models for task in tasks for rep in range(1, repetitions + 1)]
     rng.shuffle(blocks)
+    first_arm = _balanced_first_arms(rng, blocks, repetitions) if counterbalance else None
     used = set()
 
     def fresh(prefix, nbytes):
@@ -64,17 +90,23 @@ def make_schedule(seed_hex, models, tasks=TASKS, repetitions=REPETITIONS):
 
     runs = []
     for block_index, (model, task, rep) in enumerate(blocks, start=1):
-        order = list(GROUPS)
-        rng.shuffle(order)
+        if first_arm is None:
+            order = list(GROUPS)
+            rng.shuffle(order)
+        else:
+            order = sorted(GROUPS, key=lambda g: g != first_arm[(model, task, rep)])
         for group in order:
             runs.append({"order": len(runs) + 1, "block": block_index, "model": model, "task": task, "repetition": rep,
                          "group": group, "env": env_for[group], "run_id": fresh("r", 5), "blind_id": fresh("b", 4)})
+    design = {"models": list(models), "tasks": list(tasks), "repetitions": repetitions, "groups": list(GROUPS)}
+    if counterbalance:
+        design["counterbalanced"] = True
     return {
         "schema_version": 2,
         "kind": "aqd-phase-3.2-sealed-schedule",
         "seed": seed_hex,
         "created_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "design": {"models": list(models), "tasks": list(tasks), "repetitions": repetitions, "groups": list(GROUPS)},
+        "design": design,
         "env_for_group": env_for,
         "runs": runs,
     }
@@ -135,6 +167,19 @@ def validate(schedule):
     for r in runs:
         if r["env"] != envs[r["group"]]:
             problems.append(f"{r['run_id']}: env does not match group")
+    if design.get("counterbalanced"):
+        first = {}
+        for r in sorted(runs, key=lambda r: r["order"]):
+            first.setdefault(r["block"], r)
+        def unbalanced(selected):
+            n = sum(r["group"] == "treatment" for r in selected)
+            return abs(2 * n - len(selected)) > 1
+        if unbalanced(list(first.values())):
+            problems.append("counterbalanced schedule: treatment-first and control-first blocks differ by more than one")
+        for model in models:
+            for task in tasks:
+                if unbalanced([r for r in first.values() if r["model"] == model and r["task"] == task]):
+                    problems.append(f"counterbalanced schedule: {model}/{task} first arms are not balanced")
     return problems
 
 
@@ -147,6 +192,8 @@ def main(argv=None):
     create.add_argument("--models", required=True, help="comma-separated provider/model[#variant]")
     create.add_argument("--tasks", default=",".join(TASKS))
     create.add_argument("--repetitions", type=int, default=REPETITIONS)
+    create.add_argument("--counterbalance", action="store_true",
+                        help="balance which arm runs first (Phase 3.3 proposal; Phase 3.2 schedules never use it)")
     rerun = sub.add_parser("rerun")
     rerun.add_argument("--schedule", required=True)
     rerun.add_argument("--run-id", required=True)
@@ -197,7 +244,7 @@ def main(argv=None):
     seed = args.seed or secrets.token_hex(16)
     try:
         schedule = make_schedule(seed, [m for m in args.models.split(",") if m],
-                                 [t for t in args.tasks.split(",") if t], args.repetitions)
+                                 [t for t in args.tasks.split(",") if t], args.repetitions, args.counterbalance)
     except ValueError as exc:
         print(f"schedule.py: {exc}", file=sys.stderr)
         return 2

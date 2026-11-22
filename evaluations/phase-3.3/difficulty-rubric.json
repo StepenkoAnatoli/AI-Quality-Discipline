@@ -1,9 +1,12 @@
 {
   "kind": "aqd-difficulty-rubric",
   "schema_version": 1,
-  "version": "1.0-draft",
-  "status_note": "DRAFT. Not ratified. Equal weights by default (no data exists to estimate weights). The require_min gate on the hard tier was added after seeing NEW-04 reach the ceiling with a complete specification; it must be validated on calibration tasks before the confirmatory set is rated. File count, lines of code and number of hidden checks are deliberately not factors.",
-  "scale": [0, 3],
+  "version": "1.1-draft",
+  "status_note": "DRAFT. Not ratified. Two axes. Intrinsic technical difficulty (seven factors, axis 'intrinsic') alone forms the composite (0-21) and the tier. Requirement-discovery burden (F6, axis 'discovery') is a separate level ('specified' 0-1, 'discovered' 2-3), never part of the composite and never a tier gate, so the two effects can be estimated separately. This replaces v1.0-draft, which counted F6 in the composite and also gated the hard tier on it; that gate was added after NEW-04 reached the ceiling. Tier cut-points are the v1.0 cut-points rescaled to 21 (7/24 and 14/24 of the maximum), not fitted to data. Equal weights (no data exists to estimate weights). File count, lines of code and number of hidden checks are deliberately not factors.",
+  "scale": [
+    0,
+    3
+  ],
   "factors": [
     {
       "id": "F1_interacting_requirements",
@@ -15,7 +18,8 @@
         "1": "Several requirements, at most one interacting pair.",
         "2": "Several interacting pairs; an ordering or precedence rule exists.",
         "3": "Requirements form a web: most of them constrain each other's implementation."
-      }
+      },
+      "axis": "intrinsic"
     },
     {
       "id": "F2_state_space",
@@ -27,7 +31,8 @@
         "1": "A few states with obvious transitions.",
         "2": "An explicit state machine with conditional transitions.",
         "3": "A state machine with time-dependent or externally driven transitions (leases, retries, expiry) and legacy states."
-      }
+      },
+      "axis": "intrinsic"
     },
     {
       "id": "F3_cross_module",
@@ -39,7 +44,8 @@
         "1": "One module changed; one other module's behaviour is load-bearing.",
         "2": "Two or three modules changed, or several load-bearing callers.",
         "3": "Changes across components with an interface between them that must stay consistent."
-      }
+      },
+      "axis": "intrinsic"
     },
     {
       "id": "F4_concurrency_failure",
@@ -51,7 +57,8 @@
         "1": "Errors must propagate cleanly; no concurrency.",
         "2": "Concurrent callers or partial failure with rollback.",
         "3": "Concurrency together with partial failure, crash recovery or time-based expiry."
-      }
+      },
+      "axis": "intrinsic"
     },
     {
       "id": "F5_compatibility",
@@ -63,7 +70,8 @@
         "1": "Public interface or one existing behaviour must be preserved.",
         "2": "Legacy data or formats must be read correctly.",
         "3": "Legacy data and live callers must both keep working during or after the change."
-      }
+      },
+      "axis": "intrinsic"
     },
     {
       "id": "F6_requirement_discovery",
@@ -75,7 +83,8 @@
         "1": "A few obligations follow from the repository.",
         "2": "Roughly a third to a half come from the repository (callers, invariants, existing tests, docs).",
         "3": "Most edge-case obligations must be found in the repository; the prompt states the goal and constraints."
-      }
+      },
+      "axis": "discovery"
     },
     {
       "id": "F7_verification_demand",
@@ -87,7 +96,8 @@
         "1": "A few new unit tests suffice.",
         "2": "Needs a non-trivial harness (fault injection, fixtures for legacy data).",
         "3": "Needs multi-process or timing harnesses whose own correctness is non-obvious."
-      }
+      },
+      "axis": "intrinsic"
     },
     {
       "id": "F8_existing_coverage",
@@ -99,12 +109,32 @@
         "1": "Mostly covered.",
         "2": "Partly covered; regressions in important behaviour would pass the visible tests.",
         "3": "Essentially uncovered."
-      }
+      },
+      "axis": "intrinsic"
     }
   ],
   "tiers": [
-    {"name": "easy", "max_score": 7},
-    {"name": "medium", "max_score": 14},
-    {"name": "hard", "max_score": 24, "require_min": {"F6_requirement_discovery": 2}}
+    {
+      "name": "easy",
+      "max_score": 6
+    },
+    {
+      "name": "medium",
+      "max_score": 12
+    },
+    {
+      "name": "hard",
+      "max_score": 21
+    }
+  ],
+  "discovery_levels": [
+    {
+      "name": "specified",
+      "max_score": 1
+    },
+    {
+      "name": "discovered",
+      "max_score": 3
+    }
   ]
 }

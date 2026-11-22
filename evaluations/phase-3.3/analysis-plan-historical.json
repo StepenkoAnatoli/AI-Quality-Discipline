@@ -5,12 +5,12 @@
   "note": "Exploratory description of the historical Phase 3.2 tasks only. Not a confirmatory plan: the confirmatory plan is frozen (status 'frozen', inference_sets ['confirmatory'], prospective ratings by two raters) before any confirmatory run, per DESIGN.md section 9.",
   "rubric": {
     "path": "difficulty-rubric.json",
-    "sha256": "a2d70c2762241880937b6749d29848e8be7e6af10e54cf137d9262223bc94858"
+    "sha256": "2d1f960dc364086a9958e7b3e1245415de5c8b749840c97768e8a285da1d2412"
   },
   "ratings": [
     {
       "path": "ratings-historical.json",
-      "sha256": "a067b09077873c0d3a059cfd2bb1d4c71f147ea5c689039fe2126d2d5880c138"
+      "sha256": "8d6c6f322119516cf61b04f23049bb5ff3119dff6b475a3d24268c829daf75c0"
     }
   ],
   "primary_outcome": "fully_correct",
@@ -27,5 +27,6 @@
     "easy",
     "medium",
     "hard"
-  ]
+  ],
+  "purpose": "estimation"
 }
