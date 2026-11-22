@@ -164,6 +164,7 @@ class PreregisteredInputsTests(unittest.TestCase):
         "NEW-01": ("c64501497fc0a83d2d5236685dd26425ba92deb5f5b4bf5dadd5f06e70c9875c", "f14175ed14d5086a770b98b4bfd7b4e309b94d9d8a16a5a7aad4307550ae3f65"),
         "NEW-02": ("9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f", "ae420d1d9c621e4ad259dd1e2837245cd7f720a55bce08b74e1e21163eb96d58"),
         "NEW-03": ("a5764db416e9848f7b6d51f06948b5110a6785013903260892942d3a042f649b", "cd61f2a29fd90040dc048b44fa424dd6fe8368f6cd7dac491b8ccdf917b4cf04"),
+        "NEW-04": ("a50a09d169767c51111c1dbd7729c2ee401791541ba21b9ce5237e6240594b93", "b8ee898b84df9754e2b6b991e347835889e864550470599e68c699155589ceb2"),
     }
 
     def test_prompt_and_workspace_hashes(self):
@@ -184,7 +185,7 @@ class PreregisteredInputsTests(unittest.TestCase):
 
 class FixtureBaselineTests(TempDirTest):
     def test_baseline_tests_pass_on_every_fixture(self):
-        for task in ("NEW-01", "NEW-02", "NEW-03"):
+        for task in ("NEW-01", "NEW-02", "NEW-03", "NEW-04"):
             with self.subTest(task=task):
                 data = manifest.build(PHASE, task)
                 dest = os.path.join(self.tmp, task)

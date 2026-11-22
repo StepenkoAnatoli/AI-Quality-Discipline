@@ -105,7 +105,7 @@ done
 gate isolation_users ok
 
 # 4. Pristine store matches the committed allowlist.
-for task in SMOKE NEW-01 NEW-02 NEW-03; do
+for task in SMOKE NEW-01 NEW-02 NEW-03 NEW-04; do
     "$(python_bin)" "$AQD_HARNESS/manifest.py" verify --manifest "$AQD_PRISTINE/$task/manifest.json" \
         --tree "$AQD_PRISTINE/$task/project" --phase pre --out "$AQD_SEALED/pristine-$task.json" >/dev/null \
         || die "pristine store for $task does not match its manifest"

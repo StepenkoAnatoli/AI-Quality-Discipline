@@ -33,6 +33,8 @@ import sys
 from aqd_common import parse_model
 
 TASKS = ("NEW-01", "NEW-02", "NEW-03")
+# Tasks a schedule may name explicitly. The default design (TASKS) is the pre-registered pilot.
+KNOWN_TASKS = TASKS + ("NEW-04",)
 REPETITIONS = 3
 GROUPS = ("control", "treatment")
 
@@ -42,7 +44,7 @@ def make_schedule(seed_hex, models, tasks=TASKS, repetitions=REPETITIONS):
         parse_model(ref)
     if len(set(models)) != len(models) or not models:
         raise ValueError("models must be a non-empty list without duplicates")
-    unknown = sorted(set(tasks) - set(TASKS))
+    unknown = sorted(set(tasks) - set(KNOWN_TASKS))
     if unknown or not tasks or repetitions < 1:
         raise ValueError(f"bad design: tasks={tasks} repetitions={repetitions}")
     rng = random.Random(int(seed_hex, 16))

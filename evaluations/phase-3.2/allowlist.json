@@ -74,6 +74,24 @@
         "tests/baseline/test_import_baseline.py": "immutable",
         "tests/additive/__init__.py": "additive"
       }
+    },
+    "NEW-04": {
+      "title": "Job queue leases for several workers",
+      "source_dir": "tasks/NEW-04/project",
+      "files": {
+        "README.md": "immutable",
+        "TASK.md": "immutable",
+        "jobqueue/__init__.py": "immutable",
+        "jobqueue/db.py": "immutable",
+        "jobqueue/errors.py": "immutable",
+        "jobqueue/jobs.py": "mutable",
+        "jobqueue/models.py": "immutable",
+        "jobqueue/worker.py": "immutable",
+        "tests/__init__.py": "immutable",
+        "tests/baseline/__init__.py": "immutable",
+        "tests/baseline/test_jobs_baseline.py": "immutable",
+        "tests/additive/__init__.py": "additive"
+      }
     }
   }
 }

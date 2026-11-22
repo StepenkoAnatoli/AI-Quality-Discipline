@@ -58,7 +58,7 @@ assert_clean_ancestors "$AQD_ROOT/env-a/runs/x/project"
 
 # Pristine store, built only from the allowlist, with JSON manifests.
 COMMIT="$(git -C "$AQD_CHECKOUT" rev-parse HEAD)"
-for task in SMOKE NEW-01 NEW-02 NEW-03; do
+for task in SMOKE NEW-01 NEW-02 NEW-03 NEW-04; do
     dest="$AQD_PRISTINE/$task"
     if [[ -f "$dest/manifest.json" ]]; then
         "$(python_bin)" "$AQD_HARNESS/manifest.py" verify --manifest "$dest/manifest.json" --tree "$dest/project" \
