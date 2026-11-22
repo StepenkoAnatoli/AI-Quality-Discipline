@@ -337,7 +337,7 @@ class ResidualRiskTests(ScoringTest):
         # code-object or import capability).
         import importlib
         import types
-        reviewed_harmless = {"base64", "keyword", "warnings", "weakref"}
+        reviewed_harmless = {"base64", "binascii", "keyword", "warnings", "weakref"}  # binascii: secrets on 3.11
         missed = []
         for module in sorted(score_run.ALLOWED_IMPORTS - {"__future__"}):
             for attr, value in sorted(vars(importlib.import_module(module)).items()):
