@@ -187,8 +187,14 @@ def session(claude, out_dir, name, group, user, scrub="1", timeout=180, turns=No
         for n in names:
             path = os.path.join(directory, n)
             if os.path.islink(path):
+                try:
+                    with open(path, "rb") as h:
+                        h.read()
+                    error = None
+                except OSError as exc:  # the old scan counted an unreadable file as a hit (fail closed)
+                    error = type(exc).__name__ + (f" errno {exc.errno}" if exc.errno else "")
                 links.append({"link": path.replace(run_root, "<run>"), "target": os.readlink(path),
-                              "read_through_has_canary": contains(path)})
+                              "read_through_has_canary": contains(path), "read_through_error": error})
     diag = {"symlinks": links, "reader_self_environ_has_canary": contains("/proc/self/environ"),
             "pid1_environ_has_canary": contains("/proc/1/environ"),
             "pid1_comm": open("/proc/1/comm").read().strip()}
