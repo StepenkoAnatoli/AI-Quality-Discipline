@@ -15,8 +15,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import signal
 import textwrap
 import unittest
+import unittest.mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HARNESS = os.path.join(HERE, "..", "harness")
@@ -201,10 +203,35 @@ class CommandTests(Workdir):
 
     def test_run_as_user_never_puts_the_token_in_argv(self):
         cmd = cc.build_command(cc.build_argv("/usr/bin/claude", MODEL_REF, "/s.json", 40), clean_env(self.tmp),
-                               as_user="aqd-a", wrapper="/aqd/bin/cc_exec.sh")
+                               as_user="aqd-a", wrapper="/aqd/bin/cc_exec.sh", workdir="/aqd/run/project")
         self.assertEqual(cmd[:6], ["sudo", "-n", "-u", "aqd-a", "/usr/bin/env", "-i"])
         self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", " ".join(cmd))
-        self.assertIn("/aqd/bin/cc_exec.sh", cmd)
+        # the agent's own process changes directory: the operator cannot traverse the agent's 0700 tree
+        at = cmd.index("/aqd/bin/cc_exec.sh")
+        self.assertEqual(cmd[at + 1:at + 3], ["/aqd/run/project", "/usr/bin/claude"])
+
+    def test_the_driver_never_needs_to_enter_the_project_itself(self):
+        captured = {}
+        real = subprocess.Popen
+
+        def popen(cmd, **kwargs):
+            captured.update(kwargs, cmd=cmd)
+            return real(["/bin/true"], **dict(kwargs, cwd="/"))
+        env_file = os.path.join(self.tmp, "env")
+        with open(env_file, "w", encoding="utf-8") as h:
+            h.write("".join(f"{k}={v}\n" for k, v in clean_env(self.tmp).items()))
+        secret = os.path.join(self.tmp, "secret")
+        with open(secret, "w", encoding="utf-8") as h:
+            h.write(TEST_TOKEN + "\n")
+        prompt = os.path.join(self.tmp, "p")
+        with open(prompt, "w", encoding="utf-8") as h:
+            h.write("x")
+        unreachable = "/nonexistent-agent-tree/project"  # not even visible to the caller
+        with unittest.mock.patch.object(cc.subprocess, "Popen", popen):
+            cc.run("/usr/bin/claude", MODEL_REF, "/s.json", 5, prompt, env_file, secret, 5,
+                   os.path.join(self.tmp, "out"), unreachable)
+        self.assertEqual(captured.get("cwd"), "/")
+        self.assertIn(unreachable, captured["cmd"])
 
 
 # ------------------------------------------------------------------ transcript
@@ -472,6 +499,11 @@ class AnalyzeRecordTests(unittest.TestCase):
         with self.assertRaises(analyze.AnalysisError):
             analyze.check_run_records(self.records(({"claude_cli_sha256": None}, {"claude_cli_sha256": None})))
 
+    def test_native_records_need_the_pre_registered_timeout(self):
+        import analyze
+        with self.assertRaisesRegex(analyze.AnalysisError, "2700"):
+            analyze.check_run_records(self.records(({"timeout_seconds": 20}, {"timeout_seconds": 20})))
+
     def test_execution_environments_are_never_pooled(self):
         import analyze
         records = self.records()
@@ -635,6 +667,38 @@ class DriverIntegrationTests(Workdir):
         with open(os.path.join(out, "transcript.ndjson"), encoding="utf-8") as h:
             self.assertNotIn("late", h.read())
 
+    def test_timeout_when_the_remaining_group_belongs_to_another_user_stays_a_valid_timeout(self):
+        # Through sudo with a non-root operator: after sudo exits, the group holds only the agent user's processes
+        # and killpg raises EPERM. That must not crash the driver (reproduced in the dry-run image by review).
+        self.configure(session(), sleep=30)
+        real_killpg, calls = os.killpg, []
+
+        def killpg(pid, sig):
+            calls.append(sig)
+            if sig == signal.SIGKILL:
+                raise PermissionError(1, "Operation not permitted")
+            return real_killpg(pid, sig)
+        with unittest.mock.patch.object(cc.os, "killpg", killpg):
+            code, out = self.run_driver(timeout=2)
+        driver = load(os.path.join(out, "driver-result.json"))
+        self.assertEqual((code, driver["status"], driver["outcome"]), (0, "timeout", "timeout"))
+        self.assertIn(signal.SIGTERM, calls)
+
+    def test_timeout_when_even_term_is_refused_still_writes_a_status(self):
+        self.configure(session(), sleep=30)
+        real_killpg = os.killpg
+
+        def killpg(pid, sig):
+            raise PermissionError(1, "Operation not permitted")
+        with unittest.mock.patch.object(cc.os, "killpg", killpg), \
+                unittest.mock.patch.object(cc, "TERM_GRACE_SECONDS", 1):
+            try:
+                code, out = self.run_driver(timeout=2)
+            finally:
+                cc.os.killpg = real_killpg
+        driver = load(os.path.join(out, "driver-result.json"))
+        self.assertEqual(driver["status"], "timeout")
+
     def test_a_command_that_cannot_start_still_writes_an_unambiguous_status(self):
         missing = os.path.join(self.tmp, "no-such-claude")
         out = os.path.join(self.tmp, "out")
@@ -740,6 +804,16 @@ class PreflightTests(Workdir):
         return rec
 
     NOW = "2026-11-23T12:00:00+00:00"
+
+    def test_evidence_runs_need_the_pre_registered_timeout(self):
+        self.assertTrue(any("2700" in r for r in cc.check_timeout_policy(20, dry_run=False)))
+        self.assertEqual(cc.check_timeout_policy(2700, dry_run=False), [])
+        self.assertEqual(cc.check_timeout_policy(20, dry_run=True), [])
+        fp = self.fingerprint(timeout_seconds=20)
+        self.assertFalse(fp["dry_run"])
+        self.assertTrue(any("2700" in r for r in cc.check_preflight(self.record(fingerprint=fp), fp, self.NOW, 24)))
+        fp = self.fingerprint(timeout_seconds=20, dry_run=True)
+        self.assertEqual(cc.check_preflight(self.record(fingerprint=fp), fp, self.NOW, 24), [])
 
     def test_a_fresh_matching_preflight_passes(self):
         fp = self.fingerprint()
@@ -860,8 +934,16 @@ class ExecWrapperTests(Workdir):
     def run_wrapper(self, stdin):
         script = ('import os, sys; d = sys.stdin.read(); '
                   'print(repr(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")) + "|" + repr(d) + "|" + repr(sys.argv[1:]))')
-        return subprocess.run([self.WRAPPER, sys.executable, "-c", script, "--flag"], input=stdin,
-                              capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, check=False)
+        return subprocess.run([self.WRAPPER, self.tmp, sys.executable, "-c", script, "--flag"], input=stdin,
+                              capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, check=False, cwd="/")
+
+    def test_the_wrapper_enters_the_project_and_refuses_one_it_cannot_enter(self):
+        proc = subprocess.run([self.WRAPPER, self.tmp, "/bin/pwd"], input="T\n", capture_output=True, text=True,
+                              env={"PATH": "/usr/bin:/bin"}, check=False, cwd="/")
+        self.assertEqual((proc.returncode, os.path.realpath(proc.stdout.strip())), (0, os.path.realpath(self.tmp)))
+        proc = subprocess.run([self.WRAPPER, os.path.join(self.tmp, "absent"), "/bin/pwd"], input="T\n",
+                              capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, check=False, cwd="/")
+        self.assertEqual((proc.returncode, proc.stdout), (96, ""))
 
     def test_first_line_becomes_the_token_and_the_rest_is_the_prompt(self):
         proc = self.run_wrapper("TOKEN123\nline one\nline two\n")

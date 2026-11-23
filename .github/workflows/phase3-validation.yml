@@ -77,7 +77,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Report whether an unprivileged user can create bubblewrap namespaces on this runner (as found)
         run: |
-          sudo apt-get install -y -qq bubblewrap >/dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap >/dev/null
           sudo useradd -M -s /usr/sbin/nologin aqd-probe
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone 2>/dev/null || true
           if sudo -u aqd-probe env -i PATH=/usr/bin:/bin bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true; then

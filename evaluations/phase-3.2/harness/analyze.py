@@ -246,6 +246,9 @@ def check_run_records(records):
             keys[("all runs", "")] = keys[("all runs", "")] + ("claude_cli_sha256", "max_turns")
             if not isinstance(record.get("claude_cli_sha256"), str):
                 raise AnalysisError(f"{where} lacks claude_cli_sha256")
+            if record.get("timeout_seconds") != 2700:
+                raise AnalysisError(f"{where} timeout {record.get('timeout_seconds')!r} s is not the pre-registered "
+                                    "2700 s (dry-run records are never evidence)")
         if run["group"] == "treatment":
             values = shared.setdefault(("treatment skill", ""), {})
             if values.setdefault("sha256", skill["sha256"]) != skill["sha256"]:

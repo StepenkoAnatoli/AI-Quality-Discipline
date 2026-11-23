@@ -40,7 +40,7 @@
 | `launch-run-cc.sh` (new) | `launch-run.sh` with the OpenCode steps replaced. **Executed end to end against a mock CLI** in a disposable container (INTEGRATION-DRYRUN.md); never against the real CLI |
 | `preflight-cc.sh` (new) | Native preflight; writes `preflight-cc.json`, bound to the commit, CLI hash, harness, settings, skill, schedule and limits. `preflight.sh` (OpenCode) is unchanged and never accepted by the native launcher |
 | `phase-3.3/dryrun/` (new) | Mock CLI, dry-run driver, results checker, Dockerfile; run by the CI job `native-claude-code-dry-run` |
-| `tests/test_cc_adapter.py` (new) | 51 offline tests, wired into the existing CI job (37 at first, plus 14 from the adversarial review in §9) |
+| `tests/test_cc_adapter.py` (new) | Offline tests in the existing CI job (count in INTEGRATION-DRYRUN.md §2) |
 
 ## 3. Isolation and the command
 
@@ -48,7 +48,7 @@
 
 `claude -p --restricted --model <id> --effort <level> --settings <root-owned file> --strict-mcp-config --tools Bash,Read,Edit,Write,Glob,Grep,Skill --allowedTools <same> --permission-mode acceptEdits --output-format stream-json --verbose --max-turns N --no-session-persistence`
 
-The prompt goes in on stdin. The process starts in the run's project directory (`Popen(cwd=project)`; sudo keeps the working directory), and the transcript check requires `init.cwd` to be exactly that directory.
+The prompt goes in on stdin. The process starts in the run's project directory: `cc_exec.sh DIR …` changes to it inside the agent user's own process, because the operator cannot traverse the agent's 0700 tree (the OpenCode harness's `as_agent` does the same). The transcript check requires `init.cwd` to be exactly that directory.
 
 `Skill` is in `--tools` in **both** arms: `--tools` withholds every built-in tool it does not name (2.1.330: "…is not on this session's --tools list…; withheld"), so without it the treatment's skill would be listed but could never be loaded.
 
@@ -108,7 +108,7 @@ The prompt goes in on stdin. The process starts in the run's project directory (
 | `result.subtype` values `success` / `error_max_turns`; `error_max_turns` carries `is_error: true` | SDK result types; 2.1.330 result builder | documented shape; `is_error` binary only; real values unverified |
 | `Skill` survives `--restricted --tools …,Skill` and appears in `init.tools` | 2.1.330 launch-list filter | **UNVERIFIED.** It fails closed: a treatment run is invalid without it |
 | `init.cwd` is the working directory the process started in, as an absolute path matching `$PROJECT` | SDK init type | **UNVERIFIED** (a symlinked or canonicalised path would fail closed) |
-| sudo keeps the caller's working directory for `aqd-a`/`aqd-b` | sudo default (no `runcwd`) | assumed; caught by the `init.cwd` check |
+| `cc_exec.sh` can enter the project as the agent user | tested in the non-root dry run | verified with the mock; a failure exits 96 and the run is invalid |
 | `setup-token` tokens start with `sk-ant-oat` (used to refuse an API key placed in the token slot) | none found | **assumption.** If wrong, `check_token` refuses a valid token and the run stops before any request. It fails closed and can't spend |
 | A turn cap (`--max-turns`, default 200) is a new constraint; Phase 3.2 had only the 45-minute wall limit | harness choice | to pre-register. Every run records whether it was hit (`result_subtype`) |
 
@@ -191,7 +191,7 @@ Recommendation:
 
 | # | Finding | Verdict | Fix (test first) |
 |---|---|---|---|
-| 1 | `claude` never started in the project directory, so with `--restricted` every run would be a valid failure | confirmed by tracing | `run --project`, `Popen(cwd=project)`; `init.cwd` must equal the project |
+| 1 | `claude` never started in the project directory, so with `--restricted` every run would be a valid failure | confirmed by tracing | `run --project`; `init.cwd` must equal the project. (The first fix, `Popen(cwd=project)`, failed for a non-root operator; replaced by a `cd` in `cc_exec.sh`, see INTEGRATION-DRYRUN.md §1) |
 | 2 | `--tools` withheld the `Skill` tool, so the treatment's skill was listed but could not load | confirmed in the binary text (runtime unverified) | `Skill` in `--tools`/`--allowedTools` and settings in both arms; required in `init.tools` in treatment |
 | 3 | Every turn-limit run was invalid (the CLI sets `is_error: true`); the old test used a shape the CLI never emits | confirmed in the binary | the subtype decides; driver outcome `max_turns`, valid |
 | 4 | Every timeout was invalid (no result event, truncated line, no `modelUsage`), contradicting SPECIFICATION §6.2 | confirmed | `check-transcript --driver-result`; timeout rules above |

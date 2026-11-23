@@ -119,6 +119,9 @@ def main():
             "skills": list(real_skills), "plugins": []}
     init.update(s.get("init_overrides") or {})
     emit(init)
+    if s.get("background_child"):  # a leftover process in the session's group, as a Bash tool job would be
+        subprocess.Popen(["/bin/sh", "-c", "trap '' TERM; sleep 300"], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL)  # ignores TERM: only KILL (or the launcher) ends it
     if s.get("sleep"):
         emit({"type": "assistant", "message": {"model": model, "role": "assistant",
                                                "content": [{"type": "text", "text": "Working."}]}})

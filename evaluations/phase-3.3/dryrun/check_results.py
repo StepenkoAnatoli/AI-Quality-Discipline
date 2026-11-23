@@ -7,6 +7,45 @@ import json
 import sys
 
 
+# Each scenario must fail (or pass) for ITS reason, not merely end with the right exit code.
+REASONS = {
+    "timeout": lambda r: r["timed_out"] is True and r["driver_status"] == "timeout",
+    "timeout-with-child": lambda r: r["timed_out"] is True and r["driver_status"] == "timeout",
+    "turn-limit": lambda r: r["driver_outcome"] == "max_turns" and r["max_turns_reached"] is True,
+    "control-ok": lambda r: r["activation"] == "NOT_APPLICABLE" and r["invoked"] is False,
+    "treatment-ok-invoked": lambda r: r["activation"] == "AVAILABLE" and r["invoked"] is True,
+    "treatment-not-invoked": lambda r: r["activation"] == "AVAILABLE" and r["invoked"] is False,
+    "proc-probe-run": lambda r: r["activation"] == "AVAILABLE",
+    "auth-api-key": lambda r: _reason(r, "api_checks exit 3"),
+    "wrong-token": lambda r: _reason(r, "api_checks exit 3"),
+    "api-key-in-token-slot": lambda r: _reason(r, "api_checks exit 3"),
+    "wrong-model": lambda r: _reason(r, "not served by the pinned model"),
+    "wrong-init-model": lambda r: _reason(r, "session model"),
+    "missing-skill": lambda r: _reason(r, "available skills []"),
+    "unexpected-skill": lambda r: _reason(r, "available skills ['other-skill']"),
+    "wrong-cwd": lambda r: _reason(r, "working directory"),
+    "corrupted-transcript": lambda r: _reason(r, "not JSON objects"),
+    "provider-error": lambda r: _reason(r, "provider/API error"),
+    "missing-credentials": lambda r: _log(r, "CLAUDE_CODE_OAUTH_TOKEN is not set"),
+    "leaked-token": lambda r: _reason(r, "token-leak"),
+    "unapproved-run": lambda r: _log(r, "not in the owner's approved_run_ids"),
+    "binary-changed-after-preflight": lambda r: _log(r, "cli_sha256 changed since preflight"),
+    "stale-preflight": lambda r: _log(r, "(stale)"),
+    "opencode-preflight-only": lambda r: _log(r, "no native preflight record"),
+    "timeout-changed-after-preflight": lambda r: _log(r, "timeout_seconds changed since preflight"),
+    "not-a-dry-run-timeout": lambda r: _log(r, "not the pre-registered 2700"),
+    "stop-file-present": lambda r: _log(r, "benchmark stopped"),
+}
+
+
+def _reason(row, text):
+    return any(text in reason for reason in row.get("invalid_reasons") or [])
+
+
+def _log(row, text):
+    return any(text in line for line in row.get("launcher_log_tail") or [])
+
+
 def expectation_holds(row):
     exp, code, valid, stop, cap = row["expect"], row["launcher_exit"], row["valid"], row["stop_file"], row["capture_exists"]
     if exp == "valid":
@@ -30,10 +69,20 @@ def main(paths):
         if "scenario" in row and not expectation_holds(row):
             failures.append(f"{row['scenario']}: expected {row['expect']}, got exit {row['launcher_exit']} "
                             f"valid={row['valid']} stop={bool(row['stop_file'])}")
+        if "scenario" in row:
+            check = REASONS.get(row["scenario"])
+            if check is None:
+                failures.append(f"{row['scenario']}: no expected reason defined")
+            elif not check(row):
+                failures.append(f"{row['scenario']}: right exit, wrong or missing reason")
         if "cleanup_for" in row and row["problems"]:
             failures.append(f"cleanup after {row['cleanup_for']}: {row['problems']}")
         if row.get("out_dir_token_scan") == "FOUND":
             failures.append("the synthetic token appears in the dry-run output directory")
+        if "proc_probe" in row and not row["proc_probe"]["session_pid_found"]:
+            failures.append("proc probe found no session process: nothing was probed")
+        if "proc_probe" in row and not row["proc_probe"]["same_user_reads_token"]:
+            failures.append("proc probe could not read even the same user's environment: the probe is not working")
         if "proc_probe" in row and row["proc_probe"]["other_arm_reads_token"]:
             failures.append("the other arm's OS user can read a session's environment")
         if "proc_probe" in row and row["proc_probe"]["token_in_cmdline"]:

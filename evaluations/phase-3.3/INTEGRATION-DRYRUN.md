@@ -19,7 +19,9 @@
 | P3 | Token exposure was asserted, not examined | **Examined offline** (§4). The decisive questions need a live probe |
 | P4 | `run()` wrote token and prompt **before** starting its timeout. A child that never reads stdin blocked the driver indefinitely once the data exceeded the pipe buffer. Only the 60,000-byte prompt cap protected it, and that cap assumed a 64 KiB pipe: Linux gives 4 KiB pipes to a user past `pipe-user-pages-soft` | **Confirmed and fixed.** Reproduced at 70 KB and 300 KB: the driver hung beyond its 2 s timeout. Fix: the stdin feed runs in a thread, so the timeout starts when the process starts. On timeout the group gets TERM (sudo relays it), then KILL. A command that cannot start writes `status: error`. Regression tests added |
 | P5 | Private P2 tasks cannot be used without code changes | **Reviewed, not implemented** (§7), and kept out of the SMOKE dry run |
-| — | `lib.sh`'s fixed 2700 s timeout made the timeout path untestable | Native-only `AQD_CC_RUN_TIMEOUT_SECONDS`. It defaults to the pre-registered 2700, is bound by the preflight, recorded per run, and `analyze.py` refuses mixed values. `lib.sh` is unchanged |
+| — | `lib.sh`'s fixed 2700 s timeout made the timeout path untestable | Native-only `AQD_CC_RUN_TIMEOUT_SECONDS`. It defaults to the pre-registered 2700 and is bound by the preflight and recorded per run. A value other than 2700 is refused unless `AQD_CC_DRY_RUN=1`, which the preflight records. `analyze.py` refuses native records whose timeout is not 2700, so dry-run records are never evidence. `lib.sh` is unchanged |
+| — | **Found by running as a non-root operator** (the real host): the operator cannot traverse the agent's `/aqd/env-x` (0700). So: (a) the launcher could not hash the run-root settings file, so every run was invalid; (b) the earlier `Popen(cwd=project)` fix for the working directory would fail on the real host. A root dry run hides both | **Fixed.** The run record hashes the operator's own copy of the settings. `cc_exec.sh DIR …` changes directory inside the agent's process (exit 96 if it cannot), as the OpenCode harness's `as_agent` does. The driver runs from `/`. Tests added |
+| — | **Found by review:** on timeout through sudo with a non-root operator, the final group KILL raised EPERM once sudo had exited. The driver crashed and a valid timeout became an invalid run | **Fixed.** EPERM is tolerated; the launcher kills by OS user next. If the group cannot be signalled at all, the direct child is killed and the driver never hangs. The new dry-run scenario `timeout-with-child` reproduces the crash against the old code and passes with the fix |
 | — | SMOKE could not be scheduled (`KNOWN_TASKS`) | Added as a known task. The default design is unchanged (tested) |
 | — | Installed bubblewrap was treated as sufficient | **New preflight gate:** the agent users must be able to create bubblewrap namespaces. In an unprivileged container they cannot (§4) |
 
@@ -38,45 +40,56 @@ When the launcher refuses:
 - the record is from a foreign execution environment or a foreign schema;
 - any field differs from the recomputed value. Every changed key is named.
 
-The run record stores the preflight file's SHA-256.
+The run record stores the preflight file's SHA-256. A `schedule.py rerun` changes the schedule's hash, so `preflight-cc.sh` must be run again before a rerun. This is intended: a rerun is a recorded change.
 
 ## 2. Tests
 
-- **New failing-first tests in `test_cc_adapter.py`:** 51 → 63 tests.
+- **New failing-first tests in `test_cc_adapter.py`:** 51 → 69 tests.
   - Stdin hang: a child that never reads; a child that exits without reading; a group kill that reaches background children; a command that cannot start.
   - Preflight binding: 6 tests covering every bound field, stale, future, naive time, not ok, an OpenCode-shaped record, a dirty or new commit, a non-canonical skill.
   - Static launcher text: the native preflight only.
   - SMOKE is schedulable without changing the default design.
+  - EPERM on the group kill (two cases); the timeout policy (dry run only); `analyze.py` refuses non-2700 native records.
+  - The driver never enters the project itself; `cc_exec.sh` enters it, or exits 96.
 - **Results on the final tree:**
 
   | Suite | Result |
   |---|---|
-  | `test_cc_adapter` | 63 OK |
+  | `test_cc_adapter` | 69 OK |
   | `test_harness` | 67 OK |
   | `test_difficulty` | 68 OK |
   | `test_scoring` | 40 OK |
 
   ShellCheck is clean at warning level on `launch-run-cc.sh`, `preflight-cc.sh`, `cc_exec.sh` and `dryrun-cc.sh`.
-- **The dry-run checker is tested by mutation:** 8 doctored results files are all rejected:
-  - an invalid run reported valid;
-  - a timeout reported invalid;
-  - a leak without STOP;
-  - a refusal that created a capture;
-  - an agent rename of `skills/`;
-  - a leftover run root;
-  - a cross-arm token read;
-  - a failed full-mode preflight.
+- **The dry-run checker requires each scenario's own reason**, not just its exit code:
+  - the invalid reason;
+  - the refusal line in the launcher log;
+  - for a timeout, `timed_out` and the driver status;
+  - for the turn limit, `max_turns`;
+  - for activation, the invoked flag.
+
+  It also fails if the `/proc` probe found no session.
+- **The checker is tested by mutation:** 15 doctored results files are all rejected:
+  - the 8 earlier cases;
+  - a timeout that ended idle;
+  - a turn limit without `max_turns`;
+  - an invalid run with the wrong reason;
+  - a refusal with the wrong reason;
+  - a lost invoked flag;
+  - no session found by the `/proc` probe;
+  - an unknown scenario.
 
 ## 3. Dry run: the real launcher with a mock CLI
 
 **How it ran:**
 - **Container:** `ubuntu:24.04` (digest-pinned) with sudo 1.9.15, bubblewrap 0.9.0 and Python 3.12. `--network none`. `--privileged` only so that bubblewrap works.
+- **Operator:** a **non-root** user with passwordless sudo, as on a real host. Root only prepares the container (clone, root-owned mock, operator account).
 - **Scripts:** the committed tree's real `setup-host.sh`, `schedule.py`, `preflight-cc.sh` and `launch-run-cc.sh`.
 - **The mock** (`dryrun/mock_claude.py`):
   - checks what it receives from inside the agent's uid;
   - edits the mutable SMOKE file;
   - emits a synthetic transcript whose `init.cwd` and `init.skills` are the **real** working directory and skills directory, unless a scenario falsifies them.
-- **Results:** `dryrun/results-2026-11-23/`; checked by `check_results.py`: **24 scenarios, 0 failures** (two independent runs).
+- **Results:** `dryrun/results-2026-11-23/`; checked by `check_results.py`: **26 scenarios, 0 failures**. The same run passes on a GitHub `ubuntu-24.04` runner in CI (§5).
 
 | Scenario | Expected | Observed |
 |---|---|---|
@@ -84,6 +97,7 @@ The run record stores the preflight file's SHA-256.
 | treatment, skill invoked | valid | exit 0, valid, AVAILABLE, invoked = true |
 | treatment, not invoked | valid | exit 0, valid, AVAILABLE, invoked = false (invocation is not a validity condition) |
 | timeout (session sleeps past the 20 s timeout) | valid timeout | exit 0, valid, `timed_out` |
+| timeout with a leftover child that ignores TERM | valid timeout | exit 0, valid, `timed_out`; no process left (the old code crashed here) |
 | turn limit (`error_max_turns`, `is_error: true`, exit 1) | valid | exit 0, valid, outcome `max_turns` |
 | auth reports `api_key` | STOP | exit 20, STOP, invalid |
 | wrong synthetic token | STOP | exit 20, STOP, invalid |
@@ -101,6 +115,7 @@ The run record stores the preflight file's SHA-256.
 | only an OpenCode `preflight.ok` present | refused | exit 2, no capture |
 | timeout changed after preflight | refused | exit 2, no capture |
 | STOP present | refused | exit 2, no capture |
+| timeout 20 s without the dry-run marker | refused | exit 2, no capture ("not the pre-registered 2700") |
 | unprivileged container (bubblewrap cannot create namespaces) | preflight fails | preflight refused (agrees with the independent probe) |
 
 **No failure case became a valid failure.** Every negative case is either invalid (excluded and reported) or a stop or refusal.
@@ -133,7 +148,7 @@ The run record stores the preflight file's SHA-256.
 | Token in temp files, captures or outputs written by the harness | **No** | dry run scans |
 | Can a **same-user** child (what the agent's Bash tool is) read the token from `/proc/<claude pid>/environ`, or inherit it? | **Yes, without a scrub.** The mock does not scrub, so this is the baseline: Linux lets a same-uid process read another's environment; Yama `ptrace_scope` restricts attaching, not this read | dry run |
 | Does `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` remove the token from the Bash tool's environment **and** hide the parent's `/proc` entry? | **Unknown.** The binary contains the variable and a "bubblewrap is required for subprocess env scrubbing" error. Nothing offline shows its effect, so this report does **not** claim it works | needs a live probe |
-| Can bubblewrap work on the run host? | **Not in an unprivileged container**: the namespace probe fails. **In a privileged container: yes.** On the GitHub runner host: the new CI step reports it | dry run; CI |
+| Can bubblewrap work on the run host? | **Not in an unprivileged container**: the namespace probe fails. **In a privileged container: yes.** **GitHub `ubuntu-24.04` runner host, as found: NO** (`kernel.apparmor_restrict_unprivileged_userns = 1`; `bwrap: setting up uid map: Permission denied`). **After `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`: yes** | dry run; CI log of `ec32a23` |
 | What does 2.1.330 do when bubblewrap is installed but namespaces are refused? | **Unknown.** It may refuse every Bash call. Then every run would be a silent valid failure, so the preflight now fails closed | needs a live run on such a host, or avoid such hosts |
 | `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` | In the binary and accepted as an OAuth source, but **undocumented** and apparently meant for Anthropic's own remote runners. **Not used.** A file descriptor would keep the token out of `environ` | owner or Anthropic confirmation needed before any use |
 
@@ -153,7 +168,11 @@ Until it passes, the controls are:
 New job `native-claude-code-dry-run` in `phase3-validation.yml`:
 - `contents: read`, no secret referenced;
 - builds the image from `dryrun/Dockerfile`, runs both dry-run modes and `check_results.py`;
-- reports (information only) whether an unprivileged user can create bubblewrap namespaces on the runner host, with the AppArmor userns sysctl.
+- reports, before any change, whether an unprivileged user can create bubblewrap namespaces on the runner host, with the AppArmor userns sysctl. Then it sets `kernel.apparmor_restrict_unprivileged_userns=0` on the disposable runner (a logged host change) before the dry run;
+- prints the preflight logs (synthetic token only; the harness never prints it);
+- **result on GitHub (`ec32a23`): green.** As found, namespaces are REFUSED on the runner; after the sysctl change they work. The non-root dry run is pending re-confirmation on the head commit.
+
+**Consequence for a live run on a GitHub runner:** the same `sysctl` change is required, or the native preflight refuses. It weakens a kernel hardening default on a disposable VM, so it must be named in the smoke-test request.
 
 ## 6. Still unverified (needs the authorised live smoke test)
 
@@ -169,9 +188,7 @@ New job `native-claude-code-dry-run` in `phase3-validation.yml`:
   - whether `init.effort` is reported.
 - **The env scrub:** its effect and its behaviour without namespaces (§4).
 - **The headless combination:** `--restricted` + `--tools Bash` + `acceptEdits` lets a session edit and run tests.
-- **Timing and process handling:**
-  - how the real CLI reacts to the TERM-then-KILL shutdown;
-  - whether sudo keeps the working directory with the runner's sudoers.
+- **Timing and process handling:** how the real CLI reacts to the TERM-then-KILL shutdown.
 
 ## 7. Private P2 tasks: minimum opt-in changes (review only; nothing private copied here)
 
@@ -210,9 +227,9 @@ All five are opt-in, and unset means today's behaviour. They belong in a separat
 **NOT READY.**
 
 Remaining blockers:
-1. **This change's CI on GitHub:**
-   - the new dry-run job must be green on a GitHub runner, not only locally;
-   - its bubblewrap report must say whether runner hosts allow unprivileged namespaces. If they don't, the smoke test needs a host where the preflight passes (for example a privileged disposable container on the runner, as in the dry run). That choice must be stated in the request.
+1. **The run host decision:** GitHub runners refuse unprivileged user namespaces as found. The request must name the host choice and its consequence:
+   - the `sysctl` change on a disposable runner (verified to make bubblewrap work);
+   - or another host where `preflight-cc.sh` passes unchanged.
 2. **The smoke-test workflow** (`workflow_dispatch` only, `contents: read`, the token secret referenced in exactly one step, egress locked, results encrypted): written, reviewed, and first run with the secret step removed and the mock CLI. **Not written.**
 3. **The live security probe (§4):** specified as part of the smoke test, with counts only, never values, and stop rules (any nonzero token count stops the benchmark).
 4. **Owner actions:**

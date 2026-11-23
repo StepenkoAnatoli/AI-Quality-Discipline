@@ -112,6 +112,8 @@ failed = [name for name, good in (
     ("schedule hash missing", bool(fp["schedule_sha256"])),
     ("pristine skill differs from the checkout's canonical skill", fp["skill_sha256"] == fp["canonical_skill_sha256"]),
     ("a task manifest is missing", all(fp["task_manifests_sha256"].values()) and fp["task_manifests_sha256"]),
+    ("timeout is not the pre-registered 2700 s and this is not a declared dry run (AQD_CC_DRY_RUN=1)",
+     fp["timeout_seconds"] == 2700 or fp["dry_run"]),
 ) if not good]
 for name in failed:
     print(f"preflight-cc: {name}", file=sys.stderr)

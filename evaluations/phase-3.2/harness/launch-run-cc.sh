@@ -184,7 +184,7 @@ install -d -m 0700 "$SECRET_DIR"
 ( umask 077; sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' "$AQD_CREDENTIALS" | head -n 1 >"$SECRET_DIR/token" )
 [[ -s "$SECRET_DIR/token" ]] || die "CLAUDE_CODE_OAUTH_TOKEN is not set in $AQD_CREDENTIALS"
 "$PY" - "$CAP/run-record.json" "$RUN_ID" "$TASK" "$GROUP" "$MODEL_REF" "$MESSAGE_FILE" "$MANIFEST" \
-    "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$SETTINGS" "$AQD_CLAUDE_BIN" "$AQD_CC_RUN_TIMEOUT_SECONDS" \
+    "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$CAP/cc-settings.json" "$AQD_CLAUDE_BIN" "$AQD_CC_RUN_TIMEOUT_SECONDS" \
     "$AQD_CC_MAX_TURNS" "$AQD_SEALED/preflight-cc.json" <<'PY'
 import datetime, hashlib, json, sys
 out, run_id, task, group, model, prompt, manifest, skill, settings, claude, timeout, turns = sys.argv[1:13]

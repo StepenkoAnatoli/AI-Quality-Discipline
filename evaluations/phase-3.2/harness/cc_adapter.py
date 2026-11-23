@@ -190,7 +190,8 @@ def _git(checkout, *args):
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
-def preflight_fingerprint(checkout, harness, claude, cli_version, sealed, pristine, max_turns, timeout_seconds):
+def preflight_fingerprint(checkout, harness, claude, cli_version, sealed, pristine, max_turns, timeout_seconds,
+                          dry_run=False):
     """Everything a native run depends on. Recomputed by the launcher and compared key by key."""
     schedule_path = os.path.join(sealed, "schedule.json")
     tasks = []
@@ -215,6 +216,7 @@ def preflight_fingerprint(checkout, harness, claude, cli_version, sealed, pristi
         "task_manifests_sha256": {t: _sha_or_none(os.path.join(pristine, t, "manifest.json")) for t in tasks},
         "max_turns": max_turns,
         "timeout_seconds": timeout_seconds,
+        "dry_run": bool(dry_run),
     }
 
 
@@ -224,6 +226,17 @@ def _parse_utc(value):
     except ValueError:
         return None
     return moment if moment.tzinfo is not None else None
+
+
+PRE_REGISTERED_TIMEOUT_SECONDS = 2700
+
+
+def check_timeout_policy(timeout_seconds, dry_run):
+    """Evidence runs use the pre-registered 45-minute timeout; another value is allowed only in a declared dry run."""
+    if timeout_seconds != PRE_REGISTERED_TIMEOUT_SECONDS and not dry_run:
+        return [f"timeout {timeout_seconds} s is not the pre-registered {PRE_REGISTERED_TIMEOUT_SECONDS} s "
+                "(allowed only with AQD_CC_DRY_RUN=1, which is recorded)"]
+    return []
 
 
 def check_preflight(record, current, now_utc, max_age_hours=PREFLIGHT_MAX_AGE_HOURS):
@@ -254,6 +267,7 @@ def check_preflight(record, current, now_utc, max_age_hours=PREFLIGHT_MAX_AGE_HO
             reasons.append(f"checkout has uncommitted changes ({label})")
         if fp and not (fp.get("skill_sha256") == fp.get("canonical_skill_sha256") == CANONICAL_SKILL_SHA256):
             reasons.append(f"pristine skill is not the canonical skill ({label})")
+    reasons += check_timeout_policy(current.get("timeout_seconds"), current.get("dry_run") is True)
     for key in ("checkout_commit", "cli_sha256", "schedule_sha256"):
         if current.get(key) is None:
             reasons.append(f"{key} could not be computed")
@@ -318,13 +332,14 @@ def read_env_file(path):
     return env
 
 
-def build_command(argv, env, as_user=None, wrapper=None):
+def build_command(argv, env, as_user=None, wrapper=None, workdir="/"):
     """The process to start. The checked environment (never the token) is passed through env -i when running as
-    another user; otherwise run() hands it to Popen directly."""
+    another user; otherwise run() hands it to Popen directly. cc_exec.sh changes to workdir inside the agent's own
+    process: the operator cannot traverse the agent's tree, so the driver itself never enters it."""
     prefix = []
     if as_user:
         prefix = ["sudo", "-n", "-u", as_user, "/usr/bin/env", "-i"] + [f"{k}={v}" for k, v in sorted(env.items())]
-    return prefix + [wrapper or os.path.join(HERE, "cc_exec.sh")] + list(argv)
+    return prefix + [wrapper or os.path.join(HERE, "cc_exec.sh"), workdir] + list(argv)
 
 
 def files_containing(paths, secret):
@@ -357,7 +372,7 @@ def auth_status(claude, env_file, secret_file, out, as_user=None, wrapper=None, 
     if not problems:
         command = build_command([claude, "auth", "status", "--json"], env, as_user, wrapper)
         try:
-            proc = subprocess.run(command, input=token.encode("utf-8") + b"\n", capture_output=True, timeout=timeout, check=False,
+            proc = subprocess.run(command, input=token.encode("utf-8") + b"\n", capture_output=True, timeout=timeout, check=False, cwd="/",
                                   env=None if as_user else env)
             status = json.loads(proc.stdout.decode("utf-8", "replace"))
         except (subprocess.TimeoutExpired, ValueError):
@@ -389,23 +404,33 @@ def _feed(pipe, data):
 
 
 def _end_group(proc):
-    """TERM the session's process group (sudo relays TERM to its command), then KILL whatever is left."""
-    for sig, grace in ((signal.SIGTERM, TERM_GRACE_SECONDS), (signal.SIGKILL, None)):
+    """TERM the session's process group (sudo relays TERM to its command), then KILL whatever is left. With a
+    non-root operator, the group can hold only the agent user's processes once sudo has exited: killpg then
+    raises EPERM. That is not an error here (the launcher kills by OS user next); the status stays "timeout"."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(proc.pid, sig)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
-        if grace is None:
-            return proc.wait()
         try:
-            proc.wait(timeout=grace)
+            proc.wait(timeout=TERM_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
+            if sig == signal.SIGKILL:  # the group could not be signalled: end the direct child, never hang
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                try:
+                    return proc.wait(timeout=TERM_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    return None
             continue
-        try:  # the leader is gone; KILL the rest of its group too
+        try:  # the leader is gone; KILL the rest of its group too, where permitted
             os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
         return proc.returncode
+    return proc.returncode
 
 
 def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secret_file, timeout, out_dir,
@@ -413,8 +438,8 @@ def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secr
     """Run one session. The token travels as the first line of cc_exec.sh's stdin (then the prompt), never in argv
     or a file the agent can read. With as_user, the command runs as that OS user with exactly the checked
     environment (sudo -u USER env -i ...; the token is not in that list). Writes transcript.ndjson, stderr.txt and
-    driver-result.json into out_dir. The session starts in `project` (sudo keeps the working directory; the
-    transcript check then requires init.cwd to be exactly that directory)."""
+    driver-result.json into out_dir. The session starts in `project`: cc_exec.sh changes to it as the agent user
+    (the transcript check then requires init.cwd to be exactly that directory)."""
     os.makedirs(out_dir, exist_ok=True)
     env = read_env_file(env_file)
     problems = check_env(env)
@@ -423,8 +448,8 @@ def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secr
     problems += check_token(token)
     with open(prompt_file, "rb") as handle:
         prompt = handle.read()
-    if not os.path.isabs(project) or not os.path.isdir(project):
-        problems.append("project must be an existing absolute directory")
+    if not os.path.isabs(project):  # existence is checked by cc_exec.sh as the agent (exit 96)
+        problems.append("project must be an absolute path")
     if len(prompt) > MAX_PROMPT_BYTES or b"\0" in prompt:
         problems.append("prompt too large or contains NUL")
     result = {"execution_environment": EXECUTION_ENVIRONMENT, "status": "error", "outcome": "not_started",
@@ -433,13 +458,13 @@ def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secr
         result["refused"] = problems
         _write(os.path.join(out_dir, "driver-result.json"), result)
         return 3
-    command = build_command(build_argv(claude, model_ref, settings_path, max_turns), env, as_user, wrapper)
+    command = build_command(build_argv(claude, model_ref, settings_path, max_turns), env, as_user, wrapper, project)
     started = time.monotonic()
     with open(os.path.join(out_dir, "transcript.ndjson"), "wb") as out, \
             open(os.path.join(out_dir, "stderr.txt"), "wb") as err:
         try:
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=out, stderr=err,
-                                    env=None if as_user else env, start_new_session=True, cwd=project)
+                                    env=None if as_user else env, start_new_session=True, cwd="/")
         except OSError as exc:
             del token
             result["refused"] = [f"the session could not start ({type(exc).__name__})"]
@@ -778,7 +803,8 @@ def main(argv=None):
             return 0 if not reasons else 3
         if args.command in ("fingerprint", "check-preflight"):
             current = preflight_fingerprint(args.checkout, HERE, args.claude, cli_version(args.claude), args.sealed,
-                                            args.pristine, args.max_turns, args.timeout)
+                                            args.pristine, args.max_turns, args.timeout,
+                                            os.environ.get("AQD_CC_DRY_RUN") == "1")
             if args.command == "fingerprint":
                 _write(args.out, current)
                 return 0
