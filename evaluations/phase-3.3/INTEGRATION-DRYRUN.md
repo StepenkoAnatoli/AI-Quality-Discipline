@@ -170,7 +170,7 @@ New job `native-claude-code-dry-run` in `phase3-validation.yml`:
 - builds the image from `dryrun/Dockerfile`, runs both dry-run modes and `check_results.py`;
 - reports, before any change, whether an unprivileged user can create bubblewrap namespaces on the runner host, with the AppArmor userns sysctl. Then it sets `kernel.apparmor_restrict_unprivileged_userns=0` on the disposable runner (a logged host change) before the dry run;
 - prints the preflight logs (synthetic token only; the harness never prints it);
-- **result on GitHub (`ec32a23`): green.** As found, namespaces are REFUSED on the runner; after the sysctl change they work. The non-root dry run is pending re-confirmation on the head commit.
+- **Result on GitHub:** green on `ec32a23` (root operator) and on `ba463ff` (non-root operator, 26 scenarios). As found, namespaces are REFUSED on the runner; after the sysctl change they work.
 
 **Consequence for a live run on a GitHub runner:** the same `sysctl` change is required, or the native preflight refuses. It weakens a kernel hardening default on a disposable VM, so it must be named in the smoke-test request.
 
