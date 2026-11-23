@@ -235,6 +235,17 @@ def check_run_records(records):
                                "opencode_install_tree_sha256"),
             ("model", run["model"]): ("interface",),
         }
+        # Execution environments are never pooled (absent = the Phase 3.2 OpenCode harness). Native Claude Code
+        # records must also agree on the CLI binary and the turn limit.
+        environment = record.get("execution_environment", "opencode")
+        values = shared.setdefault(("execution environment", ""), {})
+        if values.setdefault("execution_environment", environment) != environment:
+            raise AnalysisError(f"{where} execution environment {environment!r} differs from other runs: "
+                                "results from different execution environments are never pooled")
+        if environment == "native-claude-code":
+            keys[("all runs", "")] = keys[("all runs", "")] + ("claude_cli_sha256", "max_turns")
+            if not isinstance(record.get("claude_cli_sha256"), str):
+                raise AnalysisError(f"{where} lacks claude_cli_sha256")
         if run["group"] == "treatment":
             values = shared.setdefault(("treatment skill", ""), {})
             if values.setdefault("sha256", skill["sha256"]) != skill["sha256"]:

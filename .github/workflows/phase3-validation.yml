@@ -47,6 +47,7 @@ jobs:
           python -m unittest discover -s evaluations/phase-3.2/tests -p "test_harness.py" -v
           python -m unittest discover -s evaluations/phase-3.2/tests -p "test_scoring.py" -v
           python -m unittest discover -s evaluations/phase-3.2/tests -p "test_difficulty.py" -v
+          python -m unittest discover -s evaluations/phase-3.2/tests -p "test_cc_adapter.py" -v
 
   phase-3-2-scoring-sandbox:
     # Demonstrates the Docker isolation boundary used for hidden scoring. Fails
