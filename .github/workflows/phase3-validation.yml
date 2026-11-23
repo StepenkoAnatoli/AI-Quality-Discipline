@@ -72,7 +72,7 @@ jobs:
     # Phase 3.3: runs the REAL launch-run-cc.sh end to end against a MOCK claude with a SYNTHETIC token, inside a
     # disposable container with no network. No secret is referenced; nothing here can authenticate or reach a model.
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Report whether an unprivileged user can create bubblewrap namespaces on this runner (as found)

@@ -107,8 +107,13 @@ The rehearsal cases:
 | the committed, unfilled approval | refused | launcher refused (exit 2), STOP |
 
 **CI.** Each result is for a named commit. A green prior commit is not evidence for a later head.
-- Earlier heads were green: `5c89bfd`, `2eae70e`, `9710239`.
-- For the head this document ships in, see the PR's checks; the final report states its result.
+- **`619101e` (the implementation commit):** the mock workflow is green on a GitHub `ubuntu-24.04` runner. I downloaded and inspected its artifact:
+  - the dry run: 27 scenarios, 0 failures;
+  - the real-CLI boundary: 0 failures. The live probe passes with the scrub on and flags the exposure with it off;
+  - the host rehearsal: 7/7 behaved as required, with the egress lock applied on a networked host;
+  - no token-shaped string anywhere.
+- On the same commit, `Phase 3 validation` was **cancelled**. Its dry-run job hit the 20-minute limit because the image build's `apt` step took 17 minutes. That is runner slowness, not a test failure. The limit is now 45 minutes.
+- For the reviewed head, see the final report and the PR checks on that exact commit.
 
 ## 5. Credential procedure, and what is not possible
 
