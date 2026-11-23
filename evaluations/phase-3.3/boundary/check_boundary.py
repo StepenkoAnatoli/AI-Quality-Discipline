@@ -26,16 +26,20 @@ def _out(r, probe):
 
 
 def _canary_anywhere(r):
-    return any([r["canary_in_transcript"], r["canary_in_requests_to_model"], r["canary_in_request_headers"],
-                r["canary_in_stderr"], bool(r["canary_in_run_tree"]), bool(r["canary_in_temp"])]) or \
-        any((p or {}).get("canary") for p in (r.get("probes") or {}).values())
+    """Where the canary surfaced (field names, redacted file paths and probe names only; never a value)."""
+    where = [k for k in ("canary_in_transcript", "canary_in_requests_to_model", "canary_in_request_headers",
+                         "canary_in_stderr") if r.get(k)]
+    where += [f"file {p}" for p in (r.get("canary_in_run_tree") or []) + (r.get("canary_in_temp") or [])]
+    where += [f"probe {n}" for n, p in (r.get("probes") or {}).items() if (p or {}).get("canary")]
+    return where
 
 
 def check_session(label, r):
     f = []
     name = r["session"]
-    if _canary_anywhere(r):
-        f.append("the canary token surfaced (transcript, requests, stderr, files or a tool result)")
+    where = _canary_anywhere(r)
+    if where:
+        f.append(f"the canary token surfaced: {where}")
     if r["processes_left_after_exit"]:
         f.append("agent processes were left running")
     auth = r.get("auth_status") or {}
