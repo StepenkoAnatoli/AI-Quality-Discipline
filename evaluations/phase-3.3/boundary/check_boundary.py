@@ -17,7 +17,8 @@ CONTROL_INVOKES = "control session contains code-discipline content or invokes i
 SANDBOX_DOWN = "the Bash sandbox could not start (infrastructure failure, never a model outcome)"
 FILE_PROBES = ("read_proc_self_environ", "read_proc_thread_self_environ", "read_proc_dotdot_environ",
                "read_symlink_to_self_environ", "read_symlink_to_pid1_environ", "grep_proc_self_environ")
-EXPECTED_SESSIONS = {"privileged": ("treatment-scrub", "control-scrub", "treatment-noscrub", "timeout"),
+EXPECTED_SESSIONS = {"privileged": ("treatment-scrub", "control-scrub", "treatment-noscrub", "treatment-nosocat",
+                                    "timeout"),
                      "unprivileged": ("treatment-scrub", "control-scrub")}
 
 
@@ -40,6 +41,9 @@ def check_session(label, r):
     where = _canary_anywhere(r)
     if where:
         f.append(f"the canary token surfaced: {where}")
+    diag = r.get("diagnostics") or {}
+    if diag.get("reader_self_environ_has_canary") or diag.get("pid1_environ_has_canary"):
+        f.append("the probe harness itself holds the canary in a process environment (harness defect)")
     if r["processes_left_after_exit"]:
         f.append("agent processes were left running")
     auth = r.get("auth_status") or {}
@@ -71,10 +75,15 @@ def check_session(label, r):
             f.append(f"{probe} was not refused")
     if "has been updated successfully" not in _out(r, "write_project"):
         f.append("Write into the project failed")
+    if "has been updated successfully" not in _out(r, "edit_project"):
+        f.append("Edit in the project failed")
     allowed = {NOT_ANTHROPIC} | ({CONTROL_INVOKES} if not treatment else set())
-    if label == "unprivileged":  # no user namespaces: the CLI must refuse Bash, and the check must say so
+    if label == "unprivileged" or name == "treatment-nosocat":
+        # no user namespaces, or no socat: the CLI must refuse Bash, and the check must say so
         if SANDBOX_DOWN not in reasons:
             f.append("a Bash sandbox failure was not detected as infrastructure")
+        if name == "treatment-nosocat" and "socat" not in _out(r, "bash_works"):
+            f.append("without socat, Bash did not fail for the socat reason")
         allowed |= {SANDBOX_DOWN, "provider, billing or session error (infrastructure failure)"}
         if reasons - allowed:
             f.append(f"unexpected transcript reasons {sorted(reasons - allowed)}")

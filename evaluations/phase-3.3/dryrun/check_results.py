@@ -18,7 +18,13 @@ EXPECTED = {
     "unapproved-run": "refused", "binary-changed-after-preflight": "refused", "stale-preflight": "refused",
     "opencode-preflight-only": "refused", "not-a-dry-run-timeout": "refused",
     "timeout-changed-after-preflight": "refused", "stop-file-present": "refused",
+    "sandbox-failure": "stop22",
 }
+# Scenarios in which no session starts (refused before it, or the auth check / credentials stop it first).
+NO_SESSION = {n for n, e in EXPECTED.items() if e in ("refused", "stop20")} | {"missing-credentials"}
+PROBE_KEYS = ("argv_matches_expected", "token_matches", "can_write_notes_txt", "can_write_TASK_md",
+              "can_create_in_skills", "can_rename_skills_dir", "can_rename_arm_plugin", "can_read_operator_store",
+              "can_read_other_arm", "can_read_checkout", "can_read_root_home", "cwd", "token_in_temp_files")
 MODES = ("full", "preflight-only")
 
 # Each scenario must fail (or pass) for ITS reason, not merely end with the right exit code.
@@ -49,6 +55,7 @@ REASONS = {
     "timeout-changed-after-preflight": lambda r: _log(r, "timeout_seconds changed since preflight"),
     "not-a-dry-run-timeout": lambda r: _log(r, "not the pre-registered 2700"),
     "stop-file-present": lambda r: _log(r, "benchmark stopped"),
+    "sandbox-failure": lambda r: _reason(r, "Bash sandbox could not start"),
 }
 
 
@@ -70,6 +77,8 @@ def expectation_holds(row):
         return code == 20 and valid is False and stop is not None and stop.startswith("BLOCKED")
     if exp == "stop21":
         return code == 21 and valid is False and stop is not None and stop.startswith("ISOLATION FAILURE")
+    if exp == "stop22":  # a host-level infrastructure failure stops the whole batch, not just this run
+        return code == 22 and valid is False and stop is not None and stop.startswith("INFRASTRUCTURE STOP")
     if exp == "refused":  # refused before anything started: no capture directory
         return code == 2 and not cap
     return False
@@ -102,6 +111,11 @@ def main(paths):
         if "proc_probe" in row and row["proc_probe"]["token_in_cmdline"]:
             failures.append("the token is in a process command line")
         probe = row.get("probe")
+        if "scenario" in row and row["scenario"] in EXPECTED and row["scenario"] not in NO_SESSION:
+            missing = [k for k in PROBE_KEYS if not isinstance(probe, dict) or k not in probe]
+            if missing:
+                failures.append(f"{row['scenario']}: the isolation probe is missing or incomplete ({missing[:3]})")
+                probe = None
         if probe:
             bad = [k for k in ("can_write_TASK_md", "can_create_in_skills", "can_rename_skills_dir", "can_rename_arm_plugin",
                                "can_read_operator_store", "can_read_other_arm", "can_read_checkout",

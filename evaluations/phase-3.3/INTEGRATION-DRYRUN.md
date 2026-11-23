@@ -176,19 +176,7 @@ New job `native-claude-code-dry-run` in `phase3-validation.yml`:
 
 ## 6. Still unverified (needs the authorised live smoke test)
 
-- **Authentication and the run:**
-  - `claude auth status --json` reports `oauth_token` for a real `setup-token` token;
-  - the token prefix (`sk-ant-oat`).
-- **Under `--restricted --tools …,Skill`:**
-  - the user skill is listed in `init.skills`;
-  - `Skill` is in `init.tools`;
-  - `init.cwd` is the project path as given, not canonicalised.
-- **Real event values:**
-  - real `init`, `modelUsage`, `result` and `api_retry` shapes;
-  - whether `init.effort` is reported.
-- **The env scrub:** its effect and its behaviour without namespaces (§4).
-- **The headless combination:** `--restricted` + `--tools Bash` + `acceptEdits` lets a session edit and run tests.
-- **Timing and process handling:** how the real CLI reacts to the TERM-then-KILL shutdown.
+**Superseded 2026-11-23 (later):** most of these were then tested offline with the REAL CLI against a local mock API. See SMOKE-WORKFLOW.md §2: the user-skill assumption was false (now `--plugin-dir`); under the scrub the permission mode is `default`, not `acceptEdits`; TERM ends the CLI. SMOKE-WORKFLOW.md §7 lists what is still live-only.
 
 ## 7. Private P2 tasks: minimum opt-in changes (review only; nothing private copied here)
 

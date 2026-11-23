@@ -788,6 +788,20 @@ class DriverIntegrationTests(Workdir):
         os.remove(driver)
         self.assertNotEqual(cc.main(args), 0)
 
+    def test_secret_scan_never_follows_symlinks_the_agent_planted(self):
+        # an agent can plant links to /proc/*/environ or to operator files; the scan reads captured CONTENT only
+        cap = os.path.join(self.tmp, "cap-links")
+        os.makedirs(cap)
+        outside = os.path.join(self.tmp, "outside-secret.txt")
+        with open(outside, "w", encoding="utf-8") as h:
+            h.write(TEST_TOKEN)
+        os.symlink(outside, os.path.join(cap, "link-to-secret"))
+        os.symlink("/proc/self/environ", os.path.join(cap, "env_link"))
+        self.assertEqual(cc.files_containing([cap], TEST_TOKEN), [])
+        with open(os.path.join(cap, "real.txt"), "w", encoding="utf-8") as h:
+            h.write(TEST_TOKEN)
+        self.assertEqual(cc.files_containing([cap], TEST_TOKEN), [os.path.join(cap, "real.txt")])
+
     def test_secret_scan_subcommand(self):
         cap = os.path.join(self.tmp, "cap")
         os.makedirs(cap)
@@ -974,6 +988,10 @@ class LauncherStaticTests(unittest.TestCase):
         import schedule
         self.assertIn("SMOKE", schedule.KNOWN_TASKS)
         self.assertEqual(schedule.TASKS, ("NEW-01", "NEW-02", "NEW-03"))
+
+    def test_a_sandbox_failure_stops_the_whole_batch(self):
+        self.assertIn('INFRASTRUCTURE STOP in run %s: the Bash sandbox could not start', self.TEXT)
+        self.assertIn("exit 22", self.TEXT)
 
     def test_managed_settings_are_refused(self):
         self.assertRegex(self.TEXT, r'\[\[ ! -e /etc/claude-code \]\] \|\| die')

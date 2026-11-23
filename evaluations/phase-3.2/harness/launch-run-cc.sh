@@ -18,7 +18,8 @@
 # byte-identical.
 #
 # Exit codes: 0 valid run, 1 invalid run, 20 BLOCKED (auth/billing check failed: the benchmark stops),
-# 21 isolation failure (the benchmark stops), 2 usage/precondition error.
+# 21 isolation failure (the benchmark stops), 22 infrastructure stop (the Bash sandbox could not start; the benchmark
+# stops), 2 usage/precondition error.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -260,5 +261,13 @@ set +e
 "$PY" "$AQD_HARNESS/run_status.py" --interface claude-code --capture "$CAP" --group "$GROUP" --started "$STARTED" \
     --ended "$ENDED" --api-exit "$API_EXIT" --driver-exit "$DRIVER_EXIT" --step "$STEP"
 RESULT=$?
+SANDBOX_FAILURES="$("$PY" -c 'import json, sys; print(int(json.load(open(sys.argv[1])).get("sandbox_failures") or 0))' \
+    "$CAP/export-checks.json" 2>/dev/null || echo 0)"
 set -e
+# A Bash sandbox that cannot start is a HOST failure: it would invalidate only the runs whose agent called Bash, an
+# exclusion that depends on agent behaviour (and so on the arm). Stop the whole batch instead.
+if [[ "$SANDBOX_FAILURES" != "0" ]]; then
+    printf 'INFRASTRUCTURE STOP in run %s: the Bash sandbox could not start\n' "$RUN_ID" >"$AQD_SEALED/STOP"
+    exit 22
+fi
 exit "$RESULT"

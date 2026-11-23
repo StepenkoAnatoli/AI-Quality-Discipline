@@ -40,8 +40,9 @@ class CheckResultsTests(unittest.TestCase):
     def test_the_committed_results_pass(self):
         self.assertEqual(self.run_check(*rows()), 0)
 
-    def test_the_expected_scenarios_are_exactly_26(self):
-        self.assertEqual(len(check_results.EXPECTED), 26)
+    def test_the_expected_scenarios_are_exactly_27(self):
+        self.assertEqual(len(check_results.EXPECTED), 27)
+        self.assertEqual(check_results.EXPECTED["sandbox-failure"], "stop22")
         self.assertEqual(set(check_results.EXPECTED), set(check_results.REASONS))
 
     def test_a_missing_scenario_fails(self):
@@ -78,6 +79,17 @@ class CheckResultsTests(unittest.TestCase):
         self.assertEqual(self.run_check(full, [r for r in pf if "bwrap_userns_as_agent" not in r]), 1)
         self.assertEqual(self.run_check([r for r in full if "proc_probe" not in r], pf), 1)
         self.assertEqual(self.run_check([r for r in full if "out_dir_token_scan" not in r], pf), 1)
+
+    def test_missing_isolation_probes_fail(self):
+        full, pf = rows()
+        for r in full:
+            r.pop("probe", None)
+        self.assertEqual(self.run_check(full, pf), 1)
+        full, pf = rows()
+        for r in full:
+            if r.get("probe"):
+                r["probe"].pop("can_rename_arm_plugin", None)
+        self.assertEqual(self.run_check(full, pf), 1)
 
     def test_an_empty_input_fails(self):
         self.assertEqual(self.run_check([], []), 1)

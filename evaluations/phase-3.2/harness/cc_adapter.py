@@ -364,13 +364,17 @@ def build_command(argv, env, as_user=None, wrapper=None, workdir="/"):
 
 def files_containing(paths, secret):
     """Captured files that contain the secret, to keep out of anything published (defence in depth only: the
-    primary controls are no token in argv, files or logs, and encrypted evidence)."""
+    primary controls are no token in argv, files or logs, and encrypted evidence). Symlinks are never followed:
+    the agent can plant links (to /proc/*/environ, to operator files), and what a link points at is not captured
+    content; the archive keeps the link itself."""
     hits = []
     needle = secret.encode("utf-8")
     for root in paths:
         for directory, _, names in os.walk(root) if os.path.isdir(root) else [(os.path.dirname(root), [], [os.path.basename(root)])]:
             for name in names:
                 path = os.path.join(directory, name)
+                if os.path.islink(path) or not os.path.isfile(path):
+                    continue
                 try:
                     with open(path, "rb") as handle:
                         if needle in handle.read():

@@ -140,6 +140,8 @@ def main():
     if s.get("invoke_skill") and "code-discipline" in real_skills:
         blocks.append({"type": "tool_use", "id": "t0", "name": "Skill", "input": {"skill": "code-discipline"}})
     blocks.append({"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "notes.txt"}})
+    if s.get("sandbox_fail"):  # the real 2.1.330 answer to every Bash call when namespaces are refused
+        blocks.append({"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "python3 -m pytest"}})
     emit({"type": "assistant", "message": {"model": s.get("turn_model", model), "role": "assistant", "content": blocks}})
     with open("notes.txt", "a", encoding="utf-8") as handle:
         handle.write("mock edit\n")
@@ -147,6 +149,11 @@ def main():
             handle.write(TOKEN + "\n")  # a deliberate leak into a captured file
     emit({"type": "user", "message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}})
+    if s.get("sandbox_fail"):
+        emit({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t2", "is_error": True,
+             "content": "Exit code 1\nbwrap: No permissions to create new namespace, likely because the kernel does "
+                        "not allow non-privileged user namespaces."}]}})
     emit({"type": "assistant", "message": {"model": model, "role": "assistant",
                                            "content": [{"type": "text", "text": "Done."}]}})
     subtype, is_error = s.get("result", ["success", False])

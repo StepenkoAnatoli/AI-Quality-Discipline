@@ -42,6 +42,7 @@
       ],
       "tool_counts": {
         "Bash": 6,
+        "Edit": 1,
         "Glob": 1,
         "Grep": 1,
         "Read": 5,
@@ -59,7 +60,13 @@
       ],
       "valid": false
     },
-    "duration_seconds": 1.1,
+    "diagnostics": {
+      "pid1_comm": "bash",
+      "pid1_environ_has_canary": false,
+      "reader_self_environ_has_canary": false,
+      "symlinks": []
+    },
+    "duration_seconds": 0.9,
     "exit_code": 0,
     "group": "treatment",
     "probes": {
@@ -92,6 +99,11 @@
         "canary": false,
         "is_error": true,
         "output": "Exit code 1\nbwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>."
+      },
+      "edit_project": {
+        "canary": false,
+        "is_error": null,
+        "output": "The file /bnd/aqd-a/treatment-scrub/project/notes.txt has been updated successfully. (file state is current in your context \u2014 no need to Read it back)"
       },
       "glob_config_dir": {
         "canary": false,
@@ -190,6 +202,7 @@
       ],
       "tool_counts": {
         "Bash": 6,
+        "Edit": 1,
         "Glob": 1,
         "Grep": 1,
         "Read": 5,
@@ -207,7 +220,13 @@
       ],
       "valid": false
     },
-    "duration_seconds": 1.0,
+    "diagnostics": {
+      "pid1_comm": "bash",
+      "pid1_environ_has_canary": false,
+      "reader_self_environ_has_canary": false,
+      "symlinks": []
+    },
+    "duration_seconds": 0.9,
     "exit_code": 0,
     "group": "control",
     "probes": {
@@ -240,6 +259,11 @@
         "canary": false,
         "is_error": true,
         "output": "Exit code 1\nbwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>."
+      },
+      "edit_project": {
+        "canary": false,
+        "is_error": null,
+        "output": "The file /bnd/aqd-b/control-scrub/project/notes.txt has been updated successfully. (file state is current in your context \u2014 no need to Read it back)"
       },
       "glob_config_dir": {
         "canary": false,

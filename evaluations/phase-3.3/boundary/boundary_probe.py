@@ -75,6 +75,9 @@ def script(group, project, config):
     turns.append({"tool": "Skill", "input": {"skill": c.SKILL_ID}, "probe": "skill_invoke"})
     turns.append({"tool": "Write", "input": {"file_path": os.path.join(project, "notes.txt"),
                                              "content": "boundary probe edit\n"}, "probe": "write_project"})
+    turns.append({"tool": "Edit", "input": {"file_path": os.path.join(project, "notes.txt"),
+                                            "old_string": "boundary probe edit", "new_string": "boundary probe edited"},
+                  "probe": "edit_project"})
     turns.append({"text": "Done."})
     return turns
 
@@ -177,11 +180,23 @@ def session(claude, out_dir, name, group, user, scrub="1", timeout=180, turns=No
         except OSError:
             return False
     tree_hits = [p.replace(run_root, "<run>") for p in cc.files_containing([run_root], canary)]
+    # Diagnostics (booleans and link targets only): what reading THROUGH an agent-planted link returns to the
+    # operator-side reader, and whether the reader's own or PID 1's environment holds the canary.
+    links = []
+    for directory, _, names in os.walk(run_root):
+        for n in names:
+            path = os.path.join(directory, n)
+            if os.path.islink(path):
+                links.append({"link": path.replace(run_root, "<run>"), "target": os.readlink(path),
+                              "read_through_has_canary": contains(path)})
+    diag = {"symlinks": links, "reader_self_environ_has_canary": contains("/proc/self/environ"),
+            "pid1_environ_has_canary": contains("/proc/1/environ"),
+            "pid1_comm": open("/proc/1/comm").read().strip()}
     tmp_hits = []
     for base in ("/tmp", "/var/tmp", "/dev/shm"):
         for directory, _, names in os.walk(base):
             for n in names:
-                if contains(os.path.join(directory, n)):
+                if not os.path.islink(os.path.join(directory, n)) and contains(os.path.join(directory, n)):
                     tmp_hits.append(os.path.join(directory, n))
     requests = []
     with open(api_log, encoding="utf-8") as h:
@@ -197,6 +212,7 @@ def session(claude, out_dir, name, group, user, scrub="1", timeout=180, turns=No
         "canary_in_run_tree": tree_hits, "canary_in_temp": tmp_hits,
         "request_paths": sorted({r["path"] for r in requests}),
         "probes": probe_results(transcript, turns, canary),
+        "diagnostics": diag,
         "checks": _checks(transcript, group, project, status, f"{run_root}/arm-plugin"),
     }
     for path in (transcript, os.path.join(sdir, "stderr.txt"), api_log):  # never keep the canary on disk
@@ -272,6 +288,14 @@ def main():
                session(args.claude, out, "control-scrub", "control", "aqd-b")]
     if args.label == "privileged":
         reports.append(session(args.claude, out, "treatment-noscrub", "treatment", "aqd-a", scrub="0"))
+        socat = shutil.which("socat")  # the scrub sandbox without socat (disposable container: hidden, then restored)
+        if socat:
+            os.rename(socat, socat + ".hidden")
+        try:
+            reports.append(session(args.claude, out, "treatment-nosocat", "treatment", "aqd-a"))
+        finally:
+            if socat:
+                os.rename(socat + ".hidden", socat)
         # a session the harness must end (the CLI refuses a bare `sleep N`, so the wait is a loop)
         reports.append(session(args.claude, out, "timeout", "control", "aqd-b", timeout=15, turns=[
             {"tool": "Bash", "input": {"command": "while :; do sleep 1; done", "description": "wait",

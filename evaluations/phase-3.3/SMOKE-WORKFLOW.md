@@ -16,13 +16,14 @@
 | `phase-3.2/harness/cc_adapter.py` | **Skill delivery:** `--plugin-dir <run>/arm-plugin` (the same path in both arms). The three built-in plugins are off (`enabledPlugins`). |
 | | **The `init` check matches the real CLI:** the plugin is exactly the arm plugin at its path; the skills are `aqd-arm:code-discipline` + `doctor` (treatment) or `doctor` (control); `permissionMode` is `default`; `served_by_anthropic` must be true. |
 | | **Sandbox detection:** a Bash sandbox that cannot start is an infrastructure failure. |
-| `phase-3.2/harness/launch-run-cc.sh` | Builds the root-owned arm plugin (the skill in treatment only), passes `--plugin-dir`, and lists the plugin for `run_status`. Requires `socat`. |
+| `phase-3.2/harness/launch-run-cc.sh` | Builds the root-owned arm plugin (the skill in treatment only), passes `--plugin-dir`, and lists the plugin for `run_status`. Requires `socat`. **A Bash sandbox failure writes STOP and exits 22**: it is a host failure that would otherwise exclude only the runs whose agent called Bash (exclusion by agent behaviour, so by arm). |
 | `phase-3.2/harness/preflight-cc.sh` | Requires `socat`. |
 | `phase-3.2/harness/run_status.py` | The claude-code listing is now the arm plugin plus an empty `CLAUDE_CONFIG_DIR/skills`. |
-| `phase-3.2/tests/test_cc_adapter.py` | 71 tests, real-CLI shapes. New: skill delivery and plugins, `served_by_anthropic`, permission mode, sandbox failure (both real messages), and an ordinary failing command that only mentions bwrap. |
-| `phase-3.3/dryrun/check_results.py` + `test_check_results.py` | **Exactly** 26 named scenarios, each with its required expectation. Fails on a missing, duplicated or unexpected scenario, on a missing or extra cleanup record, on a missing mode, or on a missing probe record. 9 tests. |
+| `phase-3.2/tests/test_cc_adapter.py` | 73 tests, real-CLI shapes. New: skill delivery and plugins, `served_by_anthropic`, permission mode, sandbox failure (both real messages), an ordinary failing command that only mentions bwrap, the scan never following symlinks, and the batch stop on a sandbox failure. |
+| `phase-3.3/dryrun/check_results.py` + `test_check_results.py` | **Exactly** the named scenarios (26, plus `sandbox-failure` after review: 27), each with its required expectation. Fails on a missing, duplicated or unexpected scenario, on a missing or extra cleanup record, on a missing mode, on a missing probe record, or when any session scenario lacks its full isolation probe. 10 tests. |
 | `phase-3.3/dryrun/{mock_claude.py,dryrun-cc.sh,Dockerfile}` | The mock emits the real CLI's `init` shape. The `/proc` probe race is fixed. The image adds `socat`. |
-| `phase-3.3/boundary/` (new) | `mock_api.py` (local mock Messages API), `boundary_probe.py`, `run-boundary.sh`, `check_boundary.py` + `test_check_boundary.py` (8 tests), and results. |
+| `phase-3.3/boundary/` (new) | `mock_api.py` (local mock Messages API), `boundary_probe.py`, `run-boundary.sh`, `check_boundary.py` + `test_check_boundary.py` (8 tests), and results. The probe also calls Edit, and runs a session with `socat` hidden. |
+| `cc_adapter.files_containing` (the launcher's token scan) | **Never follows symlinks.** The agent can plant links, to `/proc/*/environ` or to operator files, and what a link points at is not captured content. Found when CI flagged reads through agent-planted links (§2). |
 | `.github/workflows/phase3-cc-smoke.yml` (new) | The manual smoke workflow. The mock job also runs on pull requests. The live job refuses. **No secret is referenced.** |
 
 ## 2. The real CLI, offline: what it showed
@@ -44,15 +45,15 @@ Method:
 | Does a user skill in `CLAUDE_CONFIG_DIR/skills` load under `--restricted`? | **No.** "Unknown skill". The original design had **no treatment**. |
 | Does `--plugin-dir` deliver it? | **Yes.** Treatment lists `aqd-arm:code-discipline`; the Skill tool returns "Launching skill"; the skill text loads. Control: "Unknown skill". |
 | Built-in plugins | 2.1.330 loads 3 built-in plugins. `enabledPlugins: false` in `--settings` removes them. One built-in skill (`doctor`) remains, the same in both arms. |
-| Env scrub without `socat` | **Every Bash call fails**: "Sandbox is required but failed to initialize … socat not installed". The run would have been a silent *valid* failure. Now preflight, the launcher and the transcript check all fail closed. |
+| Env scrub without `socat` | **Every Bash call fails**: "Sandbox is required but failed to initialize … socat not installed" (session `treatment-nosocat`). The run would have been a silent *valid* failure. Now preflight, the launcher, the transcript check and the batch STOP all fail closed. |
 | Env scrub, bubblewrap without user namespaces | Every Bash call fails with a `bwrap: No permissions to create new namespace` error. Now detected (the CLI's own "output is only a bwrap error" rule). |
 | Env scrub working (privileged container, namespaces allowed) | Bash works (`bash_ok 42`) inside a PID namespace (`pid1=bwrap`). The token is **absent** from the Bash environment, from the shell's own `/proc/self/environ`, and from every `/proc/*/environ` Bash can open (2 readable, 0 with the token). |
 | Scrub **off** (sensitivity check) | Bash finds the token in a readable `/proc/*/environ` (`with_token=1`). This shows the probe detects a real exposure, and that the scrub is load-bearing. |
 | Read/Grep on `/proc/self/environ`, `/proc/thread-self/environ`, `/proc/self/../self/environ` | **All refused**: "this path names a device or process file that this tool does not read". This is the Microsoft finding (§4) fixed in this build. |
 | Read through a symlink in the project to `/proc/self/environ` or `/proc/1/environ` | Refused: `--restricted` confines the file tools to the working directory, and the symlink resolves outside it. |
 | Glob on `CLAUDE_CONFIG_DIR` | Refused (outside the working directory). |
-| `permissionMode` | `default` with the scrub on, even though `--permission-mode acceptEdits` is passed; Write and Edit still work through `--allowedTools`. `acceptEdits` with the scrub off. |
-| `claude auth status --json` with a fake token and no network | Reports `oauth_token` / `firstParty` / `loggedIn: true`. **It does not validate the token**, so it is a configuration check only. Real authentication is shown only by a served session (`served_by_anthropic: true`; false against the mock). |
+| `permissionMode` | `default` with the scrub on, even though `--permission-mode acceptEdits` is passed; Write **and Edit** (both probed) still work through `--allowedTools`. `acceptEdits` with the scrub off. |
+| `claude auth status --json` with a fake token and no network | Reports `oauth_token` / `firstParty` / `loggedIn: true`. **It does not validate the token**, so it is a configuration check only. `served_by_anthropic` (false against the mock) is **routing** evidence only: the 2.1.330 schema says "It tells routing alone". Authentication is shown only by assistant turns that Anthropic's service actually served with the pinned model (`model_ok`). |
 | Timeout | The harness TERM ends the CLI (exit 143), and no process is left. The CLI refuses a bare `sleep N`; loops run. |
 | `effort` in `init` | Absent: still "requested effort". |
 | Canary anywhere | **Nowhere**, in any session. |
@@ -74,7 +75,7 @@ Results are in `boundary/results-2026-11-23/` and `dryrun/results-2026-11-23/`.
 | The agent's file tools read the token (Microsoft, June 2026) | 2.1.330 refuses `/proc` process files in Read/Grep; `--restricted` confines file tools to the project (symlinks included) | Real CLI, offline: 6/6 attempts refused, canary absent | Anthropic does not publish the list of blocked paths; I tested the known variants only. The binary is pinned by hash, so the tested code is the code that runs |
 | Token in argv, logs, captures or artifacts | stdin hand-off; `env -i` allow-list; the `finish()` scan (STOP, exit 21); transcripts never printed; upload filter refuses token-shaped strings | Dry run (leak scenario → STOP); boundary canary scans | The scan finds the literal token only |
 | Token persisted by the CLI (config dir, temp) | Fresh per-run config and temp dirs, removed after the run | Canary absent from the run tree and `/tmp`, `/var/tmp`, `/dev/shm` | Unknown live-only paths (for example an OAuth refresh) |
-| Billing outside the subscription | `check_env` allow-list; `check_token`; `apiKeySource: none`; `served_by_anthropic: true`; managed settings refused | Unit tests; dry run | `auth status` cannot prove a valid token (above). The owner keeps usage credits off |
+| Billing outside the subscription | `check_env` allow-list; `check_token`; `apiKeySource: none`; `served_by_anthropic: true` (routing to Anthropic's own API, not a proof of which credential); managed settings refused | Unit tests; dry run | `auth status` cannot prove a valid token (above). The owner keeps usage credits off |
 | A wrong arm (skill leaks to control, missing in treatment) | Arm plugin root-owned and read-only, same path in both arms; exact `skills`/`plugins` check; control scanned for invocation and text | Real CLI, offline: both arms as expected | — |
 | Host change: `kernel.apparmor_restrict_unprivileged_userns=0` | See §3.1 | CI: as found the runner refuses; after the change bubblewrap works | §3.1 |
 
@@ -90,7 +91,7 @@ Results are in `boundary/results-2026-11-23/` and `dryrun/results-2026-11-23/`.
      - the token in the `claude` process's memory;
      - the runner's `GITHUB_TOKEN` (`contents: read`);
      - in a live job, the environment secret.
-   - Without the change the CLI cannot isolate Bash at all, and the token is then readable from Bash (the scrub-off result above). So the change is a **trade**: it closes a demonstrated same-user read and opens a theoretical kernel-exploit path.
+   - Without the change, the scrub refuses **every** Bash call (the unprivileged results), so the experiment cannot run. The only way to run Bash without it is to turn the scrub off, and then the token is readable from Bash (the scrub-off result). So the change is a **trade**: it makes the scrubbed, isolated Bash possible (closing a demonstrated same-user read) and opens a theoretical kernel-exploit path.
 2. **Egress.**
    - A user namespace can create a network namespace, but an unprivileged new network namespace has no route out. The per-UID iptables egress lock on the host stays in force for the agent's processes.
    - Exception: whatever the agent can already reach (the Anthropic API) stays reachable. That is inherent.
@@ -145,7 +146,7 @@ Results are in `boundary/results-2026-11-23/` and `dryrun/results-2026-11-23/`.
 
 1. **A separate one-file PR to `main`** adds `.github/workflows/phase3-cc-smoke.yml`, identical to this branch's file except `AQD_TEST_SHA`. That variable is set to the reviewed head commit of PR #3. Owner review and merge cover only this file.
    - The workflow then checks out **exactly that commit**: `persist-credentials: false`, and it verifies `git rev-parse HEAD`.
-   - The workflow file on `main` is the only thing a dispatcher can run. A dispatch can't pick other code, because the code ref is pinned in reviewed YAML, not taken as an input.
+   - The pin binds **only dispatches of `main`'s copy**. A writer can push a branch whose copy of this file changes `AQD_TEST_SHA` or the steps, and dispatch that ref: GitHub runs the file at the dispatched ref. Pull requests also run their own head. **What protects the live secret is therefore the environment, not the pin:** deployment branches = `main` only, required reviewer, no admin bypass (step 3). The pin makes a `main` dispatch run reviewed code.
 2. **Dispatch `mode: mock` from `main`.** It needs no secret, and must be green before anything else.
 3. **The live probe (§6) comes later, as a separate change to the same file on `main`, after authorisation.** That change adds:
    - a job with `environment: aqd-cc-live-probe`;
@@ -204,8 +205,8 @@ Results are in `boundary/results-2026-11-23/` and `dryrun/results-2026-11-23/`.
   - the transcript and captures leave the runner only GPG-encrypted (the existing pipeline), with 1-day retention;
   - the public log holds fixed status lines and counts only.
 - **Pass:**
-  - a valid session;
-  - `served_by_anthropic: true`;
+  - a valid session whose assistant turns were served by Anthropic with the pinned model (`model_ok`), which is the authentication evidence;
+  - `served_by_anthropic: true` (routing evidence);
   - all boundary counts 0;
   - Bash works in a PID namespace;
   - no token anywhere.
@@ -215,7 +216,7 @@ Only after a pass would a two-arm SMOKE comparison be proposed, separately.
 ## 7. Remaining assumptions about the real CLI (live only)
 
 1. A real `setup-token` token authenticates `-p` sessions through the restricted command. The offline `auth status` result proves nothing.
-2. `served_by_anthropic` is true for Anthropic's service.
+2. `served_by_anthropic` is present and true for Anthropic's service. The schema allows it to be absent "where the process can't tell"; then every run fails closed.
 3. `modelUsage` and the per-turn model ids match the pinned model with the real service.
 4. The scrub and sandbox behave the same with a real token and the real API as with the canary and the mock. The live probe measures this.
 5. OAuth sessions need no host outside the Anthropic API ranges in the egress lock.

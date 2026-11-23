@@ -183,6 +183,7 @@ scenario missing-credentials     treatment invalid '{}' ': >"$SEALED/credentials
 scenario wrong-token             control   stop20 '{}' 'printf "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-WRONG-SYNTHETIC\n" >"$SEALED/credentials.env"'
 scenario api-key-in-token-slot   treatment stop20  '{}' 'printf "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-api03-SYNTHETIC\n" >"$SEALED/credentials.env"'
 scenario leaked-token            control   stop21 '{"leak_token": true}'
+scenario sandbox-failure         treatment stop22 '{"sandbox_fail": true}'
 
 # ---- refusals before anything starts (no capture directory may appear)
 refusal() {  # refusal NAME RUN HOOK UNDO
