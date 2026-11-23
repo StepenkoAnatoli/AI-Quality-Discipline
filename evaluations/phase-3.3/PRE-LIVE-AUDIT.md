@@ -42,6 +42,10 @@ The canonical skill is unchanged: `d050d00fa8564b08cac71ca221368568420c731c830ef
 | 8 | "Environment secrets are unavailable to pull requests" | **Holds, with a caveat.** It holds by GitHub's environment branch rule (`main` only), which `verify-environment` checks. A writer can dispatch a modified workflow from another branch; that branch is refused the environment. The commit pin does not protect this; the environment does | — | Documented (LIVE-PROBE.md §3) |
 | 9 | `verify-environment` uses the unauthenticated REST API | **Accepted.** Rate limiting on shared runner IPs can fail the job, but it fails closed before any secret | Low | none |
 | 10 | Self-approval: if the owner is both dispatcher and only reviewer, the environment approval is a confirmation click, not a second person | **Accepted** for a single-owner repository | Low | Documented in §6 |
+| 12 | *(fresh-context review of `862b74d`)* The first packager reported **complete** while silently dropping collected files: a non-required file over 64 MB, a FIFO or device node in `project-final`, or a directory `os.walk` could not list. Reproduced | **Confirmed, fixed** | Medium | Any problem on any collected entry is a problem; `os.walk(onerror=)`; files are streamed, never dropped for size |
+| 13 | *(review)* A required file over 64 MB (e.g. a long transcript) was left out of the archive (status correctly incomplete, but the evidence lost) | **Confirmed, fixed** | Low | Streamed into the archive; flagged "too large to parse" |
+| 14 | *(review)* All collected bytes were held in memory at once (OOM risk with agent-written bulk; would lose every file) | **Plausible, fixed** | Low | Streaming hash + archive; 2 GiB budget for non-required bulk, required files always first |
+| 15 | *(review)* The packaging step ran the pinned commit's `pack_evidence.py` as root, in the step holding the passphrase, even when the approval check had refused that commit. Also: the approval checker itself was taken from the commit it checks | **Confirmed by trace, fixed** | Low-medium | Marker written only when the approval check passes; packaging refuses without it. The checker is taken from the reviewed parent (`$AQD_TEST_SHA^`) |
 | 11 | Scientific separation: `analyze.py` refuses `PROBE-CC` and `SMOKE` records and never pools execution environments. Treatment is skill availability via `--plugin-dir`, with identical prompts in both arms. The canonical skill hash is enforced in CI and in the live job | **Verified in code and the existing tests.** Not changed | — | none |
 
 **False positives checked:**
@@ -58,7 +62,7 @@ The canonical skill is unchanged: `d050d00fa8564b08cac71ca221368568420c731c830ef
 | `live/check_single_use.py` (new) | Single use of the approval, from GitHub's deployment record | One API read with the job token (`deployments: read`), before the secret is used |
 | `.github/workflows/phase3-cc-smoke.yml` | Live job: `fetch-depth: 2`, approval-commit step, single-use step, `deployments: read`, and the packaging step with explicit outcomes. Mock job: runs all live tests (`test_*.py`, fails on any skip) | No new job; the secret placement is unchanged |
 | `live/rehearse.sh` | Every case also runs the packager on the real launcher output. The clean run must be *complete*, which checks the required list against reality | The same cases, plus one assertion per case |
-| `live/test_*.py` (4 new files) | 40 new tests | — |
+| `live/test_*.py` (4 new files) | 47 new tests (60 in the directory) | — |
 | `LIVE-PROBE.md`, `SMOKE-WORKFLOW.md` | Procedure, manifest and credential steps. The superseded bootstrap text is marked | — |
 
 The canonical skill, the harness (`phase-3.2/harness/*`), `run-live-probe.sh`, the probe task, the schedule and the approved hashes are all unchanged.
@@ -69,7 +73,7 @@ The canonical skill, the harness (`phase-3.2/harness/*`), `run-live-probe.sh`, t
 
 | Command | Result |
 |---|---|
-| `python3 -m unittest discover -s evaluations/phase-3.3/live -p 'test_*.py'` | 53 run, OK, 0 skipped |
+| `python3 -m unittest discover -s evaluations/phase-3.3/live -p 'test_*.py'` | 60 run, OK, 0 skipped |
 | `… -s evaluations/phase-3.2/tests -p test_cc_adapter.py` | 75 run, OK |
 | `test_harness.py` / `test_difficulty.py` / `test_scoring.py` | 67 / 68 / 40, OK |
 | `tests/test_validators.py`, `tests/test_install.py` | 9 / 14, OK |
@@ -87,7 +91,8 @@ ShellCheck on `phase-3.2/harness/*-cc.sh` reports 3 info-level notes (SC1091, SC
 - incomplete status: 24;
 - NDJSON truncation check: 1;
 - single-use count: 2;
-- `run_attempt` in the guard: 2.
+- `run_attempt` in the guard: 2;
+- after the review fixes: non-required problems promoted, 2; walk errors recorded, 1; chunk overlap (token split across reads), 1; size budget, 1.
 
 **The ten required scenarios:**
 

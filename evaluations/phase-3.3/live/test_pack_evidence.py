@@ -176,6 +176,61 @@ class PackEvidenceTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(os.path.exists(self.out))
 
+    # adversarial review of 862b74d: nothing collected may be dropped while the archive says "complete"
+    def test_non_regular_oversized_and_unwalkable_entries_are_problems(self):
+        full_store(self.op)
+        proj = os.path.join(self.op, "captures", RUN, "project-final")
+        os.makedirs(proj)
+        os.mkfifo(os.path.join(proj, "fifo"))
+        code, m = pe.pack(self.op, RUN, self.out)
+        self.assertEqual((code, [p["path"] for p in m["problems"]]), (3, [f"captures/{RUN}/project-final/fifo"]))
+        os.unlink(os.path.join(proj, "fifo"))
+        os.makedirs(os.path.join(proj, "deep"))
+        real_scandir = os.scandir
+
+        def failing(path=".", *a, **k):
+            if str(path).endswith("deep"):
+                raise PermissionError(13, "denied")
+            return real_scandir(path, *a, **k)
+        with mock.patch.object(pe.os, "scandir", failing):
+            code, m = pe.pack(self.op, RUN, self.out)
+        self.assertEqual(code, 3)
+        self.assertTrue(any("could not be listed" in p["problem"] for p in m["problems"]))
+
+    def test_oversized_files_are_archived_and_flagged_never_dropped(self):
+        full_store(self.op)
+        big = os.path.join(self.op, "captures", RUN, "driver", "transcript.ndjson")
+        line = b'{"type": "assistant"}\n'
+        with open(big, "wb") as h:
+            h.write(line * 200)
+        with mock.patch.object(pe, "MAX_PARSE", 1000):
+            code, m = pe.pack(self.op, RUN, self.out)
+        self.assertEqual(code, 3)
+        self.assertIn("too large", [p for p in m["problems"]][0]["problem"])
+        self.assertEqual(self.members()[f"captures/{RUN}/driver/transcript.ndjson"], line * 200)
+
+    def test_total_budget_skips_only_non_required_bulk(self):
+        full_store(self.op)
+        bulk = os.path.join(self.op, "captures", RUN, "project-final")
+        os.makedirs(bulk)
+        for i in range(3):
+            with open(os.path.join(bulk, f"b{i}"), "wb") as h:
+                h.write(b"z" * 5000)
+        with mock.patch.object(pe, "TOTAL_BUDGET", 6000):
+            code, m = pe.pack(self.op, RUN, self.out)
+        self.assertEqual(code, 3)
+        got = self.members()
+        for rel in pe.required(RUN):
+            self.assertIn(rel, got)
+        self.assertTrue(any("budget" in p["problem"] for p in m["problems"]))
+
+    def test_token_split_across_read_chunks_is_still_found(self):
+        full_store(self.op)
+        with open(os.path.join(self.op, "captures", RUN, "driver", "stderr.txt"), "w") as h:
+            h.write("x" * (pe.CHUNK - 10) + SYNTHETIC + "\n")
+        code, m = pe.pack(self.op, RUN, self.out)
+        self.assertEqual((code, m["token_shaped_files"]), (5, 1))
+
     def test_cli_rejects_bad_run_id(self):
         r = subprocess.run([sys.executable, "-I", os.path.join(LIVE, "pack_evidence.py"), "--operator", self.op,
                             "--run-id", "../x", "--out", self.out], capture_output=True, text=True)

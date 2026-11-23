@@ -3,7 +3,8 @@ name: Phase 3.3 native Claude Code smoke (mock; live security probe gated)
 # pull_request        -> the "mock" job only, on the PR head. No secret, no model request.
 # workflow_dispatch   -> mode "mock": the same job on the commit pinned below (AQD_TEST_SHA). No secret.
 #                        mode "live-security-probe": ONE approved, unscored PROBE-CC run on the owner's subscription,
-#                        only when ALL of these hold (each is checked; any failure stops before the secret is used):
+#                        only when ALL of these hold (each is checked; any failure stops before the token is written,
+#                        and no checkout code runs with the passphrase unless the approval commit was verified):
 #                          * dispatched by hand from main, first attempt (github.run_attempt == 1), never on a PR;
 #                          * AQD_TEST_SHA pinned to the owner's one-file approval commit on the reviewed commit, and
 #                            main's copy of this file equal to the reviewed copy except that pin; CLI hashes pinned;
@@ -280,9 +281,14 @@ jobs:
           # Anonymous fetch: the repository is public. Nothing is written into the checkout's working tree.
           git fetch -q --no-tags --depth=1 origin "$WORKFLOW_SHA"
           git show "$WORKFLOW_SHA:.github/workflows/phase3-cc-smoke.yml" >"$RUNNER_TEMP/aqd-main-workflow.yml"
-          python3 -I evaluations/phase-3.3/live/check_approval_commit.py --repo . --pinned "$AQD_TEST_SHA" \
+          # The checker comes from the PARENT (the reviewed commit), not from the commit it checks: an approval commit
+          # that edits the checker is then refused by the reviewed checker (it changes more than the approval file).
+          git show "$AQD_TEST_SHA^:evaluations/phase-3.3/live/check_approval_commit.py" >"$RUNNER_TEMP/aqd-check-approval.py"
+          python3 -I "$RUNNER_TEMP/aqd-check-approval.py" --repo . --pinned "$AQD_TEST_SHA" \
             --main-workflow "$RUNNER_TEMP/aqd-main-workflow.yml"
           [[ -z "$(git status --porcelain)" ]] || { echo "STOP: the checkout is not clean"; exit 1; }
+          # Only after this point may any later step run code from the checkout with a secret in its environment.
+          printf '%s\n' "$AQD_TEST_SHA" >"$RUNNER_TEMP/aqd-approval-verified"
 
       - name: Single use of the approval (no secret in this step)
         env:
@@ -357,8 +363,11 @@ jobs:
           umask 077
           [[ "${#AQD_PASS}" -ge 32 ]] || { echo "STOP: AQD_RESULTS_PASSPHRASE missing or short; nothing uploaded"; exit 1; }
           packer="$GITHUB_WORKSPACE/evaluations/phase-3.3/live/pack_evidence.py"
+          # The packer runs as root while this step holds the passphrase: only code whose approval commit was verified.
+          [[ "$(cat "$RUNNER_TEMP/aqd-approval-verified" 2>/dev/null)" == "$AQD_TEST_SHA" ]] \
+            || { echo "STOP: the approval commit was never verified: no probe ran, nothing is packaged"; exit 1; }
           [[ "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD 2>/dev/null)" == "$AQD_TEST_SHA" && -f "$packer" ]] \
-            || { echo "STOP: the pinned commit was never checked out: no probe ran, no evidence exists"; exit 1; }
+            || { echo "STOP: the pinned commit is not checked out: nothing is packaged"; exit 1; }
           p="$RUNNER_TEMP/aqd-pack"; mkdir -p "$p/up" "$p/gnupg"; chmod 0700 "$p/gnupg"
           # Every collected file is read and checked once; the archive holds exactly those bytes plus a manifest.
           # 0 complete, 3 incomplete, 4 no evidence (stopped before the probe), 5 token-shaped string; 1 no archive.

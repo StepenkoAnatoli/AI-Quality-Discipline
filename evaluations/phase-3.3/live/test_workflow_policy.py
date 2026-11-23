@@ -5,6 +5,7 @@ placement, step order, evidence packaging and upload settings are asserted on th
 import os
 import re
 import subprocess
+import tempfile
 import unittest
 
 import yaml
@@ -101,6 +102,32 @@ class SecretPlacementTests(unittest.TestCase):
                     self.assertIs(s["with"]["persist-credentials"], False)
         self.assertEqual(step("Check out exactly the pinned commit")["with"]["fetch-depth"], 2)
         self.assertIn("--main-workflow", step("Verify the owner's approval commit")["run"])
+
+
+class ApprovalGateTests(unittest.TestCase):
+    def test_checker_comes_from_the_reviewed_parent(self):
+        run = step("Verify the owner's approval commit")["run"]
+        self.assertIn('git show "$AQD_TEST_SHA^:evaluations/phase-3.3/live/check_approval_commit.py"', run)
+        self.assertNotIn("python3 -I evaluations/phase-3.3/live/check_approval_commit.py", run)
+
+    def test_packaging_with_the_passphrase_requires_the_verified_marker(self):
+        approve = step("Verify the owner's approval commit")["run"]
+        lines = [l.strip() for l in approve.splitlines() if l.strip() and not l.strip().startswith("#")]
+        self.assertTrue(lines[-1].startswith("printf") and "aqd-approval-verified" in lines[-1])  # last: only on success
+        pack = step("Package and encrypt the evidence")["run"]
+        gate, run_packer = pack.index("aqd-approval-verified"), pack.index("sudo python3")
+        self.assertLess(gate, run_packer)
+
+    def test_packaging_step_refuses_without_the_marker(self):
+        run = step("Package and encrypt the evidence")["run"]
+        head = run[:run.index("p=\"$RUNNER_TEMP/aqd-pack\"")]
+        with tempfile.TemporaryDirectory() as t:
+            env = {"PATH": "/usr/bin:/bin", "AQD_PASS": "x" * 40, "AQD_TEST_SHA": PIN, "RUNNER_TEMP": t,
+                   "GITHUB_WORKSPACE": t}
+            self.assertEqual(subprocess.run(["bash", "-c", head], env=env, capture_output=True).returncode, 1)
+            with open(os.path.join(t, "aqd-approval-verified"), "w") as h:
+                h.write("0" * 40 + "\n")           # marker for another commit
+            self.assertEqual(subprocess.run(["bash", "-c", head], env=env, capture_output=True).returncode, 1)
 
 
 class EvidenceStepTests(unittest.TestCase):
