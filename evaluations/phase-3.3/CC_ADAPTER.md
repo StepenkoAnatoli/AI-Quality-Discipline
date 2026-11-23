@@ -36,24 +36,26 @@
 | `analyze.py check_run_records` | **Reused with one addition.** Execution environments are never pooled; native records must also agree on `claude_cli_sha256` and `max_turns` |
 | `launch-run.sh`, `drive_session.py`, `api_checks.py`, `export_checks.py`, `install-opencode.sh` | **Untouched** (historical reference) |
 | `cc_adapter.py` (new) | Environment and token checks, `auth status` check, one command for both arms, the session driver, and the transcript checker that writes `export-checks.json` in the existing schema |
-| `cc_exec.sh` (new, 12 lines) | Reads the token from the first line of stdin, exports it, and `exec`s `claude`. The rest of stdin is the prompt |
+| `cc_exec.sh` (new, 14 lines) | Reads the token from the first line of stdin, exports it, and `exec`s `claude`. The rest of stdin is the prompt |
 | `launch-run-cc.sh` (new) | `launch-run.sh` with the OpenCode steps replaced. **Never executed:** only `bash -n` and ShellCheck have run on it |
-| `tests/test_cc_adapter.py` (new) | 37 offline tests, wired into the existing CI job |
+| `tests/test_cc_adapter.py` (new) | 51 offline tests, wired into the existing CI job (37 at first, plus 14 from the adversarial review in §9) |
 
 ## 3. Isolation and the command
 
 **The command** (`build_argv`), byte-identical in both arms:
 
-`claude -p --restricted --model <id> --effort <level> --settings <root-owned file> --strict-mcp-config --tools Bash,Read,Edit,Write,Glob,Grep --allowedTools <same> --permission-mode acceptEdits --output-format stream-json --verbose --max-turns N --no-session-persistence`
+`claude -p --restricted --model <id> --effort <level> --settings <root-owned file> --strict-mcp-config --tools Bash,Read,Edit,Write,Glob,Grep,Skill --allowedTools <same> --permission-mode acceptEdits --output-format stream-json --verbose --max-turns N --no-session-persistence`
 
-The prompt goes in on stdin.
+The prompt goes in on stdin. The process starts in the run's project directory (`Popen(cwd=project)`; sudo keeps the working directory), and the transcript check requires `init.cwd` to be exactly that directory.
+
+`Skill` is in `--tools` in **both** arms: `--tools` withholds every built-in tool it does not name (2.1.330: "…is not on this session's --tools list…; withheld"), so without it the treatment's skill would be listed but could never be loaded.
 
 **Flags and settings, and why:**
 
 | Choice | Reason |
 |---|---|
 | `--restricted`, not `--safe-mode` or `--bare` | `--bare` never reads OAuth credentials, so the subscription can't be used. `--safe-mode` disables all skills, so the treatment can't exist. `--restricted` is documented to: load only managed settings and `--settings`; remove code-running tools and WebFetch unless `--tools` names them; confine file tools to the working directories; refuse bypassPermissions |
-| `--settings` | `syncClaudeAiSkills: false` and `syncClaudeAiPlugins: false` (in the binary, honoured per invocation; documented in user settings). Also `switchModelsOnFlag: false`, `disableBundledSkills: true`, allow the six coding tools, deny WebFetch and WebSearch |
+| `--settings` | `syncClaudeAiSkills: false` and `syncClaudeAiPlugins: false` (in the binary, honoured per invocation; documented in user settings). Also `switchModelsOnFlag: false`, `disableBundledSkills: true`, allow the six coding tools and `Skill`, deny WebFetch and WebSearch |
 | No `--fallback-model` | No fallback model |
 | Environment built from scratch (`env -i`) | Only the allow-listed variables are present, plus `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1`, `CLAUDE_CODE_SKIP_PROMPT_HISTORY=1` and `DISABLE_AUTOUPDATER=1`, `DISABLE_UPDATES=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` |
 | Refused before anything runs | Any API key, base URL, alternative-provider switch, model or effort override, or unknown variable (`check_env`) |
@@ -65,17 +67,19 @@ The prompt goes in on stdin.
 
 **Fail-closed checks on the transcript** (`analyse_transcript`). The run is invalid unless all of these hold:
 
-- exactly one `init` and one `result` event;
+- exactly one `init` event, and exactly one `result` event (zero or one after a timeout);
+- `init.cwd` is the run's project directory;
 - the pinned CLI version, model and permission mode;
 - `apiKeySource == "none"`;
 - no plugins or MCP servers;
 - no web or MCP tools;
 - the available skills are **exactly** `[code-discipline]` (treatment) or `[]` (control), so an account-synced or bundled skill invalidates both arms;
-- every assistant turn was served by the pinned model, and the pinned model appears in `modelUsage`;
-- no `api_retry` event (rate limit, billing, …);
-- the result is `success` or `error_max_turns` (the turn limit is a valid outcome, like a timeout);
-- `is_error` is false;
+- treatment: the `Skill` tool is offered (`init.tools`); control: recorded only;
+- every assistant turn was served by the pinned model, and the pinned model appears in `modelUsage` (a killed session has no result event, so it is judged on its assistant turns);
+- the result is `success` with `is_error` false, or `error_max_turns`. The CLI emits `error_max_turns` with `is_error` **true**, so the subtype decides. Any other result, or a timeout while the CLI was still retrying the provider, is an infrastructure failure;
 - no code-discipline listing, invocation or text in control.
+
+**Outcomes that stay valid:** the turn limit (driver outcome `max_turns`) and the 45-minute timeout (SPECIFICATION §6.2). After a timeout, a truncated final line is tolerated; a bad line anywhere else is not. Recovered `api_retry` events are recorded in `api_retries`, not invalidating, matching Phase 3.2, which invalidated only sessions that *ended* on a provider error.
 
 **Recorded only, not validity conditions:**
 
@@ -99,7 +103,10 @@ The prompt goes in on stdin.
 | `modelUsage` keys are the bare model id; every model that served a turn appears there | model-config.md (read the model from `modelUsage`) | **key format and completeness unverified.** It fails closed if the pinned id is absent |
 | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips credentials from the agent's subprocesses and isolates them with bubblewrap (on by default under `GITHUB_ACTIONS`) | CLI 2.1.330 code and error messages | **binary only; behaviour unverified**, because it needs a model-issued Bash call |
 | `--restricted` with `--tools Bash` plus `--allowedTools Bash` and `acceptEdits` lets a headless run edit source files and run tests without a person | headless.md, permission-modes.md (pieces) | **combination unverified** |
-| `result.subtype` values `success` / `error_max_turns` | SDK result types | documented shape; real values unverified |
+| `result.subtype` values `success` / `error_max_turns`; `error_max_turns` carries `is_error: true` | SDK result types; 2.1.330 result builder | documented shape; `is_error` binary only; real values unverified |
+| `Skill` survives `--restricted --tools …,Skill` and appears in `init.tools` | 2.1.330 launch-list filter | **UNVERIFIED.** It fails closed: a treatment run is invalid without it |
+| `init.cwd` is the working directory the process started in, as an absolute path matching `$PROJECT` | SDK init type | **UNVERIFIED** (a symlinked or canonicalised path would fail closed) |
+| sudo keeps the caller's working directory for `aqd-a`/`aqd-b` | sudo default (no `runcwd`) | assumed; caught by the `init.cwd` check |
 | `setup-token` tokens start with `sk-ant-oat` (used to refuse an API key placed in the token slot) | none found | **assumption.** If wrong, `check_token` refuses a valid token and the run stops before any request. It fails closed and can't spend |
 | A turn cap (`--max-turns`, default 200) is a new constraint; Phase 3.2 had only the 45-minute wall limit | harness choice | to pre-register. Every run records whether it was hit (`result_subtype`) |
 
@@ -109,11 +116,12 @@ The prompt goes in on stdin.
 |---|---|---|
 | Billing outside the subscription (API key, `apiKeyHelper`, Bedrock/Vertex/Foundry, base URL) | The environment is built from scratch and allow-listed (`check_env`). An API key in the token slot is refused (`check_token`). `auth status` must report `authMethod: oauth_token` before the session (STOP otherwise). The transcript must show `apiKeySource: "none"` | Usage credits are a claude.ai account setting the harness can't see. **The owner must keep them off.** A Fable model can bill credits, so the model is pinned and checked on every turn |
 | Model fallback or switch | No `--fallback-model`; `switchModelsOnFlag: false`; `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1`; every assistant turn's model is checked | If a switch is not reported per turn, `modelUsage` is the only other signal, and its completeness is unverified |
-| Account skills, plugins, hooks or CLAUDE.md in a run | OAuth-token auth (documented: no sync); `--settings` sync off; a fresh per-run `CLAUDE_CONFIG_DIR`; `--restricted` (no user, project or local settings files, so no hooks from them); no CLAUDE.md in the tasks; exact `skills`/`plugins`/`mcp_servers` checks | Managed (policy) settings still apply under `--restricted`. There are none on a GitHub runner; the owner's machine is not used |
-| The token in public logs or artifacts | Never in argv (stdin hand-off; `sudo env -i` carries only non-secret variables); never in `$CAP`, the run root or any agent-readable file; held in an operator-only 0700 directory removed in `finish()`; the GitHub secret is referenced only in the one step that writes the 0600 credentials file; launcher output goes to the encrypted bundle; a post-run scan stops the benchmark if the token appears in any captured file | The scan finds the literal token only (no encodings) |
+| Account skills, plugins, hooks or CLAUDE.md in a run | OAuth-token auth (documented: no sync); `--settings` sync off; a fresh per-run `CLAUDE_CONFIG_DIR`; `--restricted` (no user, project or local settings files, so no hooks from them); no CLAUDE.md in the tasks; exact `skills`/`plugins`/`mcp_servers` checks | Managed (policy) settings still apply under `--restricted`, and their `env` or `apiKeyHelper` could redirect or bill a session without changing `authMethod`. The launcher refuses to start if `/etc/claude-code` exists. Not covered: any other managed-settings location a future CLI adds |
+| The token in public logs or artifacts | Never in argv (stdin hand-off; `sudo env -i` carries only non-secret variables); never in `$CAP`, the run root or any agent-readable file; held in an operator-only 0700 directory removed in `finish()`; the GitHub secret is referenced only in the one step that writes the 0600 credentials file; launcher output goes to the encrypted bundle; a token scan of every captured file runs in `finish()` on **every** exit path, before the secret copy is removed. A hit, or a scan that cannot run, writes STOP, makes the run invalid and exits 21 | The scan finds the literal token only (no encodings). It is defence in depth, never the main control |
 | **The agent reads the token** (its Bash runs as the same OS user as `claude`, so `/proc/<claude pid>/environ` is readable) | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` plus bubblewrap (separate process namespace for the agent's commands); egress locked to Anthropic hosts during runs (Phase 3.2 rule), so a stolen token can only be used against Anthropic; transcripts encrypted | **Unverified, and the largest residual risk.** Owner mitigation: a token made only for the experiment and revoked immediately after it |
-| Treatment leaks into control | Root-owned `skills/` directory in both arms (the agent can't add a skill); separate OS users and run roots; control transcript checked for the skill's listing, invocation and text | Same as Phase 3.2: detection after the fact, plus egress lock |
+| Treatment leaks into control, or the agent adds a skill | Root-owned `skills/` directory in both arms, inside a root-owned sticky (1770) config directory, so the agent can neither write it nor rename and replace it; separate OS users and run roots; control transcript checked for the skill's listing, invocation and text | Same as Phase 3.2: detection after the fact, plus egress lock |
 | Hidden material reaches the agent | Unchanged Phase 3.2 rule: hidden tests are decoded only after both runs, into the operator-only evaluator directory | None new |
+| One approval reused for many paid runs | `cc-run-approved.json` must list **this** run id in `approved_run_ids` (`check-approval`); a smoke-test approval covers only the smoke-test runs | The owner must write a new list for each batch |
 | Workflow permissions | Existing CI: `contents: read`, no secrets. The run workflow (not written yet; §7) must keep `contents: read`, `workflow_dispatch` only, `run_attempt == 1`, and the secret scoped to one step | To be reviewed when the workflow is written |
 
 ## 6. Automatic versus explicit invocation
@@ -145,6 +153,8 @@ Recommendation:
    - with the mock's synthetic transcripts, both runs VALID;
    - one deliberately bad mock (for example an extra skill) gives INVALID;
    - a mock that echoes a fake token stops the benchmark (exit 21).
+   - mocks for the turn limit (`error_max_turns`, `is_error: true`, exit 1) and a timeout give VALID runs;
+   - a mock started outside the project (wrong `init.cwd`) gives INVALID.
 6. **Egress probe while locked:** `github.com` refused, and the Anthropic API host reachable at TCP level only. No HTTP request is sent.
 7. **Public log:** only fixed messages and hashes. Captures are synthetic, but they are still encrypted with the existing pipeline to exercise it.
 
@@ -166,8 +176,26 @@ Recommendation:
 4. **Owner actions:**
    - create a dedicated `setup-token` token immediately before the smoke test and revoke it after;
    - confirm usage credits are off;
-   - write `cc-run-approved.json`.
+   - write `cc-run-approved.json` listing exactly the approved run ids.
 5. **First things the smoke test must show** (each fails closed if wrong):
    - `authMethod: oauth_token`;
-   - `init.skills` is `[code-discipline]` under `--restricted` in treatment and `[]` in control;
+   - `init.skills` is `[code-discipline]` under `--restricted` in treatment and `[]` in control, and `Skill` is in `init.tools`;
+   - `init.cwd` is the project directory;
    - the agent's Bash can't read `CLAUDE_CODE_OAUTH_TOKEN`. This needs a dedicated probe task, never a scored task.
+
+## 9. Adversarial review (fresh-context reviewer, 2026-11-23) and fixes
+
+| # | Finding | Verdict | Fix (test first) |
+|---|---|---|---|
+| 1 | `claude` never started in the project directory, so with `--restricted` every run would be a valid failure | confirmed by tracing | `run --project`, `Popen(cwd=project)`; `init.cwd` must equal the project |
+| 2 | `--tools` withheld the `Skill` tool, so the treatment's skill was listed but could not load | confirmed in the binary text (runtime unverified) | `Skill` in `--tools`/`--allowedTools` and settings in both arms; required in `init.tools` in treatment |
+| 3 | Every turn-limit run was invalid (the CLI sets `is_error: true`); the old test used a shape the CLI never emits | confirmed in the binary | the subtype decides; driver outcome `max_turns`, valid |
+| 4 | Every timeout was invalid (no result event, truncated line, no `modelUsage`), contradicting SPECIFICATION §6.2 | confirmed | `check-transcript --driver-result`; timeout rules above |
+| 5 | Any recovered `api_retry` invalidated the run | confirmed in the binary | recorded, not invalidating; a timeout while retrying stays invalid |
+| 6 | The token scan ran only on the success path | confirmed | `scan-secret` in `finish()`, before the secret is removed |
+| 7 | Managed settings were not checked | plausible | refuse if `/etc/claude-code` exists |
+| 8 | One approval file authorised every run | confirmed | `approved_run_ids` must name the run |
+| 9 | The agent could rename the root-owned `skills/` directory | confirmed (Linux rename semantics) | config dir root:agent 1770, checked |
+| 10 | Doc claims not supported by the code | confirmed | corrected in this file |
+
+17 new guard mutants of these fixes are all caught by the tests. The launcher fixes are checked only statically (text assertions, `bash -n`, ShellCheck); the launcher has still never been executed.

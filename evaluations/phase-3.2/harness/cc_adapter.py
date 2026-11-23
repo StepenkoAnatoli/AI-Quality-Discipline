@@ -16,8 +16,10 @@ schedule (schedule.py), immutable manifests (manifest.py), OS-user isolation and
     cc_adapter.py write-settings --out F
     cc_adapter.py argv           --claude BIN --model REF --settings F --max-turns N
     cc_adapter.py run            --claude BIN --model REF --settings F --max-turns N --prompt-file F \
-                                 --env-file F --secret-file F --timeout S --out-dir D [--as-user USER]
-    cc_adapter.py check-transcript --transcript F --group G --model REF --out F
+                                 --env-file F --secret-file F --timeout S --out-dir D --project DIR [--as-user USER]
+    cc_adapter.py check-transcript --transcript F --group G --model REF --project DIR --driver-result F --out F
+    cc_adapter.py check-approval --approval F --run-id R         # the owner named this run id in writing
+    cc_adapter.py scan-secret    --secret-file F --root D        # exit 21 if the token is in any file under D
 
 Treatment = the canonical skill is AVAILABLE (a user skill in the run's own CLAUDE_CONFIG_DIR). The prompt is
 byte-identical in both arms; nothing names or forces the skill. Invocation (a Skill tool_use naming it) and
@@ -45,6 +47,10 @@ PINNED_CLI_VERSION = "2.1.330"
 INTERFACE = f"claude-code {PINNED_CLI_VERSION}"
 ACTIVATION_MODE = "cc-skill-available"
 CODING_TOOLS = ("Bash", "Read", "Edit", "Write", "Glob", "Grep")
+# --tools withholds every built-in tool it does not name (2.1.330: "...is not on this session's --tools list ...;
+# withheld"), the Skill tool included. It is offered and allowed in BOTH arms so the command stays identical.
+SKILL_TOOL = "Skill"
+SESSION_TOOLS = CODING_TOOLS + (SKILL_TOOL,)
 FORBIDDEN_TOOLS = ("WebFetch", "WebSearch")
 OAUTH_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
@@ -77,12 +83,12 @@ HARNESS_SETTINGS = {
     "syncClaudeAiPlugins": False,
     "switchModelsOnFlag": False,
     "disableBundledSkills": True,
-    "permissions": {"allow": list(CODING_TOOLS), "deny": list(FORBIDDEN_TOOLS)},
+    "permissions": {"allow": list(SESSION_TOOLS), "deny": list(FORBIDDEN_TOOLS)},
 }
 
-# api_retry / result error categories that mean infrastructure or billing, never a model outcome.
-INFRA_ERRORS = ("billing_error", "rate_limit", "authentication_failed", "invalid_request", "model_not_found",
-                "overloaded", "server_error", "unknown")
+# Result subtypes that are model outcomes. 2.1.330 emits error_max_turns with is_error TRUE, so is_error alone
+# does not separate the turn limit (an outcome, like a timeout) from a provider or session error.
+OUTCOME_SUBTYPES = {"success": "succeeded", "error_max_turns": "max_turns"}
 
 
 class AdapterError(Exception):
@@ -137,6 +143,15 @@ def check_auth_status(status):
     return reasons
 
 
+def check_approval(data, run_id):
+    """The owner's written approval must name this run id. One approval never covers other runs."""
+    if not isinstance(data, dict) or not isinstance(data.get("approved_run_ids"), list):
+        return ["approval file has no approved_run_ids list"]
+    if run_id not in data["approved_run_ids"]:
+        return [f"run {run_id} is not in the owner's approved_run_ids"]
+    return []
+
+
 # ------------------------------------------------------------------ the command (identical in both arms)
 
 def model_parts(model_ref):
@@ -155,7 +170,7 @@ def build_argv(claude, model_ref, settings_path, max_turns):
         raise AdapterError("max_turns must be a positive int")
     return [claude, "-p", "--restricted", "--model", model_id, "--effort", effort,
             "--settings", settings_path, "--strict-mcp-config",
-            "--tools", ",".join(CODING_TOOLS), "--allowedTools", ",".join(CODING_TOOLS),
+            "--tools", ",".join(SESSION_TOOLS), "--allowedTools", ",".join(SESSION_TOOLS),
             "--permission-mode", "acceptEdits", "--output-format", "stream-json", "--verbose",
             "--max-turns", str(max_turns), "--no-session-persistence"]
 
@@ -232,11 +247,12 @@ MAX_PROMPT_BYTES = 60000  # below the pipe buffer, so writing token + prompt can
 
 
 def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secret_file, timeout, out_dir,
-        as_user=None, wrapper=None):
+        project, as_user=None, wrapper=None):
     """Run one session. The token travels as the first line of cc_exec.sh's stdin (then the prompt), never in argv
     or a file the agent can read. With as_user, the command runs as that OS user with exactly the checked
     environment (sudo -u USER env -i ...; the token is not in that list). Writes transcript.ndjson, stderr.txt and
-    driver-result.json into out_dir."""
+    driver-result.json into out_dir. The session starts in `project` (sudo keeps the working directory; the
+    transcript check then requires init.cwd to be exactly that directory)."""
     os.makedirs(out_dir, exist_ok=True)
     env = read_env_file(env_file)
     problems = check_env(env)
@@ -245,6 +261,8 @@ def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secr
     problems += check_token(token)
     with open(prompt_file, "rb") as handle:
         prompt = handle.read()
+    if not os.path.isabs(project) or not os.path.isdir(project):
+        problems.append("project must be an existing absolute directory")
     if len(prompt) > MAX_PROMPT_BYTES or b"\0" in prompt:
         problems.append("prompt too large or contains NUL")
     result = {"execution_environment": EXECUTION_ENVIRONMENT, "status": "error", "outcome": "not_started",
@@ -258,7 +276,7 @@ def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secr
     with open(os.path.join(out_dir, "transcript.ndjson"), "wb") as out, \
             open(os.path.join(out_dir, "stderr.txt"), "wb") as err:
         proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=out, stderr=err,
-                                env=None if as_user else env, start_new_session=True)
+                                env=None if as_user else env, start_new_session=True, cwd=project)
         try:
             proc.stdin.write(token.encode("utf-8") + b"\n" + prompt)
             proc.stdin.close()
@@ -277,31 +295,35 @@ def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secr
     summary = summarise_transcript(os.path.join(out_dir, "transcript.ndjson"))
     result["session_id"] = summary.get("session_id")
     if result["status"] == "idle":
-        result["outcome"] = "succeeded" if code == 0 and summary.get("result_ok") else "failed"
+        # the CLI exits non-zero at the turn limit, so the outcome comes from the result event, not the exit code
+        outcome = summary.get("outcome")
+        result["outcome"] = outcome if outcome == "max_turns" or (outcome == "succeeded" and code == 0) else "failed"
     else:
         result["outcome"] = "timeout"
     _write(os.path.join(out_dir, "driver-result.json"), result)
-    return 0 if result["outcome"] in ("succeeded", "timeout") else 1
+    return 0 if result["outcome"] in ("succeeded", "max_turns", "timeout") else 1
 
 
 # ------------------------------------------------------------------ transcript analysis
 
-def read_events(path):
-    """Parsed stream-json events; a line that is not a JSON object is a shape error (returned separately)."""
-    events, bad = [], 0
+def read_events(path, allow_truncated_tail=False):
+    """Parsed stream-json events and the count of lines that are not JSON objects (a shape error). With
+    allow_truncated_tail (a killed session), an unparseable LAST line is dropped instead of counted."""
+    lines = []
     with open(path, encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-            except ValueError:
+        lines = [line for line in handle if line.strip()]
+    events, bad = [], 0
+    for position, line in enumerate(lines):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            if not (allow_truncated_tail and position == len(lines) - 1):
                 bad += 1
-                continue
-            if isinstance(event, dict):
-                events.append(event)
-            else:
-                bad += 1
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+        else:
+            bad += 1
     return events, bad
 
 
@@ -311,8 +333,17 @@ def summarise_transcript(path):
     events, _ = read_events(path)
     init = next((e for e in events if e.get("type") == "system" and e.get("subtype") == "init"), {})
     result = next((e for e in reversed(events) if e.get("type") == "result"), {})
-    return {"session_id": init.get("session_id") or result.get("session_id"),
-            "result_ok": result.get("is_error") is False and result.get("subtype") in ("success", "error_max_turns")}
+    return {"session_id": init.get("session_id") or result.get("session_id"), "outcome": result_outcome(result)}
+
+
+def result_outcome(result):
+    """"succeeded", "max_turns", or None (a provider, billing or session error, or an unknown shape)."""
+    subtype = result.get("subtype")
+    if subtype == "success" and result.get("is_error") is False:
+        return "succeeded"
+    if subtype == "error_max_turns" and isinstance(result.get("is_error"), bool):
+        return "max_turns"
+    return None
 
 
 def _blocks(event):
@@ -325,18 +356,24 @@ def _skill_target(tool_input):
     return name.split(":")[-1].lstrip("/")
 
 
-def analyse_transcript(path, group, model_ref):
-    """export-checks.json for run_status.py (same keys as export_checks.py), from a stream-json transcript."""
+def analyse_transcript(path, group, model_ref, project, driver_status):
+    """export-checks.json for run_status.py (same keys as export_checks.py), from a stream-json transcript.
+    driver_status is driver-result.json's status: "idle" (the session ended) or "timeout" (the harness killed it;
+    no result event is expected, a truncated final line is tolerated, and the outcome stays a valid timeout)."""
     model_id, effort = model_parts(model_ref)
+    timed_out = driver_status == "timeout"
     report = {"execution_environment": EXECUTION_ENVIRONMENT, "group": group, "model_ref": model_ref,
               "requested": {"model": model_id, "effort": effort}, "errors": [], "model_mismatches": [],
-              "tool_counts": {}, "tokens": None, "reasoning_tokens_observed": None, "invalid_reasons": []}
+              "tool_counts": {}, "tokens": None, "reasoning_tokens_observed": None, "invalid_reasons": [],
+              "timed_out": timed_out, "api_retries": []}
     reasons = report["invalid_reasons"]
+    if driver_status not in ("idle", "timeout"):
+        reasons.append(f"driver status {driver_status!r}")
     if not os.path.exists(path):
         reasons.append("no transcript")
         report.update(valid=False, model_ok=False, activation="NOT_CHECKED", contamination=None)
         return report
-    events, bad_lines = read_events(path)
+    events, bad_lines = read_events(path, allow_truncated_tail=timed_out)
     if bad_lines:
         reasons.append(f"transcript has {bad_lines} line(s) that are not JSON objects")
     inits = [e for e in events if e.get("type") == "system" and e.get("subtype") == "init"]
@@ -344,12 +381,15 @@ def analyse_transcript(path, group, model_ref):
     assistants = [e for e in events if e.get("type") == "assistant"]
     if len(inits) != 1:
         reasons.append(f"expected exactly one system/init event, found {len(inits)}")
-    if len(results) != 1:
+    if len(results) > 1 or (not timed_out and len(results) != 1):
         reasons.append(f"expected exactly one result event, found {len(results)}")
     init = inits[0] if inits else {}
     result = results[-1] if results else {}
 
     # Identity and isolation, from the init event (fields in the CLI's own init schema).
+    report["cwd"] = init.get("cwd")
+    if init.get("cwd") != project:
+        reasons.append(f"session working directory {init.get('cwd')!r} is not the run's project directory")
     report["cli_version"] = init.get("claude_code_version")
     if init.get("claude_code_version") != PINNED_CLI_VERSION:
         reasons.append(f"Claude Code version {init.get('claude_code_version')!r} is not the pinned {PINNED_CLI_VERSION}")
@@ -372,8 +412,11 @@ def analyse_transcript(path, group, model_ref):
     if not isinstance(tools, list) or any(t in FORBIDDEN_TOOLS or str(t).startswith("mcp__") for t in tools) \
             or not {"Bash", "Read", "Edit"} <= set(tools or []):
         reasons.append("tool set is not the pinned coding tool set")
+    report["skill_tool_offered"] = isinstance(tools, list) and SKILL_TOOL in tools
     skills = init.get("skills")
     report["skills_available"] = skills
+    if group == "treatment" and not report["skill_tool_offered"]:
+        reasons.append("available skills: the Skill tool is not offered, so the skill cannot be loaded")
     expected_skills = [c.SKILL_ID] if group == "treatment" else []
     if not isinstance(skills, list) or sorted(str(s).split(":")[-1] for s in skills) != expected_skills:
         reasons.append(f"available skills {skills!r}, expected exactly {expected_skills}")
@@ -390,17 +433,30 @@ def analyse_transcript(path, group, model_ref):
     usage_models = sorted((result.get("modelUsage") or {}).keys())
     report["models_in_usage"] = usage_models
     report["auxiliary_models"] = [m for m in usage_models if m != model_id]
-    report["model_ok"] = bool(assistants) and not report["model_mismatches"] and model_id in usage_models
+    # modelUsage exists only in the result event; a killed session is judged on its assistant turns alone.
+    usage_ok = model_id in usage_models if result else timed_out
+    report["model_ok"] = bool(assistants) and not report["model_mismatches"] and usage_ok
     if not report["model_ok"]:
         reasons.append("an assistant turn was not served by the pinned model (fallback or switch), or no turn ran")
 
     # Infrastructure and billing errors are never model outcomes.
-    for event in events:
+    # A retry that recovers is recorded, not fatal (Phase 3.2 invalidated only sessions that ENDED on a provider
+    # error). A session that ends on an error, or is killed while still retrying, is infrastructure.
+    last_retry = last_turn = -1
+    for index, event in enumerate(events):
         if event.get("type") == "system" and event.get("subtype") == "api_retry":
-            report["errors"].append(f"api_retry: {event.get('error')}")
+            report["api_retries"].append(str(event.get("error")))
+            last_retry = index
+        elif event.get("type") == "assistant":
+            last_turn = index
+    if timed_out and not result and last_retry > last_turn:
+        report["errors"].append("timed out while retrying provider errors")
+    report["max_turns_reached"] = False
     if result:
-        if result.get("is_error") is not False or result.get("subtype") not in ("success", "error_max_turns"):
+        outcome = result_outcome(result)
+        if outcome is None:
             report["errors"].append(f"result {result.get('subtype')!r} is_error={result.get('is_error')!r}")
+        report["max_turns_reached"] = outcome == "max_turns"
         report["result_subtype"] = result.get("subtype")
         report["num_turns"] = result.get("num_turns")
         report["estimated_cost_usd"] = result.get("total_cost_usd")  # client-side estimate; not a bill
@@ -438,6 +494,18 @@ def analyse_transcript(path, group, model_ref):
     return report
 
 
+def scan_secret(secret_file, root):
+    """0 if the secret is in no file under root; 21 (isolation failure) if it is, or if the scan cannot run."""
+    try:
+        with open(secret_file, encoding="utf-8") as handle:
+            secret = handle.read().strip()
+        if not secret:
+            return 21
+        return 21 if files_containing([root], secret) else 0
+    except OSError:
+        return 21
+
+
 # ------------------------------------------------------------------ CLI
 
 def _write(path, data):
@@ -473,13 +541,22 @@ def main(argv=None):
             s.add_argument("--secret-file", required=True)
             s.add_argument("--timeout", type=int, required=True)
             s.add_argument("--out-dir", required=True)
+            s.add_argument("--project", required=True, help="absolute project directory; the session starts there")
             s.add_argument("--as-user", help="run as this OS user (sudo -u USER env -i <checked environment>)")
             s.add_argument("--wrapper", help="cc_exec.sh copy the agent user can execute (default: next to this file)")
     s = sub.add_parser("check-transcript")
     s.add_argument("--transcript", required=True)
     s.add_argument("--group", choices=("control", "treatment"), required=True)
     s.add_argument("--model", required=True)
+    s.add_argument("--project", required=True)
+    s.add_argument("--driver-result", required=True)
     s.add_argument("--out", required=True)
+    s = sub.add_parser("check-approval")
+    s.add_argument("--approval", required=True)
+    s.add_argument("--run-id", required=True)
+    s = sub.add_parser("scan-secret")
+    s.add_argument("--secret-file", required=True)
+    s.add_argument("--root", required=True)
     args = p.parse_args(argv)
     try:
         if args.command == "check-env":
@@ -508,8 +585,27 @@ def main(argv=None):
             return 0
         if args.command == "run":
             return run(args.claude, args.model, args.settings, args.max_turns, args.prompt_file, args.env_file,
-                       args.secret_file, args.timeout, args.out_dir, args.as_user, args.wrapper)
-        report = analyse_transcript(args.transcript, args.group, args.model)
+                       args.secret_file, args.timeout, args.out_dir, args.project, args.as_user, args.wrapper)
+        if args.command == "check-approval":
+            try:
+                with open(args.approval, encoding="utf-8") as handle:
+                    data = json.load(handle)
+            except (OSError, ValueError):
+                data = None
+            reasons = check_approval(data, args.run_id)
+            for r in reasons:
+                print(f"cc_adapter: {r}", file=sys.stderr)
+            return 0 if not reasons else 3
+        if args.command == "scan-secret":
+            code = scan_secret(args.secret_file, args.root)
+            print(f"cc_adapter: secret scan {'clean' if code == 0 else 'FAILED (token found or scan impossible)'}")
+            return code
+        try:
+            with open(args.driver_result, encoding="utf-8") as handle:
+                driver_status = (json.load(handle) or {}).get("status")
+        except (OSError, ValueError, AttributeError):
+            driver_status = None
+        report = analyse_transcript(args.transcript, args.group, args.model, args.project, driver_status)
         _write(args.out, report)
         print(f"cc_adapter: valid={report['valid']} activation={report['activation']} invoked={report['invoked']}")
         return 0 if report["valid"] else 1

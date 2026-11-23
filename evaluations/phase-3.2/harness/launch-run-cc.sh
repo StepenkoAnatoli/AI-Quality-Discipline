@@ -5,8 +5,8 @@
 # Usage: launch-run-cc.sh RUN_ID
 #
 # NOT YET EXECUTED ANYWHERE: only static checks (bash -n, shellcheck when present) and the offline adapter tests
-# have run. Running it sends a model request on the owner's subscription; it refuses unless the owner approved
-# that run in writing ($AQD_SEALED/cc-run-approved.json) and preflight has passed.
+# have run. Running it sends a model request on the owner's subscription; it refuses unless the owner named THIS
+# run id in writing ($AQD_SEALED/cc-run-approved.json, {"approved_run_ids": [...]}) and preflight has passed.
 #
 # Reused unchanged from launch-run.sh / lib.sh: sealed schedule lookup, preflight and STOP gates, the
 # evaluator-must-be-empty rule, per-group OS users, root-owned immutable project tree from the manifest,
@@ -29,8 +29,8 @@ AQD_CC_MAX_TURNS="${AQD_CC_MAX_TURNS:-200}"
 
 RUN_ID="${1:-}"
 [[ "$RUN_ID" =~ ^r-[0-9a-f]{10}$ ]] || { echo "usage: launch-run-cc.sh RUN_ID (r-<10 hex>)" >&2; exit 2; }
-[[ -f "$AQD_SEALED/cc-run-approved.json" ]] \
-    || { log "native Claude Code runs need the owner's written approval in $AQD_SEALED/cc-run-approved.json"; exit 2; }
+"$PY" "$CC" check-approval --approval "$AQD_SEALED/cc-run-approved.json" --run-id "$RUN_ID" \
+    || { log "run $RUN_ID is not approved in writing in $AQD_SEALED/cc-run-approved.json"; exit 2; }
 sched() { "$PY" "$AQD_HARNESS/schedule.py" get --schedule "$SCHEDULE" --run-id "$RUN_ID" --key "$1"; }
 TASK="$(sched task)"
 GROUP="$(sched group)"
@@ -76,8 +76,16 @@ ENDED="$STARTED"
 finish() {
     local rc=$?
     set +e
-    rm -rf "$SECRET_DIR"
     kill_user_processes "$AGENT_USER"
+    # The token scan runs on EVERY exit path, before the secret copy is removed. A hit (or a scan that cannot run)
+    # stops the benchmark and makes this run invalid, whatever happened before.
+    if [[ -s "$SECRET_DIR/token" ]] && ! "$PY" "$CC" scan-secret --secret-file "$SECRET_DIR/token" --root "$CAP" >/dev/null; then
+        printf 'ISOLATION FAILURE in run %s: the subscription token appears in captured files\n' "$RUN_ID" >"$AQD_SEALED/STOP"
+        rm -f "$CAP/run-status.json"
+        STEP="token-leak"
+        rc=21
+    fi
+    rm -rf "$SECRET_DIR"
     if [[ ! -f "$CAP/run-status.json" ]]; then
         "$PY" "$AQD_HARNESS/run_status.py" --interface claude-code --capture "$CAP" --group "$GROUP" \
             --started "$STARTED" --ended "$(date +%s)" --api-exit "$API_EXIT" --driver-exit "$DRIVER_EXIT" \
@@ -100,6 +108,8 @@ for env in "${AQD_ENVS[@]}"; do assert_no_processes "${AQD_USER_FOR_ENV[$env]}";
     --out "$CAP/pristine-check.json" >/dev/null || die "pristine store for $TASK is not intact"
 sha256sum --quiet -c "$AQD_SEALED/pristine-extra.sha256" || die "pristine skill/config changed"
 command -v bwrap >/dev/null || die "bubblewrap is required (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB)"
+# --restricted still applies managed settings, whose env/apiKeyHelper could redirect or bill the session.
+[[ ! -e /etc/claude-code ]] || die "/etc/claude-code (managed settings) exists: refused"
 [[ "$("$AQD_CLAUDE_BIN" --version 2>/dev/null | awk '{print $1}')" == "2.1.330" ]] || die "claude is not the pinned 2.1.330"
 
 STEP="build-home"
@@ -108,8 +118,10 @@ sudo install -d -o root -g root -m 0755 "$RUN_ROOT/bin"
 sudo install -o root -g root -m 0555 "$AQD_HARNESS/cc_exec.sh" "$WRAPPER"
 "$PY" "$CC" write-settings --out "$CAP/cc-settings.json"
 sudo install -o root -g root -m 0444 "$CAP/cc-settings.json" "$SETTINGS"
-sudo install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$RUN_HOME" "$RUN_TMP" "$CONFIG"
-# The skills directory is root-owned in BOTH arms, so the agent cannot add a skill during the run.
+sudo install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$RUN_HOME" "$RUN_TMP"
+# CONFIG is root-owned and sticky: claude can create its files there, but the agent cannot rename or replace the
+# root-owned skills directory. That directory is root-owned in BOTH arms, so no skill can be added during the run.
+sudo install -d -o root -g "$AGENT_USER" -m 1770 "$CONFIG"
 sudo install -d -o root -g root -m 0755 "$CONFIG/skills"
 if [[ "$GROUP" == "treatment" ]]; then
     sudo install -d -o root -g root -m 0755 "$CONFIG/skills/$AQD_SKILL_ID"
@@ -137,6 +149,7 @@ sudo chown "$(id -u):$(id -g)" "$CAP/verify-pre.json"
 assert_unreadable_by "$AGENT_USER" "$AQD_OPERATOR" "$AQD_CHECKOUT" "$HOME" /workspaces/.codespaces "$AQD_ROOT/$OTHER_ENV"
 if sudo -u "$AGENT_USER" test -w "$PROJECT/TASK.md"; then die "agent can write an immutable file"; fi
 if sudo -u "$AGENT_USER" test -w "$CONFIG/skills"; then die "agent can write the skills directory"; fi
+[[ "$(sudo stat -c '%U %a' "$CONFIG")" == "root 1770" ]] || die "$CONFIG is not root-owned and sticky"
 
 STEP="agent-env"
 # The environment is written from scratch: no inherited variable reaches the agent. The token is NOT in it.
@@ -195,7 +208,7 @@ set +e
 "$PY" "$CC" run --claude "$AQD_CLAUDE_BIN" --model "$MODEL_REF" --settings "$SETTINGS" \
     --max-turns "$AQD_CC_MAX_TURNS" --prompt-file "$MESSAGE_FILE" --env-file "$CAP/cc-env" \
     --secret-file "$SECRET_DIR/token" --timeout "$AQD_RUN_TIMEOUT_SECONDS" --out-dir "$CAP/driver" \
-    --as-user "$AGENT_USER" --wrapper "$WRAPPER"
+    --project "$PROJECT" --as-user "$AGENT_USER" --wrapper "$WRAPPER"
 DRIVER_EXIT=$?
 set -e
 ENDED="$(date +%s)"
@@ -217,14 +230,9 @@ set +e
 diff -ruN -x __pycache__ -x '*.pyc' -x .pytest_cache "$PRISTINE/project" "$CAP/project-final" >"$CAP/diff.patch"
 [[ $? -le 1 ]] || log "diff reported an error"
 "$PY" "$CC" check-transcript --transcript "$CAP/driver/transcript.ndjson" --group "$GROUP" --model "$MODEL_REF" \
-    --out "$CAP/export-checks.json"
-LEAKS="$("$PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); import cc_adapter as cc
-print(len(cc.files_containing([sys.argv[2]], open(sys.argv[3]).read().strip())))' "$AQD_HARNESS" "$CAP" "$SECRET_DIR/token")"
+    --project "$PROJECT" --driver-result "$CAP/driver/driver-result.json" --out "$CAP/export-checks.json"
 set -e
-if [[ "$LEAKS" != "0" ]]; then
-    printf 'ISOLATION FAILURE in run %s: the subscription token appears in captured files\n' "$RUN_ID" >"$AQD_SEALED/STOP"
-    exit 21
-fi
+# (the token scan runs in finish(), on every exit path)
 
 STEP="done"
 set +e

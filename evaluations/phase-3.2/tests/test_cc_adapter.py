@@ -28,6 +28,7 @@ import run_status  # noqa: E402
 
 MODEL_REF = "anthropic/claude-opus-5-5#medium"
 MODEL = "claude-opus-5-5"
+PROJECT = "/aqd/run/project"
 TEST_TOKEN = "sk-ant-oat01-SYNTHETIC-TEST-TOKEN-not-a-real-credential"
 SKILL_BODY = "\n".join(c.SKILL_SENTINELS)
 
@@ -49,7 +50,7 @@ def clean_env(root):
 
 def init_event(group="control", **changes):
     event = {"type": "system", "subtype": "init", "session_id": "s-synthetic", "uuid": "u0",
-             "apiKeySource": "none", "claude_code_version": cc.PINNED_CLI_VERSION, "cwd": "/aqd/run/project",
+             "apiKeySource": "none", "claude_code_version": cc.PINNED_CLI_VERSION, "cwd": PROJECT,
              "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Skill"], "mcp_servers": [],
              "model": MODEL, "permissionMode": "acceptEdits",
              "slash_commands": ["code-discipline"] if group == "treatment" else [],
@@ -103,8 +104,8 @@ class Workdir(unittest.TestCase):
                 h.write(line + "\n")
         return path
 
-    def analyse(self, events, group="control", raw_lines=()):
-        return cc.analyse_transcript(self.transcript(events, raw_lines), group, MODEL_REF)
+    def analyse(self, events, group="control", raw_lines=(), driver_status="idle"):
+        return cc.analyse_transcript(self.transcript(events, raw_lines), group, MODEL_REF, PROJECT, driver_status)
 
 
 # ------------------------------------------------------------------ pre-run checks
@@ -169,7 +170,8 @@ class CommandTests(Workdir):
         self.assertNotIn("bypassPermissions", argv)
         value = lambda flag: argv[argv.index(flag) + 1]  # noqa: E731
         self.assertEqual((value("--model"), value("--effort")), (MODEL, "medium"))
-        self.assertEqual(value("--tools"), "Bash,Read,Edit,Write,Glob,Grep")
+        self.assertEqual(value("--tools"), "Bash,Read,Edit,Write,Glob,Grep,Skill")
+        self.assertEqual(value("--allowedTools"), value("--tools"))
         self.assertEqual(value("--output-format"), "stream-json")
 
     def test_bad_model_references_are_refused(self):
@@ -186,6 +188,14 @@ class CommandTests(Workdir):
         self.assertIs(s["switchModelsOnFlag"], False)
         self.assertIs(s["disableBundledSkills"], True)
         self.assertIn("WebFetch", s["permissions"]["deny"])
+        self.assertIn("Skill", s["permissions"]["allow"])
+
+    def test_approval_names_each_run(self):
+        good = {"approved_run_ids": ["r-0123456789"], "approved_by": "owner", "approved_utc": "2026-11-23T00:00:00Z"}
+        self.assertEqual(cc.check_approval(good, "r-0123456789"), [])
+        for data in (good, {}, {"approved_run_ids": "r-0123456789"}, None, {"approved_run_ids": ["*"]}):
+            with self.subTest(data=data):
+                self.assertTrue(cc.check_approval(data, "r-aaaaaaaaaa"))
 
     def test_run_as_user_never_puts_the_token_in_argv(self):
         cmd = cc.build_command(cc.build_argv("/usr/bin/claude", MODEL_REF, "/s.json", 40), clean_env(self.tmp),
@@ -294,30 +304,95 @@ class TranscriptTests(Workdir):
 
     def test_infrastructure_errors_and_outcomes(self):
         retry = {"type": "system", "subtype": "api_retry", "error": "rate_limit", "attempt": 1}
-        self.assertFalse(self.analyse(session(middle=[retry, assistant([{"type": "text", "text": "x"}])]))["valid"])
-        self.assertTrue(self.analyse(session(result=result_event("error_max_turns", False)))["valid"])
+        recovered = self.analyse(session(middle=[retry, assistant([{"type": "text", "text": "x"}])]))
+        self.assertTrue(recovered["valid"], recovered["invalid_reasons"])  # a retry that recovered is not a failure
+        self.assertEqual(recovered["api_retries"], ["rate_limit"])
+        self.assertEqual(recovered["errors"], [])
         for subtype, is_error in (("error_during_execution", True), ("success", True), ("success", None)):
             with self.subTest(subtype=subtype, is_error=is_error):
                 self.assertFalse(self.analyse(session(result=result_event(subtype, is_error)))["valid"])
+
+    def test_turn_limit_in_the_shape_the_cli_emits_is_a_valid_outcome(self):
+        # 2.1.330 builds the max-turns result with is_error true (binary text: is_error:!0 ... "error_max_turns")
+        r = self.analyse(session(result=result_event("error_max_turns", True)))
+        self.assertTrue(r["valid"], r["invalid_reasons"])
+        self.assertEqual(r["result_subtype"], "error_max_turns")
+        self.assertTrue(r["max_turns_reached"])
+        for subtype in ("error_max_budget_usd", "error_max_structured_output_retries"):
+            with self.subTest(subtype=subtype):
+                self.assertFalse(self.analyse(session(result=result_event(subtype, True)))["valid"])
+
+    def test_working_directory_must_be_the_project(self):
+        for cwd in ("/home/operator", None, PROJECT + "/sub"):
+            with self.subTest(cwd=cwd):
+                init = init_event()
+                if cwd is None:
+                    init.pop("cwd")
+                else:
+                    init["cwd"] = cwd
+                r = self.analyse(session(init=init))
+                self.assertFalse(r["valid"])
+                self.assertTrue(any("working directory" in x for x in r["invalid_reasons"]), r["invalid_reasons"])
+
+    def test_the_skill_tool_must_be_offered_in_treatment(self):
+        tools = ["Bash", "Read", "Edit", "Write", "Glob", "Grep"]
+        r = self.analyse(session("treatment", init=init_event("treatment", tools=tools)), "treatment")
+        self.assertFalse(r["valid"])
+        self.assertEqual(r["activation"], "NOT_AVAILABLE")
+        # control: the Skill tool may or may not be listed when no skill exists; either is valid and recorded
+        for listed in (tools, tools + ["Skill"]):
+            with self.subTest(listed=listed):
+                r = self.analyse(session(init=init_event(tools=listed)))
+                self.assertTrue(r["valid"], r["invalid_reasons"])
+                self.assertEqual(r["skill_tool_offered"], "Skill" in listed)
+
+    def test_timeout_transcripts_are_valid_timeouts(self):
+        partial = session()[:-1]  # killed: no result event
+        r = self.analyse(partial, raw_lines=['{"type": "assistant", "mess'], driver_status="timeout")
+        self.assertTrue(r["valid"], r["invalid_reasons"])
+        self.assertTrue(r["model_ok"])
+        self.assertTrue(r["timed_out"])
+        # the same transcript without a timeout is still a broken session
+        self.assertFalse(self.analyse(partial, driver_status="idle")["valid"])
+        # only a truncated LAST line is tolerated
+        bad_middle = self.transcript(partial[:2]) 
+        with open(bad_middle, "a", encoding="utf-8") as h:
+            h.write("garbage\n" + json.dumps(partial[2]) + "\n")
+        self.assertFalse(cc.analyse_transcript(bad_middle, "control", MODEL_REF, PROJECT, "timeout")["valid"])
+        # identity is still required, and a timeout spent retrying the provider is infrastructure
+        self.assertFalse(self.analyse(partial[1:], driver_status="timeout")["valid"])
+        self.assertFalse(self.analyse([init_event()], driver_status="timeout")["valid"])
+        retrying = partial + [{"type": "system", "subtype": "api_retry", "error": "overloaded", "attempt": 9}]
+        r = self.analyse(retrying, driver_status="timeout")
+        self.assertFalse(r["valid"])
+        self.assertTrue(r["errors"])
+        # a fallback model before the timeout is still caught
+        self.assertFalse(self.analyse(partial + [assistant([{"type": "text", "text": "x"}], model="claude-haiku-5-5")],
+                                      driver_status="timeout")["valid"])
+
+    def test_unknown_driver_status_fails_closed(self):
+        for status in (None, "error", "running"):
+            with self.subTest(status=status):
+                self.assertFalse(self.analyse(session(), driver_status=status)["valid"])
 
     def test_malformed_transcripts_fail_closed(self):
         self.assertFalse(self.analyse(session(), raw_lines=["not json"])["valid"])
         self.assertFalse(self.analyse([init_event()] + session())["valid"])  # two init events
         self.assertFalse(self.analyse(session()[:-1])["valid"])  # no result
         self.assertFalse(self.analyse([init_event(), result_event()])["valid"])  # no assistant turn
-        missing = cc.analyse_transcript(os.path.join(self.tmp, "absent.ndjson"), "control", MODEL_REF)
+        missing = cc.analyse_transcript(os.path.join(self.tmp, "absent.ndjson"), "control", MODEL_REF, PROJECT, "idle")
         self.assertFalse(missing["valid"])
 
 
 # ------------------------------------------------------------------ run_status reuse
 
 class RunStatusInterfaceTests(Workdir):
-    def capture(self, group, events, listing, record_changes=None):
+    def capture(self, group, events, listing, record_changes=None, driver=None, driver_status="idle"):
         cap = os.path.join(self.tmp, f"cap-{group}-{len(os.listdir(self.tmp))}")
         os.makedirs(os.path.join(cap, "driver"))
-        report = cc.analyse_transcript(self.transcript(events), group, MODEL_REF)
+        report = cc.analyse_transcript(self.transcript(events), group, MODEL_REF, PROJECT, driver_status)
         cc._write(os.path.join(cap, "export-checks.json"), report)
-        cc._write(os.path.join(cap, "driver", "driver-result.json"), {"status": "idle", "outcome": "succeeded"})
+        cc._write(os.path.join(cap, "driver", "driver-result.json"), driver or {"status": "idle", "outcome": "succeeded"})
         cc._write(os.path.join(cap, "verify-post.json"), {"integrity_ok": True, "findings": {}})
         with open(os.path.join(cap, "home-config-listing.txt"), "w", encoding="utf-8") as h:
             h.write("".join(f"{x}\n" for x in listing))
@@ -338,6 +413,17 @@ class RunStatusInterfaceTests(Workdir):
             with self.subTest(group=group):
                 s = self.status(self.capture(group, session(group), listing), group)
                 self.assertTrue(s["valid"], s["invalid_reasons"])
+
+    def test_turn_limit_and_timeout_stay_valid_in_run_status(self):
+        cap = self.capture("control", session(result=result_event("error_max_turns", True)), [],
+                           driver={"status": "idle", "outcome": "max_turns"})
+        s = self.status(cap, "control")
+        self.assertTrue(s["valid"], s["invalid_reasons"])
+        cap = self.capture("control", session()[:-1], [], driver={"status": "timeout", "outcome": "timeout"},
+                           driver_status="timeout")
+        s = self.status(cap, "control")
+        self.assertTrue(s["valid"], s["invalid_reasons"])
+        self.assertTrue(s["timed_out"])
 
     def test_wrong_skills_listing_or_record_is_invalid(self):
         cap = self.capture("control", session("control"), ["code-discipline", "code-discipline/SKILL.md"])
@@ -408,7 +494,7 @@ MOCK = textwrap.dedent('''\
     prompt = sys.stdin.buffer.read()
     seen = {{"argv": sys.argv[1:], "env_names": sorted(os.environ),
             "token_ok": os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") == cfg["expect_token"],
-            "prompt_sha256": hashlib.sha256(prompt).hexdigest()}}
+            "prompt_sha256": hashlib.sha256(prompt).hexdigest(), "cwd": os.getcwd()}}
     json.dump(seen, open(os.path.join(here, "mock-seen.json"), "w"))
     if cfg.get("sleep"):
         time.sleep(cfg["sleep"])
@@ -438,6 +524,8 @@ class DriverIntegrationTests(Workdir):
         os.chmod(self.secret, 0o600)
         self.settings = os.path.join(self.tmp, "settings.json")
         cc._write(self.settings, cc.HARNESS_SETTINGS)
+        self.project = os.path.join(self.tmp, "project")
+        os.makedirs(self.project)
 
     def write_env(self, env):
         with open(self.env_file, "w", encoding="utf-8") as h:
@@ -449,7 +537,8 @@ class DriverIntegrationTests(Workdir):
 
     def run_driver(self, timeout=30):
         out = os.path.join(self.tmp, "out")
-        code = cc.run(self.claude, MODEL_REF, self.settings, 40, self.prompt, self.env_file, self.secret, timeout, out)
+        code = cc.run(self.claude, MODEL_REF, self.settings, 40, self.prompt, self.env_file, self.secret, timeout, out,
+                      self.project)
         return code, out
 
     def seen(self):
@@ -457,10 +546,11 @@ class DriverIntegrationTests(Workdir):
         return load(path) if os.path.exists(path) else None
 
     def test_end_to_end_with_mock_claude(self):
-        self.configure(session("treatment"))
+        self.configure(session("treatment", init=init_event("treatment", cwd=self.project)))
         code, out = self.run_driver()
         self.assertEqual(code, 0)
         seen = self.seen()
+        self.assertEqual(os.path.realpath(seen["cwd"]), os.path.realpath(self.project))  # claude starts in the project
         self.assertTrue(seen["token_ok"])  # the token reached claude's environment ...
         self.assertNotIn(TEST_TOKEN, json.dumps(seen["argv"]))  # ... but not its arguments
         self.assertEqual(seen["argv"], cc.build_argv(self.claude, MODEL_REF, self.settings, 40)[1:])
@@ -470,7 +560,8 @@ class DriverIntegrationTests(Workdir):
             self.assertEqual(seen["prompt_sha256"], hashlib.sha256(handle.read()).hexdigest())
         driver = load(os.path.join(out, "driver-result.json"))
         self.assertEqual((driver["status"], driver["outcome"], driver["session_id"]), ("idle", "succeeded", "s-synthetic"))
-        report = cc.analyse_transcript(os.path.join(out, "transcript.ndjson"), "treatment", MODEL_REF)
+        report = cc.analyse_transcript(os.path.join(out, "transcript.ndjson"), "treatment", MODEL_REF, self.project,
+                                       driver["status"])
         self.assertTrue(report["valid"], report["invalid_reasons"])
         self.assertEqual(cc.files_containing([out], TEST_TOKEN), [])
 
@@ -499,6 +590,38 @@ class DriverIntegrationTests(Workdir):
         driver = load(os.path.join(out, "driver-result.json"))
         self.assertEqual((code, driver["status"], driver["outcome"]), (0, "timeout", "timeout"))
 
+    def test_turn_limit_is_an_outcome_not_a_failure(self):
+        self.configure(session(result=result_event("error_max_turns", True)), exit=1)
+        code, out = self.run_driver()
+        self.assertEqual(code, 0)
+        self.assertEqual(load(os.path.join(out, "driver-result.json"))["outcome"], "max_turns")
+
+    def test_check_transcript_cli_uses_the_driver_status(self):
+        partial = os.path.join(self.tmp, "partial.ndjson")
+        with open(partial, "w", encoding="utf-8") as h:
+            h.write("".join(json.dumps(e) + "\n" for e in session()[:-1]) + '{"type": "assist')
+        driver = os.path.join(self.tmp, "driver-result.json")
+        out = os.path.join(self.tmp, "checks.json")
+        args = ["check-transcript", "--transcript", partial, "--group", "control", "--model", MODEL_REF,
+                "--project", PROJECT, "--driver-result", driver, "--out", out]
+        cc._write(driver, {"status": "timeout", "outcome": "timeout"})
+        self.assertEqual(cc.main(args), 0)
+        cc._write(driver, {"status": "idle", "outcome": "failed"})
+        self.assertEqual(cc.main(args), 1)
+        os.remove(driver)
+        self.assertNotEqual(cc.main(args), 0)
+
+    def test_secret_scan_subcommand(self):
+        cap = os.path.join(self.tmp, "cap")
+        os.makedirs(cap)
+        with open(os.path.join(cap, "transcript.ndjson"), "w", encoding="utf-8") as h:
+            h.write("clean\n")
+        self.assertEqual(cc.main(["scan-secret", "--secret-file", self.secret, "--root", cap]), 0)
+        with open(os.path.join(cap, "stderr.txt"), "w", encoding="utf-8") as h:
+            h.write(TEST_TOKEN)
+        self.assertEqual(cc.main(["scan-secret", "--secret-file", self.secret, "--root", cap]), 21)
+        self.assertEqual(cc.main(["scan-secret", "--secret-file", os.path.join(self.tmp, "nope"), "--root", cap]), 21)
+
     def test_auth_status_through_the_wrapper(self):
         out = os.path.join(self.tmp, "auth.json")
         self.configure(session(), auth={"authMethod": "oauth_token", "subscriptionType": "ultra"})
@@ -516,6 +639,31 @@ class DriverIntegrationTests(Workdir):
         with open(os.path.join(leak, "notes.txt"), "w", encoding="utf-8") as h:
             h.write(f"token={TEST_TOKEN}\n")
         self.assertEqual(cc.files_containing([leak], TEST_TOKEN), [os.path.join(leak, "notes.txt")])
+
+
+class LauncherStaticTests(unittest.TestCase):
+    """launch-run-cc.sh has never been executed; these pin the review fixes in its text (static only)."""
+    TEXT = open(os.path.join(HARNESS, "launch-run-cc.sh"), encoding="utf-8").read()
+
+    def function(self, name):
+        start = self.TEXT.index(f"{name}() {{")
+        return self.TEXT[start:self.TEXT.index("\n}\n", start)]
+
+    def test_secret_scan_runs_in_finish_before_the_secret_is_removed(self):
+        body = self.function("finish")
+        self.assertIn("scan-secret", body)
+        self.assertLess(body.index("scan-secret"), body.index('rm -rf "$SECRET_DIR"'))
+
+    def test_managed_settings_are_refused(self):
+        self.assertRegex(self.TEXT, r'\[\[ ! -e /etc/claude-code \]\] \|\| die')
+
+    def test_config_dir_is_root_owned_and_sticky(self):
+        self.assertIn('install -d -o root -g "$AGENT_USER" -m 1770 "$CONFIG"', self.TEXT)
+
+    def test_approval_is_per_run_and_the_session_runs_in_the_project(self):
+        self.assertIn("check-approval", self.TEXT)
+        self.assertIn('--project "$PROJECT"', self.TEXT)
+        self.assertIn('--driver-result "$CAP/driver/driver-result.json"', self.TEXT)
 
 
 class ExecWrapperTests(Workdir):
