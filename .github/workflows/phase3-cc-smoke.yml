@@ -5,7 +5,9 @@ name: Phase 3.3 native Claude Code smoke (mock; live security probe gated)
 #                        mode "live-security-probe": ONE approved, unscored PROBE-CC run on the owner's subscription,
 #                        only when ALL of these hold (each is checked; any failure stops before the secret is used):
 #                          * dispatched by hand from main, first attempt (github.run_attempt == 1), never on a PR;
-#                          * AQD_TEST_SHA pinned to a reviewed commit, CLI tarball and binary SHA-256 pinned;
+#                          * AQD_TEST_SHA pinned to the owner's one-file approval commit on the reviewed commit, and
+#                            main's copy of this file equal to the reviewed copy except that pin; CLI hashes pinned;
+#                          * no earlier deployment to the environment (single use, server-side record);
 #                          * inputs run_id == AQD_PROBE_RUN_ID and confirm == "RUN-LIVE-PROBE <run id>";
 #                          * the mock job (dry run, real-CLI boundary, rehearsal) green in the same run;
 #                          * the environment aqd-cc-live-probe verified: main only, required reviewer, no admin bypass;
@@ -15,7 +17,7 @@ name: Phase 3.3 native Claude Code smoke (mock; live security probe gated)
 # dispatched ref. On this PR branch AQD_TEST_SHA is the all-zero placeholder, so both dispatch modes refuse here.
 # Secrets (environment aqd-cc-live-probe only; never repository secrets):
 #   AQD_CC_OAUTH_TOKEN      dedicated `claude setup-token` token. Referenced in ONE step ("Write the credentials file").
-#   AQD_RESULTS_PASSPHRASE  >= 32 characters. Referenced in ONE step ("Encrypt the capture").
+#   AQD_RESULTS_PASSPHRASE  >= 32 characters. Referenced in ONE step ("Package and encrypt the evidence").
 # What leaves the runner: fixed status lines and counts in the log; one GPG-encrypted capture, 1-day retention.
 
 on:
@@ -160,10 +162,12 @@ jobs:
           done
           python3 evaluations/phase-3.3/boundary/check_boundary.py "$out"
 
-      - name: Live-probe checkers (unit tests)
+      - name: Live-probe checkers, evidence packager and workflow policy (unit tests)
         run: |
           set -euo pipefail
-          python3 -m unittest discover -s evaluations/phase-3.3/live -p "test_check_*.py"
+          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y -qq python3-yaml >/dev/null
+          python3 -m unittest discover -s evaluations/phase-3.3/live -p "test_*.py" -v 2>&1 | tee "$RUNNER_TEMP/live-tests.log"
+          ! grep -qiE '(skipped|expected failure)' "$RUNNER_TEMP/live-tests.log"
 
       - name: Rehearsal of the live probe ON THIS HOST (mock CLI, synthetic token; same script as the live job)
         run: bash evaluations/phase-3.3/live/rehearse.sh "$RUNNER_TEMP/aqd-out/rehearsal"
@@ -233,6 +237,9 @@ jobs:
     environment: aqd-cc-live-probe
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    permissions:
+      contents: read
+      deployments: read   # the single-use check only (read-only listing of this environment's deployments)
     defaults:
       run:
         shell: bash
@@ -256,12 +263,38 @@ jobs:
             || { echo "STOP: run id or confirmation does not match the approved run"; exit 1; }
           echo "guard passed for run $AQD_PROBE_RUN_ID at $AQD_TEST_SHA"
 
-      - name: Check out exactly the pinned commit (no credentials persisted)
+      - name: Check out exactly the pinned commit and its parent (no credentials persisted)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.AQD_TEST_SHA }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 2
+
+      - name: Verify the owner's approval commit and that main runs the reviewed workflow (no secret in this step)
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # AQD_TEST_SHA is the owner's one-file approval commit on top of the reviewed commit (LIVE-PROBE.md section 6).
+          # main's copy of this file (the one running) must be the reviewed copy with only AQD_TEST_SHA filled in.
+          # Anonymous fetch: the repository is public. Nothing is written into the checkout's working tree.
+          git fetch -q --no-tags --depth=1 origin "$WORKFLOW_SHA"
+          git show "$WORKFLOW_SHA:.github/workflows/phase3-cc-smoke.yml" >"$RUNNER_TEMP/aqd-main-workflow.yml"
+          python3 -I evaluations/phase-3.3/live/check_approval_commit.py --repo . --pinned "$AQD_TEST_SHA" \
+            --main-workflow "$RUNNER_TEMP/aqd-main-workflow.yml"
+          [[ -z "$(git status --porcelain)" ]] || { echo "STOP: the checkout is not clean"; exit 1; }
+
+      - name: Single use of the approval (no secret in this step)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/aqd-single-use"; mkdir -p "$d"
+          curl -fsS -H 'Accept: application/vnd.github+json' -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/deployments?environment=aqd-cc-live-probe&per_page=100" \
+            -o "$d/deployments.json" || echo 'null' >"$d/deployments.json"
+          python3 -I evaluations/phase-3.3/live/check_single_use.py --deployments "$d/deployments.json"
 
       - name: Verify the commit, the canonical skill and the CLI (tarball and binary SHA-256)
         run: |
@@ -315,7 +348,7 @@ jobs:
         run: |
           if [[ -f "$RUNNER_TEMP/aqd-secret/credentials.env" ]]; then shred -u "$RUNNER_TEMP/aqd-secret/credentials.env"; fi
 
-      - name: Encrypt the capture (the ONLY step that references the passphrase)
+      - name: Package and encrypt the evidence (the ONLY step that references the passphrase)
         if: always()
         env:
           AQD_PASS: ${{ secrets.AQD_RESULTS_PASSPHRASE }}
@@ -323,16 +356,30 @@ jobs:
           set -euo pipefail
           umask 077
           [[ "${#AQD_PASS}" -ge 32 ]] || { echo "STOP: AQD_RESULTS_PASSPHRASE missing or short; nothing uploaded"; exit 1; }
+          packer="$GITHUB_WORKSPACE/evaluations/phase-3.3/live/pack_evidence.py"
+          [[ "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD 2>/dev/null)" == "$AQD_TEST_SHA" && -f "$packer" ]] \
+            || { echo "STOP: the pinned commit was never checked out: no probe ran, no evidence exists"; exit 1; }
           p="$RUNNER_TEMP/aqd-pack"; mkdir -p "$p/up" "$p/gnupg"; chmod 0700 "$p/gnupg"
-          printf '%s' "$AQD_PASS" >"$p/pf"
-          sudo tar -C "$AQD_OPERATOR" -czf "$p/capture.tar.gz" captures sealed preflight.log launcher.log 2>/dev/null || true
+          # Every collected file is read and checked once; the archive holds exactly those bytes plus a manifest.
+          # 0 complete, 3 incomplete, 4 no evidence (stopped before the probe), 5 token-shaped string; 1 no archive.
+          set +e
+          sudo python3 -I "$packer" --operator "$AQD_OPERATOR" --run-id "$AQD_PROBE_RUN_ID" --out "$p/capture.tar.gz"
+          pack=$?
+          set -e
+          [[ "$pack" != 1 && -s "$p/capture.tar.gz" ]] || { echo "STOP: the evidence archive could not be written"; exit 1; }
           sudo chown "$(id -u):$(id -g)" "$p/capture.tar.gz"
+          printf '%s' "$AQD_PASS" >"$p/pf"
           gpg --homedir "$p/gnupg" --batch --yes --quiet --no-symkey-cache --pinentry-mode loopback --passphrase-file "$p/pf" \
             --symmetric --cipher-algo AES256 -o "$p/up/aqd-cc-live-probe.tar.gz.gpg" "$p/capture.tar.gz"
           gpg --homedir "$p/gnupg" --batch --quiet --no-symkey-cache --pinentry-mode loopback --passphrase-file "$p/pf" \
             -d "$p/up/aqd-cc-live-probe.tar.gz.gpg" | cmp -s - "$p/capture.tar.gz" || { echo "STOP: encryption check"; exit 1; }
           shred -u "$p/pf" "$p/capture.tar.gz"
-          echo "capture encrypted"
+          case "$pack" in
+            0) echo "evidence encrypted: COMPLETE" ;;
+            4) echo "STOP: evidence encrypted, but NO probe evidence exists (the job stopped before the probe)"; exit 1 ;;
+            5) echo "STOP: evidence encrypted; a token-shaped string is in the capture: revoke the token now"; exit 1 ;;
+            *) echo "STOP: evidence encrypted but INCOMPLETE (see evidence-manifest.json inside)"; exit 1 ;;
+          esac
 
       - name: Upload the encrypted capture only (1-day retention)
         if: always()

@@ -12,5 +12,6 @@
   ],
   "approved_by": "",
   "approved_utc": "",
-  "note": "TEMPLATE. The owner approves by filling approved_by and approved_utc in the reviewed bootstrap commit on main. Until then the launcher refuses this run."
+  "reviewed_commit": "",
+  "note": "TEMPLATE. The owner approves in ONE commit directly on top of the reviewed commit that changes only this file: approved_by, approved_utc (YYYY-MM-DDTHH:MM:SSZ) and reviewed_commit (the 40-hex reviewed commit = the approval commit's parent). main's workflow then pins AQD_TEST_SHA to that approval commit (LIVE-PROBE.md section 6). Until then the launcher refuses this run."
 }
