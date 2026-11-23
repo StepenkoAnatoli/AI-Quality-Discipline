@@ -113,6 +113,7 @@ The rehearsal cases:
   - the host rehearsal: 7/7 behaved as required, with the egress lock applied on a networked host;
   - no token-shaped string anywhere.
 - On the same commit, `Phase 3 validation` was **cancelled**. Its dry-run job hit the 20-minute limit because the image build's `apt` step took 17 minutes. That is runner slowness, not a test failure. The limit is now 45 minutes.
+- **`15069bd`:** the mock workflow is green. `Phase 3 validation` was cancelled again: its duplicate dry-run job's image build hung in `apt` for 45 minutes, while the mock workflow built the same Dockerfile fine. The duplicate job is removed, and `apt` now retries and times out instead of hanging.
 - For the reviewed head, see the final report and the PR checks on that exact commit.
 
 ## 5. Credential procedure, and what is not possible

@@ -165,7 +165,7 @@ Until it passes, the controls are:
 
 ## 5. CI (no model call)
 
-New job `native-claude-code-dry-run` in `phase3-validation.yml`:
+New job `native-claude-code-dry-run` in `phase3-validation.yml` (later removed as a duplicate of the `mock` job in `phase3-cc-smoke.yml`, which runs the same dry run):
 - `contents: read`, no secret referenced;
 - builds the image from `dryrun/Dockerfile`, runs both dry-run modes and `check_results.py`;
 - reports, before any change, whether an unprivileged user can create bubblewrap namespaces on the runner host, with the AppArmor userns sysctl. Then it sets `kernel.apparmor_restrict_unprivileged_userns=0` on the disposable runner (a logged host change) before the dry run;
