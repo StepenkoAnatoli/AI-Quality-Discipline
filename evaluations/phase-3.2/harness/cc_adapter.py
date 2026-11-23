@@ -20,6 +20,9 @@ schedule (schedule.py), immutable manifests (manifest.py), OS-user isolation and
     cc_adapter.py check-transcript --transcript F --group G --model REF --project DIR --driver-result F --out F
     cc_adapter.py check-approval --approval F --run-id R         # the owner named this run id in writing
     cc_adapter.py scan-secret    --secret-file F --root D        # exit 21 if the token is in any file under D
+    cc_adapter.py fingerprint    --checkout D --claude BIN --sealed D --pristine D --max-turns N --timeout S --out F
+    cc_adapter.py check-preflight --preflight F --checkout D --claude BIN --sealed D --pristine D --max-turns N \
+                                 --timeout S [--max-age-hours H]  # the launcher's gate
 
 Treatment = the canonical skill is AVAILABLE (a user skill in the run's own CLAUDE_CONFIG_DIR). The prompt is
 byte-identical in both arms; nothing names or forces the skill. Invocation (a Skill tool_use naming it) and
@@ -30,12 +33,15 @@ Every check fails closed: an unrecognised transcript shape, a missing field or a
 the run; nothing is inferred. What is assumed rather than verified is listed in CC_ADAPTER.md.
 """
 import argparse
+import datetime
+import hashlib
 import json
 import os
 import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -152,6 +158,127 @@ def check_approval(data, run_id):
     return []
 
 
+# ------------------------------------------------------------------ native preflight binding
+
+# Files whose content decides how a run is executed and checked. A change after preflight invalidates it.
+PREFLIGHT_HARNESS_FILES = ("cc_adapter.py", "cc_exec.sh", "launch-run-cc.sh", "preflight-cc.sh", "lib.sh",
+                           "run_status.py", "manifest.py", "schedule.py", "aqd_common.py")
+CANONICAL_SKILL_SHA256 = "d050d00fa8564b08cac71ca221368568420c731c830ef19667a760d5f7ebc842"
+PREFLIGHT_MAX_AGE_HOURS = 24
+
+
+def _sha_file(path):
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def _sha_or_none(path):
+    try:
+        return _sha_file(path)
+    except OSError:
+        return None
+
+
+def settings_sha256():
+    """SHA-256 of the settings file exactly as write-settings writes it."""
+    text = json.dumps(HARNESS_SETTINGS, indent=2, sort_keys=True) + "\n"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _git(checkout, *args):
+    proc = subprocess.run(["git", "-C", checkout, *args], capture_output=True, text=True, check=False)
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def preflight_fingerprint(checkout, harness, claude, cli_version, sealed, pristine, max_turns, timeout_seconds):
+    """Everything a native run depends on. Recomputed by the launcher and compared key by key."""
+    schedule_path = os.path.join(sealed, "schedule.json")
+    tasks = []
+    try:
+        with open(schedule_path, encoding="utf-8") as handle:
+            tasks = sorted({str(r.get("task")) for r in json.load(handle).get("runs", [])})
+    except (OSError, ValueError, AttributeError):
+        tasks = []
+    status = _git(checkout, "status", "--porcelain")
+    return {
+        "execution_environment": EXECUTION_ENVIRONMENT,
+        "checkout_commit": _git(checkout, "rev-parse", "HEAD"),
+        "checkout_clean": status == "",
+        "cli_version": cli_version,
+        "cli_sha256": _sha_or_none(claude),
+        "harness_sha256": {name: _sha_or_none(os.path.join(harness, name)) for name in PREFLIGHT_HARNESS_FILES},
+        "settings_sha256": settings_sha256(),
+        "skill_sha256": _sha_or_none(os.path.join(pristine, "skill", c.SKILL_ID, "SKILL.md")),
+        "canonical_skill_sha256": _sha_or_none(os.path.join(checkout, "skills", c.SKILL_ID, "SKILL.md")),
+        "schedule_sha256": _sha_or_none(schedule_path),
+        "pristine_extra_sha256": _sha_or_none(os.path.join(sealed, "pristine-extra.sha256")),
+        "task_manifests_sha256": {t: _sha_or_none(os.path.join(pristine, t, "manifest.json")) for t in tasks},
+        "max_turns": max_turns,
+        "timeout_seconds": timeout_seconds,
+    }
+
+
+def _parse_utc(value):
+    try:
+        moment = datetime.datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
+
+
+def check_preflight(record, current, now_utc, max_age_hours=PREFLIGHT_MAX_AGE_HOURS):
+    """Reasons a stored native preflight does not authorise a run now (key names only, never values)."""
+    if not isinstance(record, dict):
+        return ["no native preflight record"]
+    reasons = []
+    if record.get("schema_version") != 1 or record.get("execution_environment") != EXECUTION_ENVIRONMENT:
+        reasons.append("preflight is not a native-claude-code preflight (schema or execution environment)")
+    if record.get("ok") is not True:
+        reasons.append("preflight did not pass")
+    created, now = _parse_utc(record.get("created_utc")), _parse_utc(now_utc)
+    if created is None or now is None:
+        reasons.append("preflight time missing or not timezone-aware")
+    elif created > now + datetime.timedelta(minutes=5):
+        reasons.append("preflight time is in the future")
+    elif now - created > datetime.timedelta(hours=max_age_hours):
+        reasons.append(f"preflight is older than {max_age_hours} h (stale)")
+    stored = record.get("fingerprint")
+    if not isinstance(stored, dict):
+        reasons.append("preflight has no fingerprint")
+        stored = {}
+    for key in sorted(set(stored) | set(current)):
+        if stored.get(key) != current.get(key):
+            reasons.append(f"{key} changed since preflight")
+    for fp, label in ((current, "now"), (stored, "at preflight")):
+        if fp and not fp.get("checkout_clean"):
+            reasons.append(f"checkout has uncommitted changes ({label})")
+        if fp and not (fp.get("skill_sha256") == fp.get("canonical_skill_sha256") == CANONICAL_SKILL_SHA256):
+            reasons.append(f"pristine skill is not the canonical skill ({label})")
+    for key in ("checkout_commit", "cli_sha256", "schedule_sha256"):
+        if current.get(key) is None:
+            reasons.append(f"{key} could not be computed")
+    return sorted(set(reasons))
+
+
+def cli_version(claude):
+    """`claude --version`'s X.Y.Z, run with an empty environment and a throwaway HOME (no credential, no
+    network-relevant variable). None if it cannot be read."""
+    import tempfile
+    import shutil
+    home = tempfile.mkdtemp(prefix="cc-version-")
+    try:
+        env = {"PATH": "/usr/bin:/bin", "HOME": home, "CLAUDE_CONFIG_DIR": os.path.join(home, ".claude"),
+               "TMPDIR": home, **REQUIRED_ENV}
+        proc = subprocess.run([claude, "--version"], capture_output=True, text=True, timeout=30, env=env,
+                              check=False, stdin=subprocess.DEVNULL)
+        match = re.match(r"^(\d+\.\d+\.\d+)\b", proc.stdout.strip())
+        return match.group(1) if proc.returncode == 0 and match else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
 # ------------------------------------------------------------------ the command (identical in both arms)
 
 def model_parts(model_ref):
@@ -243,7 +370,42 @@ def auth_status(claude, env_file, secret_file, out, as_user=None, wrapper=None, 
     return 0 if not problems else 3
 
 
-MAX_PROMPT_BYTES = 60000  # below the pipe buffer, so writing token + prompt cannot block before claude reads
+MAX_PROMPT_BYTES = 60000  # TASK.md size cap (a policy limit; the hand-off no longer depends on the pipe buffer)
+TERM_GRACE_SECONDS = 5
+
+
+def _feed(pipe, data):
+    """Write the token line and the prompt, then close. Runs in a thread so a child that never reads stdin cannot
+    hold the driver before its timeout starts; killing the child ends the write with an error, which is ignored."""
+    try:
+        pipe.write(data)
+    except (BrokenPipeError, OSError, ValueError):
+        pass
+    finally:
+        try:
+            pipe.close()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+
+def _end_group(proc):
+    """TERM the session's process group (sudo relays TERM to its command), then KILL whatever is left."""
+    for sig, grace in ((signal.SIGTERM, TERM_GRACE_SECONDS), (signal.SIGKILL, None)):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            pass
+        if grace is None:
+            return proc.wait()
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            continue
+        try:  # the leader is gone; KILL the rest of its group too
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return proc.returncode
 
 
 def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secret_file, timeout, out_dir,
@@ -275,21 +437,28 @@ def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secr
     started = time.monotonic()
     with open(os.path.join(out_dir, "transcript.ndjson"), "wb") as out, \
             open(os.path.join(out_dir, "stderr.txt"), "wb") as err:
-        proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=out, stderr=err,
-                                env=None if as_user else env, start_new_session=True, cwd=project)
         try:
-            proc.stdin.write(token.encode("utf-8") + b"\n" + prompt)
-            proc.stdin.close()
-        except BrokenPipeError:
-            pass
+            proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=out, stderr=err,
+                                    env=None if as_user else env, start_new_session=True, cwd=project)
+        except OSError as exc:
+            del token
+            result["refused"] = [f"the session could not start ({type(exc).__name__})"]
+            _write(os.path.join(out_dir, "driver-result.json"), result)
+            return 2
+        feeder = threading.Thread(target=_feed, args=(proc.stdin, token.encode("utf-8") + b"\n" + prompt), daemon=True)
         del token
+        feeder.start()  # the timeout below starts now, not after the write
         try:
             code = proc.wait(timeout=timeout)
             result["status"] = "idle"
+            try:  # background children the session left behind (the launcher also kills by OS user)
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            code = proc.wait()
+            code = _end_group(proc)
             result["status"] = "timeout"
+        feeder.join(timeout=TERM_GRACE_SECONDS)
     result["exit_code"] = code
     result["duration_seconds"] = round(time.monotonic() - started, 1)
     summary = summarise_transcript(os.path.join(out_dir, "transcript.ndjson"))
@@ -554,6 +723,17 @@ def main(argv=None):
     s = sub.add_parser("check-approval")
     s.add_argument("--approval", required=True)
     s.add_argument("--run-id", required=True)
+    for name in ("fingerprint", "check-preflight"):
+        s = sub.add_parser(name)
+        for flag in ("--checkout", "--claude", "--sealed", "--pristine"):
+            s.add_argument(flag, required=True)
+        s.add_argument("--max-turns", type=int, required=True)
+        s.add_argument("--timeout", type=int, required=True)
+        if name == "fingerprint":
+            s.add_argument("--out", required=True)
+        else:
+            s.add_argument("--preflight", required=True)
+            s.add_argument("--max-age-hours", type=float, default=PREFLIGHT_MAX_AGE_HOURS)
     s = sub.add_parser("scan-secret")
     s.add_argument("--secret-file", required=True)
     s.add_argument("--root", required=True)
@@ -595,6 +775,22 @@ def main(argv=None):
             reasons = check_approval(data, args.run_id)
             for r in reasons:
                 print(f"cc_adapter: {r}", file=sys.stderr)
+            return 0 if not reasons else 3
+        if args.command in ("fingerprint", "check-preflight"):
+            current = preflight_fingerprint(args.checkout, HERE, args.claude, cli_version(args.claude), args.sealed,
+                                            args.pristine, args.max_turns, args.timeout)
+            if args.command == "fingerprint":
+                _write(args.out, current)
+                return 0
+            try:
+                with open(args.preflight, encoding="utf-8") as handle:
+                    record = json.load(handle)
+            except (OSError, ValueError):
+                record = None
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            reasons = check_preflight(record, current, now, args.max_age_hours)
+            for r in reasons:
+                print(f"cc_adapter: preflight: {r}", file=sys.stderr)
             return 0 if not reasons else 3
         if args.command == "scan-secret":
             code = scan_secret(args.secret_file, args.root)

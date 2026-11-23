@@ -31,6 +31,8 @@ MODEL = "claude-opus-5-5"
 PROJECT = "/aqd/run/project"
 TEST_TOKEN = "sk-ant-oat01-SYNTHETIC-TEST-TOKEN-not-a-real-credential"
 SKILL_BODY = "\n".join(c.SKILL_SENTINELS)
+with open(os.path.join(HERE, "..", "..", "..", "skills", "code-discipline", "SKILL.md"), encoding="utf-8") as _h:
+    CANONICAL_SKILL = _h.read()
 
 
 def load(path):
@@ -590,6 +592,58 @@ class DriverIntegrationTests(Workdir):
         driver = load(os.path.join(out, "driver-result.json"))
         self.assertEqual((code, driver["status"], driver["outcome"]), (0, "timeout", "timeout"))
 
+    def run_with_outer_guard(self, claude_body, prompt_bytes, timeout=2, guard=20):
+        """Runs cc.run in a child interpreter so a hang is reported as a failure, not a stuck test."""
+        with open(self.claude, "w", encoding="utf-8") as h:
+            h.write(claude_body)
+        with open(self.prompt, "wb") as h:
+            h.write(b"x" * prompt_bytes)
+        out = os.path.join(self.tmp, "out")
+        code = textwrap.dedent(f"""
+            import sys, time; sys.path.insert(0, {HARNESS!r}); import cc_adapter as cc
+            cc.MAX_PROMPT_BYTES = 10 ** 7
+            t0 = time.monotonic()
+            rc = cc.run({self.claude!r}, {MODEL_REF!r}, {self.settings!r}, 5, {self.prompt!r}, {self.env_file!r},
+                        {self.secret!r}, {timeout}, {out!r}, {self.project!r})
+            print(rc, round(time.monotonic() - t0, 1))
+        """)
+        try:
+            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=guard)
+        except subprocess.TimeoutExpired:
+            self.fail(f"run() did not return within {guard}s although its timeout is {timeout}s (stdin hand-off blocked)")
+        return proc, out
+
+    def test_a_child_that_never_reads_stdin_cannot_block_the_timeout(self):
+        # 300 KB is far above any pipe buffer: the old code blocked in write() before the timeout started.
+        proc, out = self.run_with_outer_guard("#!/bin/sh\nsleep 60\n", 300_000)
+        rc, elapsed = proc.stdout.split()
+        self.assertLess(float(elapsed), 10, proc.stderr)
+        driver = load(os.path.join(out, "driver-result.json"))
+        self.assertEqual((driver["status"], driver["outcome"]), ("timeout", "timeout"))
+
+    def test_a_child_that_exits_without_reading_is_a_failure_not_a_hang(self):
+        proc, out = self.run_with_outer_guard("#!/bin/sh\nexit 3\n", 300_000)
+        driver = load(os.path.join(out, "driver-result.json"))
+        self.assertEqual((driver["status"], driver["outcome"], driver["exit_code"]), ("idle", "failed", 3))
+        self.assertEqual(proc.stdout.split()[0], "1")
+
+    def test_timeout_also_ends_children_that_left_the_process_group_leader(self):
+        # the session leader ignores SIGTERM and has a background child; SIGKILL of the group ends both
+        body = "#!/bin/sh\ntrap '' TERM\n(sleep 60; echo late) &\nsleep 60\n"
+        proc, out = self.run_with_outer_guard(body, 10)
+        self.assertEqual(load(os.path.join(out, "driver-result.json"))["status"], "timeout")
+        with open(os.path.join(out, "transcript.ndjson"), encoding="utf-8") as h:
+            self.assertNotIn("late", h.read())
+
+    def test_a_command_that_cannot_start_still_writes_an_unambiguous_status(self):
+        missing = os.path.join(self.tmp, "no-such-claude")
+        out = os.path.join(self.tmp, "out")
+        code = cc.run(missing, MODEL_REF, self.settings, 5, self.prompt, self.env_file, self.secret, 5, out,
+                      self.project, wrapper=missing)
+        self.assertNotEqual(code, 0)
+        driver = load(os.path.join(out, "driver-result.json"))
+        self.assertEqual((driver["status"], driver["outcome"]), ("error", "not_started"))
+
     def test_turn_limit_is_an_outcome_not_a_failure(self):
         self.configure(session(result=result_event("error_max_turns", True)), exit=1)
         code, out = self.run_driver()
@@ -641,6 +695,131 @@ class DriverIntegrationTests(Workdir):
         self.assertEqual(cc.files_containing([leak], TEST_TOKEN), [os.path.join(leak, "notes.txt")])
 
 
+class PreflightTests(Workdir):
+    """Native preflight artifact: bound to environment, commit, CLI, harness, settings, skill and schedule."""
+
+    def setUp(self):
+        super().setUp()
+        self.checkout = os.path.join(self.tmp, "checkout")
+        os.makedirs(os.path.join(self.checkout, "skills", c.SKILL_ID))
+        self.write(os.path.join(self.checkout, "skills", c.SKILL_ID, "SKILL.md"), CANONICAL_SKILL)
+        git = lambda *a: subprocess.run(["git", "-C", self.checkout, *a], check=True, capture_output=True)  # noqa: E731
+        git("init", "-q")
+        git("-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", ".")
+        git("-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "x")
+        self.harness = os.path.join(self.tmp, "harness")
+        os.makedirs(self.harness)
+        for name in cc.PREFLIGHT_HARNESS_FILES:
+            self.write(os.path.join(self.harness, name), f"# {name}\n")
+        self.sealed = os.path.join(self.tmp, "sealed")
+        self.pristine = os.path.join(self.tmp, "pristine")
+        os.makedirs(os.path.join(self.pristine, "skill", c.SKILL_ID))
+        os.makedirs(os.path.join(self.pristine, "SMOKE"))
+        os.makedirs(self.sealed)
+        self.write(os.path.join(self.pristine, "skill", c.SKILL_ID, "SKILL.md"), CANONICAL_SKILL)
+        self.write(os.path.join(self.pristine, "SMOKE", "manifest.json"), "{}")
+        self.write(os.path.join(self.sealed, "schedule.json"), json.dumps({"runs": [{"task": "SMOKE"}]}))
+        self.write(os.path.join(self.sealed, "pristine-extra.sha256"), "x\n")
+        self.claude = os.path.join(self.tmp, "claude")
+        self.write(self.claude, "binary-v1")
+
+    def write(self, path, text):
+        with open(path, "w", encoding="utf-8") as h:
+            h.write(text)
+
+    def fingerprint(self, **changes):
+        args = dict(checkout=self.checkout, harness=self.harness, claude=self.claude, cli_version="2.1.330",
+                    sealed=self.sealed, pristine=self.pristine, max_turns=200, timeout_seconds=2700)
+        args.update(changes)
+        return cc.preflight_fingerprint(**args)
+
+    def record(self, **changes):
+        rec = {"schema_version": 1, "execution_environment": cc.EXECUTION_ENVIRONMENT, "ok": True,
+               "created_utc": "2026-11-23T10:00:00+00:00", "fingerprint": self.fingerprint()}
+        rec.update(changes)
+        return rec
+
+    NOW = "2026-11-23T12:00:00+00:00"
+
+    def test_a_fresh_matching_preflight_passes(self):
+        fp = self.fingerprint()
+        self.assertEqual(fp["execution_environment"], cc.EXECUTION_ENVIRONMENT)
+        self.assertRegex(fp["checkout_commit"], r"^[0-9a-f]{40}$")
+        self.assertTrue(fp["checkout_clean"])
+        self.assertEqual(fp["cli_version"], "2.1.330")
+        self.assertEqual(fp["cli_sha256"], hashlib.sha256(b"binary-v1").hexdigest())
+        self.assertEqual(fp["settings_sha256"], cc.settings_sha256())
+        self.assertEqual(cc.check_preflight(self.record(), fp, self.NOW, 24), [])
+
+    def test_any_change_after_preflight_is_rejected_by_name(self):
+        cases = {
+            "cli_sha256": lambda: self.write(self.claude, "binary-v2"),
+            "harness_sha256": lambda: self.write(os.path.join(self.harness, "cc_adapter.py"), "# edited\n"),
+            "schedule_sha256": lambda: self.write(os.path.join(self.sealed, "schedule.json"), "{}"),
+            "skill_sha256": lambda: self.write(os.path.join(self.pristine, "skill", c.SKILL_ID, "SKILL.md"), "x"),
+            "task_manifests_sha256": lambda: self.write(os.path.join(self.pristine, "SMOKE", "manifest.json"), "[]"),
+            "pristine_extra_sha256": lambda: self.write(os.path.join(self.sealed, "pristine-extra.sha256"), "y"),
+        }
+        for key, change in cases.items():
+            with self.subTest(key=key):
+                self.setUp()  # a fresh host for each case
+                rec = self.record()
+                change()
+                reasons = cc.check_preflight(rec, self.fingerprint(), self.NOW, 24)
+                self.assertTrue(any(key in r for r in reasons), reasons)
+        for key, value in (("cli_version", "2.1.331"), ("max_turns", 100), ("timeout_seconds", 60)):
+            with self.subTest(key=key):
+                reasons = cc.check_preflight(self.record(), self.fingerprint(**{key: value}), self.NOW, 24)
+                self.assertTrue(any(key in r for r in reasons), reasons)
+
+    def test_settings_change_is_rejected(self):
+        rec = self.record()
+        original = dict(cc.HARNESS_SETTINGS)
+        try:
+            cc.HARNESS_SETTINGS["switchModelsOnFlag"] = True
+            reasons = cc.check_preflight(rec, self.fingerprint(), self.NOW, 24)
+        finally:
+            cc.HARNESS_SETTINGS.clear()
+            cc.HARNESS_SETTINGS.update(original)
+        self.assertTrue(any("settings_sha256" in r for r in reasons), reasons)
+
+    def test_new_commit_or_dirty_checkout_is_rejected(self):
+        rec = self.record()
+        self.write(os.path.join(self.checkout, "extra.txt"), "dirty")
+        fp = self.fingerprint()
+        self.assertFalse(fp["checkout_clean"])
+        self.assertTrue(cc.check_preflight(rec, fp, self.NOW, 24))
+        self.assertTrue(cc.check_preflight(self.record(), fp, self.NOW, 24))  # dirty even if recorded dirty
+        subprocess.run(["git", "-C", self.checkout, "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                        "commit", "-qam", "y", "--allow-empty"], check=True, capture_output=True)
+        reasons = cc.check_preflight(rec, self.fingerprint(), self.NOW, 24)
+        self.assertTrue(any("checkout_commit" in r for r in reasons), reasons)
+
+    def test_canonical_skill_mismatch_is_rejected(self):
+        self.write(os.path.join(self.pristine, "skill", c.SKILL_ID, "SKILL.md"), "tampered")
+        fp = self.fingerprint()
+        reasons = cc.check_preflight(self.record(fingerprint=fp), fp, self.NOW, 24)
+        self.assertTrue(any("canonical" in r for r in reasons), reasons)
+
+    def test_stale_future_failed_or_foreign_preflights_are_rejected(self):
+        fp = self.fingerprint()
+        bad = {
+            "stale": self.record(created_utc="2026-11-21T12:00:00+00:00"),
+            "future": self.record(created_utc="2026-11-24T12:00:00+00:00"),
+            "no time": self.record(created_utc=None),
+            "naive time": self.record(created_utc="2026-11-23T10:00:00"),
+            "not ok": self.record(ok=False),
+            "opencode": self.record(execution_environment="opencode"),
+            "schema": self.record(schema_version=0),
+            "no fingerprint": self.record(fingerprint=None),
+            "not a dict": None,
+            "opencode preflight.ok shape": {"checked_utc": "2026-11-23T10:00:00+00:00", "catalog_exit": 0, "gates": {}},
+        }
+        for name, rec in bad.items():
+            with self.subTest(name=name):
+                self.assertTrue(cc.check_preflight(rec, fp, self.NOW, 24))
+
+
 class LauncherStaticTests(unittest.TestCase):
     """launch-run-cc.sh has never been executed; these pin the review fixes in its text (static only)."""
     TEXT = open(os.path.join(HARNESS, "launch-run-cc.sh"), encoding="utf-8").read()
@@ -653,6 +832,15 @@ class LauncherStaticTests(unittest.TestCase):
         body = self.function("finish")
         self.assertIn("scan-secret", body)
         self.assertLess(body.index("scan-secret"), body.index('rm -rf "$SECRET_DIR"'))
+
+    def test_only_the_native_preflight_authorises_a_native_run(self):
+        self.assertIn("check-preflight --preflight \"$AQD_SEALED/preflight-cc.json\"", self.TEXT)
+        self.assertNotIn("preflight.ok", self.TEXT.replace("The OpenCode preflight.ok is never accepted", ""))
+
+    def test_smoke_is_schedulable_but_not_in_the_default_design(self):
+        import schedule
+        self.assertIn("SMOKE", schedule.KNOWN_TASKS)
+        self.assertEqual(schedule.TASKS, ("NEW-01", "NEW-02", "NEW-03"))
 
     def test_managed_settings_are_refused(self):
         self.assertRegex(self.TEXT, r'\[\[ ! -e /etc/claude-code \]\] \|\| die')

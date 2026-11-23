@@ -68,6 +68,34 @@ jobs:
           test "${PIPESTATUS[0]}" -eq 0
           ! grep -q "skipped" sandbox.log
 
+  native-claude-code-dry-run:
+    # Phase 3.3: runs the REAL launch-run-cc.sh end to end against a MOCK claude with a SYNTHETIC token, inside a
+    # disposable container with no network. No secret is referenced; nothing here can authenticate or reach a model.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the disposable dry-run image
+        run: docker build -q -t aqd-dryrun -f evaluations/phase-3.3/dryrun/Dockerfile evaluations/phase-3.3/dryrun
+      - name: Launcher dry run (mock CLI, synthetic token, no network)
+        run: |
+          out="$RUNNER_TEMP/aqd-dryrun"; mkdir -p "$out"
+          docker run --rm --network none --privileged --hostname aqd --add-host aqd:127.0.0.1 \
+            -v "$PWD:/src:ro" -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/dryrun/dryrun-cc.sh
+          docker run --rm --network none --hostname aqd --add-host aqd:127.0.0.1 -e DRYRUN_MODE=preflight-only \
+            -v "$PWD:/src:ro" -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/dryrun/dryrun-cc.sh
+          python3 evaluations/phase-3.3/dryrun/check_results.py "$out"/dryrun-results-*.ndjson
+      - name: Report whether an unprivileged user can create bubblewrap namespaces on this runner (information only)
+        run: |
+          sudo apt-get install -y -qq bubblewrap >/dev/null
+          sudo useradd -M -s /usr/sbin/nologin aqd-probe
+          if sudo -u aqd-probe env -i PATH=/usr/bin:/bin bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true; then
+            echo "runner host: bubblewrap namespaces WORK for an unprivileged user"
+          else
+            echo "runner host: bubblewrap namespaces REFUSED for an unprivileged user"
+          fi
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone 2>/dev/null || true
+
   installer-tests:
     # tests/test_install.py on Linux and Windows. Phase 3.2 risk R13: on Windows,
     # 9 of 14 failed because test fixtures were written with CRLF line endings.

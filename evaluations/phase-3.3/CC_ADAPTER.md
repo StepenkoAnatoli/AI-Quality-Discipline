@@ -37,7 +37,9 @@
 | `launch-run.sh`, `drive_session.py`, `api_checks.py`, `export_checks.py`, `install-opencode.sh` | **Untouched** (historical reference) |
 | `cc_adapter.py` (new) | Environment and token checks, `auth status` check, one command for both arms, the session driver, and the transcript checker that writes `export-checks.json` in the existing schema |
 | `cc_exec.sh` (new, 14 lines) | Reads the token from the first line of stdin, exports it, and `exec`s `claude`. The rest of stdin is the prompt |
-| `launch-run-cc.sh` (new) | `launch-run.sh` with the OpenCode steps replaced. **Never executed:** only `bash -n` and ShellCheck have run on it |
+| `launch-run-cc.sh` (new) | `launch-run.sh` with the OpenCode steps replaced. **Executed end to end against a mock CLI** in a disposable container (INTEGRATION-DRYRUN.md); never against the real CLI |
+| `preflight-cc.sh` (new) | Native preflight; writes `preflight-cc.json`, bound to the commit, CLI hash, harness, settings, skill, schedule and limits. `preflight.sh` (OpenCode) is unchanged and never accepted by the native launcher |
+| `phase-3.3/dryrun/` (new) | Mock CLI, dry-run driver, results checker, Dockerfile; run by the CI job `native-claude-code-dry-run` |
 | `tests/test_cc_adapter.py` (new) | 51 offline tests, wired into the existing CI job (37 at first, plus 14 from the adversarial review in §9) |
 
 ## 3. Isolation and the command
@@ -139,7 +141,9 @@ Recommendation:
 - Keep **available only** for the primary contrast.
 - If the feasibility run shows invocation is rare, a separate, pre-registered "forced" arm can answer the content question later. It must not be mixed with this one.
 
-## 7. No-model-call GitHub Actions dry run (design; not written, not dispatched)
+## 7. No-model-call GitHub Actions dry run (design; superseded)
+
+**Superseded 2026-11-23:** implemented as the CI job `native-claude-code-dry-run` and the `dryrun/` directory. Results and the current blocker list are in INTEGRATION-DRYRUN.md.
 
 **Where it runs:** a `workflow_dispatch`-only workflow on the default branch after owner review. Permissions `contents: read`; **no secret referenced at all**.
 

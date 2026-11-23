@@ -26,6 +26,9 @@ SCHEDULE="$AQD_SEALED/schedule.json"
 CC="$AQD_HARNESS/cc_adapter.py"
 : "${AQD_CLAUDE_BIN:?AQD_CLAUDE_BIN (the pinned claude binary, executable by the agent users) is required}"
 AQD_CC_MAX_TURNS="${AQD_CC_MAX_TURNS:-200}"
+# Pre-registered: 2700 s (lib.sh). Overridable ONLY for no-model dry runs; it is bound by the native preflight and
+# recorded per run, and analyze.py refuses runs whose timeouts differ.
+AQD_CC_RUN_TIMEOUT_SECONDS="${AQD_CC_RUN_TIMEOUT_SECONDS:-$AQD_RUN_TIMEOUT_SECONDS}"
 
 RUN_ID="${1:-}"
 [[ "$RUN_ID" =~ ^r-[0-9a-f]{10}$ ]] || { echo "usage: launch-run-cc.sh RUN_ID (r-<10 hex>)" >&2; exit 2; }
@@ -37,7 +40,12 @@ GROUP="$(sched group)"
 ENV_LABEL="$(sched env)"
 MODEL_REF="$(sched model)"
 parse_model_ref "$MODEL_REF"
-[[ -f "$AQD_SEALED/preflight.ok" ]] || { log "preflight has not passed"; exit 2; }
+# The NATIVE preflight record (preflight-cc.sh), recomputed now: any change since it ran, or age, refuses the run.
+# The OpenCode preflight.ok is never accepted here.
+"$PY" "$CC" check-preflight --preflight "$AQD_SEALED/preflight-cc.json" --checkout "$AQD_CHECKOUT" \
+    --claude "$AQD_CLAUDE_BIN" --sealed "$AQD_SEALED" --pristine "$AQD_PRISTINE" --max-turns "$AQD_CC_MAX_TURNS" \
+    --timeout "$AQD_CC_RUN_TIMEOUT_SECONDS" --max-age-hours "${AQD_CC_PREFLIGHT_MAX_AGE_HOURS:-24}" \
+    || { log "native preflight missing, failed, stale or out of date: run preflight-cc.sh"; exit 2; }
 [[ ! -f "$AQD_SEALED/STOP" ]] || { log "benchmark stopped: $(cat "$AQD_SEALED/STOP")"; exit 2; }
 ACTIVATION_MODE="cc-skill-available"
 if [[ -f "$AQD_SEALED/activation-mode" ]]; then
@@ -176,8 +184,8 @@ install -d -m 0700 "$SECRET_DIR"
 ( umask 077; sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' "$AQD_CREDENTIALS" | head -n 1 >"$SECRET_DIR/token" )
 [[ -s "$SECRET_DIR/token" ]] || die "CLAUDE_CODE_OAUTH_TOKEN is not set in $AQD_CREDENTIALS"
 "$PY" - "$CAP/run-record.json" "$RUN_ID" "$TASK" "$GROUP" "$MODEL_REF" "$MESSAGE_FILE" "$MANIFEST" \
-    "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$SETTINGS" "$AQD_CLAUDE_BIN" "$AQD_RUN_TIMEOUT_SECONDS" \
-    "$AQD_CC_MAX_TURNS" <<'PY'
+    "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$SETTINGS" "$AQD_CLAUDE_BIN" "$AQD_CC_RUN_TIMEOUT_SECONDS" \
+    "$AQD_CC_MAX_TURNS" "$AQD_SEALED/preflight-cc.json" <<'PY'
 import datetime, hashlib, json, sys
 out, run_id, task, group, model, prompt, manifest, skill, settings, claude, timeout, turns = sys.argv[1:13]
 sha = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
@@ -190,6 +198,7 @@ json.dump({"schema_version": 2, "run_id": run_id, "task": task, "group": group, 
            "skill": {"installed": group == "treatment", "sha256": sha(skill) if group == "treatment" else None},
            "prompt_sha256": sha(prompt), "workspace_sha256": json.load(open(manifest, encoding="utf-8"))["workspace_sha256"],
            "global_config_sha256": sha(settings), "claude_cli_sha256": sha(claude),
+           "preflight_sha256": sha(sys.argv[13]),
            "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()},
           open(out, "w", encoding="utf-8"), indent=2)
 PY
@@ -207,7 +216,7 @@ STARTED="$(date +%s)"
 set +e
 "$PY" "$CC" run --claude "$AQD_CLAUDE_BIN" --model "$MODEL_REF" --settings "$SETTINGS" \
     --max-turns "$AQD_CC_MAX_TURNS" --prompt-file "$MESSAGE_FILE" --env-file "$CAP/cc-env" \
-    --secret-file "$SECRET_DIR/token" --timeout "$AQD_RUN_TIMEOUT_SECONDS" --out-dir "$CAP/driver" \
+    --secret-file "$SECRET_DIR/token" --timeout "$AQD_CC_RUN_TIMEOUT_SECONDS" --out-dir "$CAP/driver" \
     --project "$PROJECT" --as-user "$AGENT_USER" --wrapper "$WRAPPER"
 DRIVER_EXIT=$?
 set -e
