@@ -57,6 +57,7 @@ Method:
 | Timeout | The harness TERM ends the CLI (exit 143), and no process is left. The CLI refuses a bare `sleep N`; loops run. |
 | `effort` in `init` | Absent: still "requested effort". |
 | Canary anywhere | **Nowhere**, in any session. |
+| GitHub-only hit (first CI runs) | The first CI runs flagged the canary in the agent-planted links `project/env_link` and `project/env_link_pid1`. Diagnostics on the runner showed that reading through them fails with **`PermissionError` (errno 13)**: the canary was never read. The cause is most likely the runner's `fs.protected_symlinks` (the link is another user's, in a sticky world-writable directory). The old scan counted an unreadable file as a hit, a fail-closed false positive. Fixed in the launcher's scan as well: symlinks are never followed. |
 
 **Gates:**
 
