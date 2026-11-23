@@ -21,7 +21,10 @@ import check_approval_commit as cac  # noqa: E402
 
 APPROVAL = cac.APPROVAL_PATH
 WORKFLOW = cac.WORKFLOW_PATH
-TEMPLATE = json.load(open(os.path.join(LIVE, "probe-approval.json"), encoding="utf-8"))
+COMMITTED = json.load(open(os.path.join(LIVE, "probe-approval.json"), encoding="utf-8"))
+# On the reviewed commit P the committed file is the unfilled template. On the owner's approval commit X (the commit
+# that the mock dispatch and the live job check out) the same file is filled. These tests need the template either way.
+TEMPLATE = dict(COMMITTED, approved_by="", approved_utc="", reviewed_commit="")
 WORKFLOW_TEXT = open(os.path.join(LIVE, "..", "..", "..", WORKFLOW), encoding="utf-8").read()
 
 
@@ -84,8 +87,15 @@ class ApprovalCommitTests(unittest.TestCase):
         launcher = cc_adapter.check_approval(data, **{k: entry[k] for k in cc_adapter.APPROVAL_KEYS})
         self.assertTrue(launcher and "unfilled template" in launcher[0], launcher)
 
-    def test_the_committed_file_on_this_branch_is_an_unfilled_template(self):
-        self.assertEqual((TEMPLATE["approved_by"], TEMPLATE["approved_utc"], TEMPLATE["reviewed_commit"]), ("", "", ""))
+    def test_the_committed_file_is_the_unfilled_template_or_a_complete_owner_approval(self):
+        # P: all three owner fields empty. X: all three filled and well-formed, never half-filled. That X is a one-file
+        # child of reviewed_commit is checked by the live job (check_approval_commit.py from the reviewed parent).
+        by, utc, reviewed = (COMMITTED[k] for k in cac.OWNER_FIELDS)
+        if (by, utc, reviewed) != ("", "", ""):
+            self.assertTrue(isinstance(by, str) and by.strip(), "approved_by")
+            self.assertRegex(utc, cac.UTC)
+            self.assertRegex(reviewed, cac.SHA)
+        self.assertEqual(set(COMMITTED), {"approved_runs", "note", *cac.OWNER_FIELDS})
 
     def test_an_owner_approval_commit_on_the_reviewed_head_passes(self):
         pinned = self.approve()
