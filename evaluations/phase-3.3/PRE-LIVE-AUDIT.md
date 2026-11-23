@@ -11,7 +11,7 @@ The canonical skill is unchanged: `d050d00fa8564b08cac71ca221368568420c731c830ef
 
 ## A. Verdict
 
-**READY to request owner authorisation for one live security probe,** once CI on the head commit of PR #4 is green (§D). This is a request, not an authorisation: nothing may run until the owner completes LIVE-PROBE.md §6.
+**READY to request owner authorisation for one live security probe,** given green CI on the head of PR #4 (`64ac0f6`, then this record's commit; see the CI record at the end). This is a request, not an authorisation: nothing may run until the owner completes LIVE-PROBE.md §6.
 
 **Owner actions that remain** (none can be done by an agent):
 1. Review and accept PR #3 plus PR #4 as the reviewed commit P.
@@ -173,7 +173,7 @@ This is LIVE-PROBE.md §6, steps 1-11, which hold the exact commands:
 - **CI/CD maintainer.** "If the approval branch holding X is deleted, X may become unfetchable."
   - The checkout then fails before any secret is used. **Mitigated** by the instruction to keep the branch.
 - **CI/CD maintainer.** "The required-file list was written from reading the launcher. If the real launcher omits one file in a valid run, every live run is labelled INCOMPLETE."
-  - The rehearsal's clean case now requires *complete* on the real launcher output (mock CLI). **Blocking until** the PR #4 CI rehearsal is green; see the record below.
+  - The rehearsal's clean case now requires *complete* on the real launcher output (mock CLI). **Resolved:** the rehearsal on `862b74d` and on `64ac0f6` was green.
 - **Experimental statistician.**
   - The probe could leak into the 24-run analysis. It cannot: `analyze.py` refuses `PROBE-CC` records, and the probe's schedule is separate (`probe-schedule.json`, seed derived from a fixed string).
   - The probe is the control arm only. That is right for a credential test, but it says nothing about treatment delivery. Treatment delivery (`--plugin-dir`) was tested offline only, and must be covered by the separate two-arm SMOKE step before the A/B run.
@@ -182,3 +182,15 @@ This is LIVE-PROBE.md §6, steps 1-11, which hold the exact commands:
   - Worst case: one session of `claude-opus-5-5`, medium effort, with up to 200 turns and a 2700 s timeout. That can still use a meaningful part of a usage window if the model ignores "run `sh probe.sh` once".
   - The strict verdict fails the probe, but the usage is already spent.
   - **Accepted**, with usage credits off. A smaller `--max-turns` for the probe was considered and rejected, because it would change the pre-registered harness parameters that the preflight binds.
+
+## CI record (exact commits; a green earlier commit is not evidence for a later one)
+
+| Commit | Workflow | Result |
+|---|---|---|
+| `862b74d` (first fix) | Phase 3.3 smoke, run 45162529480 | **success**: `mock` ran 53 live tests OK. The host rehearsal gave `rehearsal: 7 cases, 0 failure(s)`, with packager exits required per case; the clean case was *complete* on real launcher output. `verify-environment` and the live job were skipped (pull request) |
+| `862b74d` | Phase 3 validation, run 45162529292 | **success** |
+| `64ac0f6` (review fixes) | Phase 3.3 smoke, run 45163645690 | **success**: `mock` ran 60 live tests OK (0 skipped; the step fails on any skip), dry run, real-CLI boundary, `rehearsal: 7 cases, 0 failure(s)`. `verify-environment` and `live-security-probe` were **skipped** (pull request), as required |
+| `64ac0f6` | Phase 3 validation, run 45163645692 | **success**: structural, installer (Ubuntu and Windows), scoring sandbox, native dry run |
+| `6d0c3de` (documentation only) | Phase 3.3 smoke | cancelled by the workflow's own concurrency group when `64ac0f6` was pushed. Not a failure |
+
+PR #3's own head, `15069bd`, was still running at the time of this audit. Its earlier commit `fb251c9` had a Phase 3 validation run cancelled by the 20-minute limit, which was runner slowness in the apt step; `15069bd` raised the limit to 45 minutes. **P must be a commit with its own green CI**: the head of PR #4 (or of PR #3 after PR #4 is merged into it), checked on that exact commit.
