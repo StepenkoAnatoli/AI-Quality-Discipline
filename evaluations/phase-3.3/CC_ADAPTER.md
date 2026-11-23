@@ -39,7 +39,7 @@
 | `cc_exec.sh` (new, 14 lines) | Reads the token from the first line of stdin, exports it, and `exec`s `claude`. The rest of stdin is the prompt |
 | `launch-run-cc.sh` (new) | `launch-run.sh` with the OpenCode steps replaced. **Executed end to end against a mock CLI** in a disposable container (INTEGRATION-DRYRUN.md); never against the real CLI |
 | `preflight-cc.sh` (new) | Native preflight; writes `preflight-cc.json`, bound to the commit, CLI hash, harness, settings, skill, schedule and limits. `preflight.sh` (OpenCode) is unchanged and never accepted by the native launcher |
-| `phase-3.3/dryrun/` (new) | Mock CLI, dry-run driver, results checker, Dockerfile; run by the CI job `native-claude-code-dry-run` |
+| `phase-3.3/dryrun/` (new) | Mock CLI, dry-run driver, results checker, Dockerfile; run by the `mock` job of `phase3-cc-smoke.yml` (earlier: the `native-claude-code-dry-run` job of `phase3-validation.yml`, removed as a duplicate) |
 | `tests/test_cc_adapter.py` (new) | Offline tests in the existing CI job (count in INTEGRATION-DRYRUN.md §2) |
 
 ## 3. Isolation and the command

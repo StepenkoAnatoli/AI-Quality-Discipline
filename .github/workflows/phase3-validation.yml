@@ -68,43 +68,8 @@ jobs:
           test "${PIPESTATUS[0]}" -eq 0
           ! grep -q "skipped" sandbox.log
 
-  native-claude-code-dry-run:
-    # Phase 3.3: runs the REAL launch-run-cc.sh end to end against a MOCK claude with a SYNTHETIC token, inside a
-    # disposable container with no network. No secret is referenced; nothing here can authenticate or reach a model.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - name: Report whether an unprivileged user can create bubblewrap namespaces on this runner (as found)
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap >/dev/null
-          sudo useradd -M -s /usr/sbin/nologin aqd-probe
-          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone 2>/dev/null || true
-          if sudo -u aqd-probe env -i PATH=/usr/bin:/bin bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true; then
-            echo "runner host as found: bubblewrap namespaces WORK for an unprivileged user"
-          else
-            echo "runner host as found: bubblewrap namespaces REFUSED for an unprivileged user"
-          fi
-      - name: Allow unprivileged user namespaces on this disposable runner (logged host change)
-        run: |
-          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          sudo -u aqd-probe env -i PATH=/usr/bin:/bin bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true \
-            && echo "runner host after the change: bubblewrap namespaces WORK"
-      - name: Build the disposable dry-run image
-        run: docker build -q -t aqd-dryrun -f evaluations/phase-3.3/dryrun/Dockerfile evaluations/phase-3.3/dryrun
-      - name: Launcher dry run (mock CLI, synthetic token, no network)
-        run: |
-          out="$RUNNER_TEMP/aqd-dryrun"; mkdir -p "$out"
-          docker run --rm --network none --privileged --hostname aqd --add-host aqd:127.0.0.1 \
-            -v "$PWD:/src:ro" -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/dryrun/dryrun-cc.sh
-          docker run --rm --network none --hostname aqd --add-host aqd:127.0.0.1 -e DRYRUN_MODE=preflight-only \
-            -v "$PWD:/src:ro" -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/dryrun/dryrun-cc.sh
-          python3 evaluations/phase-3.3/dryrun/check_results.py "$out"/dryrun-results-*.ndjson
-      - name: Preflight logs (synthetic token only; never printed by the harness)
-        if: always()
-        run: grep -h -v 'unable to resolve host' "$RUNNER_TEMP"/aqd-dryrun/preflight-*.log 2>/dev/null | tail -n 40 || true
+  # The native Claude Code launcher dry run moved to phase3-cc-smoke.yml (job "mock"), which runs it together with
+  # the real-CLI boundary probe and the live-probe rehearsal on every pull request touching the harness.
 
   installer-tests:
     # tests/test_install.py on Linux and Windows. Phase 3.2 risk R13: on Windows,
