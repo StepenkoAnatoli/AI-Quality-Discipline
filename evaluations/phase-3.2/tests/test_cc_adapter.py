@@ -31,6 +31,8 @@ import run_status  # noqa: E402
 MODEL_REF = "anthropic/claude-opus-5-5#medium"
 MODEL = "claude-opus-5-5"
 PROJECT = "/aqd/run/project"
+PLUGIN_DIR = "/aqd/run/arm-plugin"
+ARM_PLUGIN = {"name": "aqd-arm", "path": PLUGIN_DIR, "source": "aqd-arm@inline", "version": "1.0.0"}
 TEST_TOKEN = "sk-ant-oat01-SYNTHETIC-TEST-TOKEN-not-a-real-credential"
 SKILL_BODY = "\n".join(c.SKILL_SENTINELS)
 with open(os.path.join(HERE, "..", "..", "..", "skills", "code-discipline", "SKILL.md"), encoding="utf-8") as _h:
@@ -56,9 +58,11 @@ def init_event(group="control", **changes):
     event = {"type": "system", "subtype": "init", "session_id": "s-synthetic", "uuid": "u0",
              "apiKeySource": "none", "claude_code_version": cc.PINNED_CLI_VERSION, "cwd": PROJECT,
              "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Skill"], "mcp_servers": [],
-             "model": MODEL, "permissionMode": "acceptEdits",
-             "slash_commands": ["code-discipline"] if group == "treatment" else [],
-             "output_style": "default", "skills": ["code-discipline"] if group == "treatment" else [], "plugins": []}
+             "model": MODEL, "permissionMode": "default", "served_by_anthropic": True,
+             "slash_commands": (["aqd-arm:code-discipline"] if group == "treatment" else []) + ["doctor", "clear"],
+             "output_style": "default",
+             "skills": (["aqd-arm:code-discipline"] if group == "treatment" else []) + ["doctor"],
+             "plugins": [dict(ARM_PLUGIN)]}
     event.update(changes)
     return event
 
@@ -109,7 +113,7 @@ class Workdir(unittest.TestCase):
         return path
 
     def analyse(self, events, group="control", raw_lines=(), driver_status="idle"):
-        return cc.analyse_transcript(self.transcript(events, raw_lines), group, MODEL_REF, PROJECT, driver_status)
+        return cc.analyse_transcript(self.transcript(events, raw_lines), group, MODEL_REF, PROJECT, driver_status, PLUGIN_DIR)
 
 
 # ------------------------------------------------------------------ pre-run checks
@@ -163,7 +167,7 @@ class EnvironmentAndAuthTests(Workdir):
 
 class CommandTests(Workdir):
     def test_command_is_the_same_for_both_arms_and_names_no_skill(self):
-        argv = cc.build_argv("claude", MODEL_REF, "/s.json", 40)
+        argv = cc.build_argv("claude", MODEL_REF, "/s.json", 40, PLUGIN_DIR)
         self.assertNotIn("code-discipline", " ".join(argv))
         self.assertNotIn("/code-discipline", " ".join(argv))
         for flag in ("-p", "--restricted", "--strict-mcp-config", "--no-session-persistence"):
@@ -175,15 +179,16 @@ class CommandTests(Workdir):
         value = lambda flag: argv[argv.index(flag) + 1]  # noqa: E731
         self.assertEqual((value("--model"), value("--effort")), (MODEL, "medium"))
         self.assertEqual(value("--tools"), "Bash,Read,Edit,Write,Glob,Grep,Skill")
+        self.assertEqual(value("--plugin-dir"), PLUGIN_DIR)  # the same path in both arms; only its content differs
         self.assertEqual(value("--allowedTools"), value("--tools"))
         self.assertEqual(value("--output-format"), "stream-json")
 
     def test_bad_model_references_are_refused(self):
         for ref in ("anthropic/claude-opus-5-5", "xai/grok-4#high", "anthropic/claude-opus-5-5#ultra", "opus"):
             with self.subTest(ref=ref), self.assertRaises((ValueError, cc.AdapterError)):
-                cc.build_argv("claude", ref, "/s.json", 40)
+                cc.build_argv("claude", ref, "/s.json", 40, PLUGIN_DIR)
         with self.assertRaises(cc.AdapterError):
-            cc.build_argv("claude", MODEL_REF, "/s.json", True)
+            cc.build_argv("claude", MODEL_REF, "/s.json", True, PLUGIN_DIR)
 
     def test_settings_turn_off_sync_switching_and_bundled_skills(self):
         s = cc.HARNESS_SETTINGS
@@ -191,6 +196,8 @@ class CommandTests(Workdir):
         self.assertIs(s["syncClaudeAiPlugins"], False)
         self.assertIs(s["switchModelsOnFlag"], False)
         self.assertIs(s["disableBundledSkills"], True)
+        # the three built-in plugins 2.1.330 loads are off in both arms (observed with the real CLI)
+        self.assertEqual(s["enabledPlugins"], {p: False for p in cc.BUILTIN_PLUGINS})
         self.assertIn("WebFetch", s["permissions"]["deny"])
         self.assertIn("Skill", s["permissions"]["allow"])
 
@@ -202,7 +209,7 @@ class CommandTests(Workdir):
                 self.assertTrue(cc.check_approval(data, "r-aaaaaaaaaa"))
 
     def test_run_as_user_never_puts_the_token_in_argv(self):
-        cmd = cc.build_command(cc.build_argv("/usr/bin/claude", MODEL_REF, "/s.json", 40), clean_env(self.tmp),
+        cmd = cc.build_command(cc.build_argv("/usr/bin/claude", MODEL_REF, "/s.json", 40, PLUGIN_DIR), clean_env(self.tmp),
                                as_user="aqd-a", wrapper="/aqd/bin/cc_exec.sh", workdir="/aqd/run/project")
         self.assertEqual(cmd[:6], ["sudo", "-n", "-u", "aqd-a", "/usr/bin/env", "-i"])
         self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", " ".join(cmd))
@@ -229,7 +236,7 @@ class CommandTests(Workdir):
         unreachable = "/nonexistent-agent-tree/project"  # not even visible to the caller
         with unittest.mock.patch.object(cc.subprocess, "Popen", popen):
             cc.run("/usr/bin/claude", MODEL_REF, "/s.json", 5, prompt, env_file, secret, 5,
-                   os.path.join(self.tmp, "out"), unreachable)
+                   os.path.join(self.tmp, "out"), unreachable, PLUGIN_DIR)
         self.assertEqual(captured.get("cwd"), "/")
         self.assertIn(unreachable, captured["cmd"])
 
@@ -351,6 +358,50 @@ class TranscriptTests(Workdir):
             with self.subTest(subtype=subtype):
                 self.assertFalse(self.analyse(session(result=result_event(subtype, True)))["valid"])
 
+    def test_skill_delivery_and_plugins_must_match_the_real_cli_shape(self):
+        bad = {
+            "skill not namespaced": init_event("treatment", skills=["code-discipline", "doctor"]),
+            "built-in skill missing": init_event("treatment", skills=["aqd-arm:code-discipline"]),
+            "extra skill": init_event("treatment", skills=["aqd-arm:code-discipline", "doctor", "x"]),
+            "built-in plugin loaded": init_event("treatment", plugins=[dict(ARM_PLUGIN), {
+                "name": "cc-plugin-privacy", "path": "builtin", "source": "cc-plugin-privacy@builtin"}]),
+            "plugin from another path": init_event("treatment", plugins=[dict(ARM_PLUGIN, path="/elsewhere")]),
+            "no plugin": init_event("treatment", plugins=[]),
+            "permission mode": init_event("treatment", permissionMode="acceptEdits"),
+            "not served by anthropic": init_event("treatment", served_by_anthropic=False),
+            "served_by_anthropic absent": {k: v for k, v in init_event("treatment").items() if k != "served_by_anthropic"},
+        }
+        for name, init in bad.items():
+            with self.subTest(name=name):
+                self.assertFalse(self.analyse(session("treatment", init=init), "treatment")["valid"])
+        self.assertTrue(self.analyse(session("treatment"), "treatment")["valid"])
+        self.assertTrue(self.analyse(session("control"))["valid"])
+        self.assertFalse(self.analyse(session("control", init=init_event("control", skills=["aqd-arm:code-discipline",
+                                                                                           "doctor"])))["valid"])
+
+    def test_a_bash_sandbox_that_cannot_start_is_infrastructure_not_an_outcome(self):
+        # 2.1.330 with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 and no socat answers EVERY Bash call with this error
+        failed = [assistant([tool_use("Bash", {"command": "pytest"})]),
+                  tool_result("t1", "Sandbox is required but failed to initialize: Sandbox dependencies not available: "
+                                    "socat not installed. Restart to retry."),
+                  assistant([{"type": "text", "text": "Done."}])]
+        r = self.analyse(session(middle=failed))
+        self.assertFalse(r["valid"])
+        self.assertTrue(any("sandbox" in x for x in r["invalid_reasons"]), r["invalid_reasons"])
+        # namespaces refused (unprivileged host): the real 2.1.330 answer, captured offline
+        refused = [assistant([tool_use("Bash", {"command": "pytest"})]),
+                   tool_result("t1", "Exit code 1\nbwrap: No permissions to create new namespace, likely because the "
+                                     "kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap>."),
+                   assistant([{"type": "text", "text": "Done."}])]
+        r = self.analyse(session(middle=refused))
+        self.assertFalse(r["valid"])
+        self.assertTrue(any("sandbox" in x for x in r["invalid_reasons"]), r["invalid_reasons"])
+        # an ordinary failing command that merely mentions bwrap is an outcome, not infrastructure
+        ordinary = [assistant([tool_use("Bash", {"command": "pytest"})]),
+                    tool_result("t1", "Exit code 1\nFAILED test_x.py::test_a - bwrap: mentioned in a message"),
+                    assistant([{"type": "text", "text": "Done."}])]
+        self.assertTrue(self.analyse(session(middle=ordinary))["valid"])
+
     def test_working_directory_must_be_the_project(self):
         for cwd in ("/home/operator", None, PROJECT + "/sub"):
             with self.subTest(cwd=cwd):
@@ -387,7 +438,7 @@ class TranscriptTests(Workdir):
         bad_middle = self.transcript(partial[:2]) 
         with open(bad_middle, "a", encoding="utf-8") as h:
             h.write("garbage\n" + json.dumps(partial[2]) + "\n")
-        self.assertFalse(cc.analyse_transcript(bad_middle, "control", MODEL_REF, PROJECT, "timeout")["valid"])
+        self.assertFalse(cc.analyse_transcript(bad_middle, "control", MODEL_REF, PROJECT, "timeout", PLUGIN_DIR)["valid"])
         # identity is still required, and a timeout spent retrying the provider is infrastructure
         self.assertFalse(self.analyse(partial[1:], driver_status="timeout")["valid"])
         self.assertFalse(self.analyse([init_event()], driver_status="timeout")["valid"])
@@ -409,7 +460,7 @@ class TranscriptTests(Workdir):
         self.assertFalse(self.analyse([init_event()] + session())["valid"])  # two init events
         self.assertFalse(self.analyse(session()[:-1])["valid"])  # no result
         self.assertFalse(self.analyse([init_event(), result_event()])["valid"])  # no assistant turn
-        missing = cc.analyse_transcript(os.path.join(self.tmp, "absent.ndjson"), "control", MODEL_REF, PROJECT, "idle")
+        missing = cc.analyse_transcript(os.path.join(self.tmp, "absent.ndjson"), "control", MODEL_REF, PROJECT, "idle", PLUGIN_DIR)
         self.assertFalse(missing["valid"])
 
 
@@ -419,7 +470,7 @@ class RunStatusInterfaceTests(Workdir):
     def capture(self, group, events, listing, record_changes=None, driver=None, driver_status="idle"):
         cap = os.path.join(self.tmp, f"cap-{group}-{len(os.listdir(self.tmp))}")
         os.makedirs(os.path.join(cap, "driver"))
-        report = cc.analyse_transcript(self.transcript(events), group, MODEL_REF, PROJECT, driver_status)
+        report = cc.analyse_transcript(self.transcript(events), group, MODEL_REF, PROJECT, driver_status, PLUGIN_DIR)
         cc._write(os.path.join(cap, "export-checks.json"), report)
         cc._write(os.path.join(cap, "driver", "driver-result.json"), driver or {"status": "idle", "outcome": "succeeded"})
         cc._write(os.path.join(cap, "verify-post.json"), {"integrity_ok": True, "findings": {}})
@@ -438,28 +489,34 @@ class RunStatusInterfaceTests(Workdir):
         return run_status.build_status(cap, group, 0, 10, 0, 0, "done", interface)
 
     def test_valid_runs_in_both_arms(self):
-        for group, listing in (("control", []), ("treatment", ["code-discipline", "code-discipline/SKILL.md"])):
+        for group, listing in (("control", run_status.expected_home_listing("control", "claude-code")),
+                               ("treatment", run_status.expected_home_listing("treatment", "claude-code"))):
             with self.subTest(group=group):
                 s = self.status(self.capture(group, session(group), listing), group)
                 self.assertTrue(s["valid"], s["invalid_reasons"])
 
     def test_turn_limit_and_timeout_stay_valid_in_run_status(self):
-        cap = self.capture("control", session(result=result_event("error_max_turns", True)), [],
+        cap = self.capture("control", session(result=result_event("error_max_turns", True)), run_status.expected_home_listing("control", "claude-code"),
                            driver={"status": "idle", "outcome": "max_turns"})
         s = self.status(cap, "control")
         self.assertTrue(s["valid"], s["invalid_reasons"])
-        cap = self.capture("control", session()[:-1], [], driver={"status": "timeout", "outcome": "timeout"},
+        cap = self.capture("control", session()[:-1], run_status.expected_home_listing("control", "claude-code"), driver={"status": "timeout", "outcome": "timeout"},
                            driver_status="timeout")
         s = self.status(cap, "control")
         self.assertTrue(s["valid"], s["invalid_reasons"])
         self.assertTrue(s["timed_out"])
 
     def test_wrong_skills_listing_or_record_is_invalid(self):
-        cap = self.capture("control", session("control"), ["code-discipline", "code-discipline/SKILL.md"])
+        cap = self.capture("control", session("control"), run_status.expected_home_listing("treatment", "claude-code"))
         self.assertFalse(self.status(cap, "control")["valid"])
-        cap = self.capture("control", session("control"), [], {"execution_environment": "opencode"})
+        planted = run_status.expected_home_listing("control", "claude-code") + ["config-skills/planted"]
+        cap = self.capture("control", session("control"), planted)
         self.assertFalse(self.status(cap, "control")["valid"])
-        cap = self.capture("control", session("control"), [], {"interface": "opencode 2.3.2"})
+        cap = self.capture("control", session("control"), run_status.expected_home_listing("control", "claude-code"),
+                           {"execution_environment": "opencode"})
+        self.assertFalse(self.status(cap, "control")["valid"])
+        cap = self.capture("control", session("control"), run_status.expected_home_listing("control", "claude-code"),
+                           {"interface": "opencode 2.3.2"})
         self.assertFalse(self.status(cap, "control")["valid"])
 
     def test_default_interface_still_expects_opencode(self):
@@ -560,6 +617,7 @@ class DriverIntegrationTests(Workdir):
         cc._write(self.settings, cc.HARNESS_SETTINGS)
         self.project = os.path.join(self.tmp, "project")
         os.makedirs(self.project)
+        self.plugin_dir = os.path.join(self.tmp, "arm-plugin")
 
     def write_env(self, env):
         with open(self.env_file, "w", encoding="utf-8") as h:
@@ -572,7 +630,7 @@ class DriverIntegrationTests(Workdir):
     def run_driver(self, timeout=30):
         out = os.path.join(self.tmp, "out")
         code = cc.run(self.claude, MODEL_REF, self.settings, 40, self.prompt, self.env_file, self.secret, timeout, out,
-                      self.project)
+                      self.project, self.plugin_dir)
         return code, out
 
     def seen(self):
@@ -580,14 +638,15 @@ class DriverIntegrationTests(Workdir):
         return load(path) if os.path.exists(path) else None
 
     def test_end_to_end_with_mock_claude(self):
-        self.configure(session("treatment", init=init_event("treatment", cwd=self.project)))
+        init = init_event("treatment", cwd=self.project, plugins=[dict(ARM_PLUGIN, path=self.plugin_dir)])
+        self.configure(session("treatment", init=init))
         code, out = self.run_driver()
         self.assertEqual(code, 0)
         seen = self.seen()
         self.assertEqual(os.path.realpath(seen["cwd"]), os.path.realpath(self.project))  # claude starts in the project
         self.assertTrue(seen["token_ok"])  # the token reached claude's environment ...
         self.assertNotIn(TEST_TOKEN, json.dumps(seen["argv"]))  # ... but not its arguments
-        self.assertEqual(seen["argv"], cc.build_argv(self.claude, MODEL_REF, self.settings, 40)[1:])
+        self.assertEqual(seen["argv"], cc.build_argv(self.claude, MODEL_REF, self.settings, 40, self.plugin_dir)[1:])
         self.assertEqual(set(seen["env_names"]) - {"PWD", "SHLVL", "_"},
                          set(clean_env(self.tmp)) | {"CLAUDE_CODE_OAUTH_TOKEN"})
         with open(self.prompt, "rb") as handle:
@@ -595,7 +654,7 @@ class DriverIntegrationTests(Workdir):
         driver = load(os.path.join(out, "driver-result.json"))
         self.assertEqual((driver["status"], driver["outcome"], driver["session_id"]), ("idle", "succeeded", "s-synthetic"))
         report = cc.analyse_transcript(os.path.join(out, "transcript.ndjson"), "treatment", MODEL_REF, self.project,
-                                       driver["status"])
+                                       driver["status"], self.plugin_dir)
         self.assertTrue(report["valid"], report["invalid_reasons"])
         self.assertEqual(cc.files_containing([out], TEST_TOKEN), [])
 
@@ -636,7 +695,7 @@ class DriverIntegrationTests(Workdir):
             cc.MAX_PROMPT_BYTES = 10 ** 7
             t0 = time.monotonic()
             rc = cc.run({self.claude!r}, {MODEL_REF!r}, {self.settings!r}, 5, {self.prompt!r}, {self.env_file!r},
-                        {self.secret!r}, {timeout}, {out!r}, {self.project!r})
+                        {self.secret!r}, {timeout}, {out!r}, {self.project!r}, {self.plugin_dir!r})
             print(rc, round(time.monotonic() - t0, 1))
         """)
         try:
@@ -703,7 +762,7 @@ class DriverIntegrationTests(Workdir):
         missing = os.path.join(self.tmp, "no-such-claude")
         out = os.path.join(self.tmp, "out")
         code = cc.run(missing, MODEL_REF, self.settings, 5, self.prompt, self.env_file, self.secret, 5, out,
-                      self.project, wrapper=missing)
+                      self.project, self.plugin_dir, wrapper=missing)
         self.assertNotEqual(code, 0)
         driver = load(os.path.join(out, "driver-result.json"))
         self.assertEqual((driver["status"], driver["outcome"]), ("error", "not_started"))
@@ -721,7 +780,7 @@ class DriverIntegrationTests(Workdir):
         driver = os.path.join(self.tmp, "driver-result.json")
         out = os.path.join(self.tmp, "checks.json")
         args = ["check-transcript", "--transcript", partial, "--group", "control", "--model", MODEL_REF,
-                "--project", PROJECT, "--driver-result", driver, "--out", out]
+                "--project", PROJECT, "--plugin-dir", PLUGIN_DIR, "--driver-result", driver, "--out", out]
         cc._write(driver, {"status": "timeout", "outcome": "timeout"})
         self.assertEqual(cc.main(args), 0)
         cc._write(driver, {"status": "idle", "outcome": "failed"})

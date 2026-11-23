@@ -12,8 +12,9 @@
 # evaluator-must-be-empty rule, per-group OS users, root-owned immutable project tree from the manifest,
 # pre/post manifest verification, diff capture, process kill and run-root removal, run_status.py.
 # Replaced: OpenCode HOME, server, api_checks, session driver and export -> cc_adapter.py (auth-status, run,
-# check-transcript) and cc_exec.sh. The arms differ ONLY in the run's CLAUDE_CONFIG_DIR/skills directory
-# (treatment: the canonical SKILL.md, root-owned read-only); prompt, command, settings and environment are
+# check-transcript) and cc_exec.sh. The arms differ ONLY in the content of the run's arm plugin ($RUN_ROOT/arm-plugin,
+# passed with --plugin-dir in both arms; treatment's holds the canonical SKILL.md, root-owned read-only; the real
+# 2.1.330 CLI ignores CLAUDE_CONFIG_DIR/skills under --restricted); prompt, command, settings and environment are
 # byte-identical.
 #
 # Exit codes: 0 valid run, 1 invalid run, 20 BLOCKED (auth/billing check failed: the benchmark stops),
@@ -64,6 +65,7 @@ RUN_HOME="$RUN_ROOT/home"
 RUN_TMP="$RUN_ROOT/tmp"
 CONFIG="$RUN_HOME/.claude"
 SETTINGS="$RUN_ROOT/cc-settings.json"
+ARM_PLUGIN="$RUN_ROOT/arm-plugin"
 WRAPPER="$RUN_ROOT/bin/cc_exec.sh"
 PRISTINE="$AQD_PRISTINE/$TASK"
 MANIFEST="$PRISTINE/manifest.json"
@@ -116,6 +118,7 @@ for env in "${AQD_ENVS[@]}"; do assert_no_processes "${AQD_USER_FOR_ENV[$env]}";
     --out "$CAP/pristine-check.json" >/dev/null || die "pristine store for $TASK is not intact"
 sha256sum --quiet -c "$AQD_SEALED/pristine-extra.sha256" || die "pristine skill/config changed"
 command -v bwrap >/dev/null || die "bubblewrap is required (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB)"
+command -v socat >/dev/null || die "socat is required (the CLI's subprocess sandbox needs it)"
 # --restricted still applies managed settings, whose env/apiKeyHelper could redirect or bill the session.
 [[ ! -e /etc/claude-code ]] || die "/etc/claude-code (managed settings) exists: refused"
 [[ "$("$AQD_CLAUDE_BIN" --version 2>/dev/null | awk '{print $1}')" == "2.1.330" ]] || die "claude is not the pinned 2.1.330"
@@ -131,9 +134,13 @@ sudo install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$RUN_HOME" "$RUN_TMP"
 # root-owned skills directory. That directory is root-owned in BOTH arms, so no skill can be added during the run.
 sudo install -d -o root -g "$AGENT_USER" -m 1770 "$CONFIG"
 sudo install -d -o root -g root -m 0755 "$CONFIG/skills"
+# The skill is delivered as a plugin (--plugin-dir, same path in both arms), root-owned and read-only.
+sudo install -d -o root -g root -m 0755 "$ARM_PLUGIN" "$ARM_PLUGIN/.claude-plugin" "$ARM_PLUGIN/skills"
+printf '{"name": "aqd-arm", "version": "1.0.0"}\n' >"$CAP/arm-plugin.json"
+sudo install -o root -g root -m 0444 "$CAP/arm-plugin.json" "$ARM_PLUGIN/.claude-plugin/plugin.json"
 if [[ "$GROUP" == "treatment" ]]; then
-    sudo install -d -o root -g root -m 0755 "$CONFIG/skills/$AQD_SKILL_ID"
-    sudo install -o root -g root -m 0444 "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$CONFIG/skills/$AQD_SKILL_ID/SKILL.md"
+    sudo install -d -o root -g root -m 0755 "$ARM_PLUGIN/skills/$AQD_SKILL_ID"
+    sudo install -o root -g root -m 0444 "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$ARM_PLUGIN/skills/$AQD_SKILL_ID/SKILL.md"
 fi
 
 STEP="build-project"
@@ -157,6 +164,7 @@ sudo chown "$(id -u):$(id -g)" "$CAP/verify-pre.json"
 assert_unreadable_by "$AGENT_USER" "$AQD_OPERATOR" "$AQD_CHECKOUT" "$HOME" /workspaces/.codespaces "$AQD_ROOT/$OTHER_ENV"
 if sudo -u "$AGENT_USER" test -w "$PROJECT/TASK.md"; then die "agent can write an immutable file"; fi
 if sudo -u "$AGENT_USER" test -w "$CONFIG/skills"; then die "agent can write the skills directory"; fi
+if sudo -u "$AGENT_USER" test -w "$ARM_PLUGIN/skills"; then die "agent can write the arm plugin"; fi
 [[ "$(sudo stat -c '%U %a' "$CONFIG")" == "root 1770" ]] || die "$CONFIG is not root-owned and sticky"
 
 STEP="agent-env"
@@ -217,7 +225,7 @@ set +e
 "$PY" "$CC" run --claude "$AQD_CLAUDE_BIN" --model "$MODEL_REF" --settings "$SETTINGS" \
     --max-turns "$AQD_CC_MAX_TURNS" --prompt-file "$MESSAGE_FILE" --env-file "$CAP/cc-env" \
     --secret-file "$SECRET_DIR/token" --timeout "$AQD_CC_RUN_TIMEOUT_SECONDS" --out-dir "$CAP/driver" \
-    --project "$PROJECT" --as-user "$AGENT_USER" --wrapper "$WRAPPER"
+    --project "$PROJECT" --plugin-dir "$ARM_PLUGIN" --as-user "$AGENT_USER" --wrapper "$WRAPPER"
 DRIVER_EXIT=$?
 set -e
 ENDED="$(date +%s)"
@@ -229,7 +237,10 @@ assert_no_processes "$AGENT_USER"
 STEP="capture"
 install -d -m 0700 "$CAP/project-final"
 sudo tar -C "$PROJECT" -cf - . | tar -C "$CAP/project-final" -xf - --no-same-owner --no-same-permissions
-sudo find "$CONFIG/skills" -mindepth 1 -printf '%P\n' | sort >"$CAP/home-config-listing.txt"
+# The skill-delivery listing: the arm plugin, plus the (unused, root-owned) CLAUDE_CONFIG_DIR/skills, which must stay
+# empty in both arms.
+{ sudo find "$ARM_PLUGIN" -mindepth 1 -printf 'arm-plugin/%P\n'; sudo find "$CONFIG/skills" -mindepth 1 -printf 'config-skills/%P\n'; } \
+    | sort >"$CAP/home-config-listing.txt"
 chmod -R u+rwX "$CAP"
 
 STEP="verify-post"
@@ -239,7 +250,8 @@ set +e
 diff -ruN -x __pycache__ -x '*.pyc' -x .pytest_cache "$PRISTINE/project" "$CAP/project-final" >"$CAP/diff.patch"
 [[ $? -le 1 ]] || log "diff reported an error"
 "$PY" "$CC" check-transcript --transcript "$CAP/driver/transcript.ndjson" --group "$GROUP" --model "$MODEL_REF" \
-    --project "$PROJECT" --driver-result "$CAP/driver/driver-result.json" --out "$CAP/export-checks.json"
+    --project "$PROJECT" --plugin-dir "$ARM_PLUGIN" --driver-result "$CAP/driver/driver-result.json" \
+    --out "$CAP/export-checks.json"
 set -e
 # (the token scan runs in finish(), on every exit path)
 

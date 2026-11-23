@@ -16,7 +16,7 @@
 
 **The question it serves.** Does making `code-discipline` **available** improve correctness?
 
-- **Treatment arm:** the canonical `SKILL.md` (`d050d00f…`, unchanged) is present as a user skill in the run's own `CLAUDE_CONFIG_DIR/skills/`.
+- **Treatment arm:** the canonical `SKILL.md` (`d050d00f…`, unchanged) is inside the run's arm plugin, passed with `--plugin-dir` (the same path in both arms; control's plugin has no skill). The real 2.1.330 CLI ignores `CLAUDE_CONFIG_DIR/skills` under `--restricted` (SMOKE-WORKFLOW.md §3).
 - **Control arm:** that directory exists but is empty.
 - **Identical in both arms:** the prompt, command, settings file and environment.
 - **Recorded separately**, none of them a validity condition (an intention-to-treat contrast on availability):
@@ -46,7 +46,7 @@
 
 **The command** (`build_argv`), byte-identical in both arms:
 
-`claude -p --restricted --model <id> --effort <level> --settings <root-owned file> --strict-mcp-config --tools Bash,Read,Edit,Write,Glob,Grep,Skill --allowedTools <same> --permission-mode acceptEdits --output-format stream-json --verbose --max-turns N --no-session-persistence`
+`claude -p --restricted --model <id> --effort <level> --settings <root-owned file> --strict-mcp-config --tools Bash,Read,Edit,Write,Glob,Grep,Skill --allowedTools <same> --permission-mode acceptEdits --output-format stream-json --verbose --max-turns N --no-session-persistence --plugin-dir <run root>/arm-plugin`
 
 The prompt goes in on stdin. The process starts in the run's project directory: `cc_exec.sh DIR …` changes to it inside the agent user's own process, because the operator cannot traverse the agent's 0700 tree (the OpenCode harness's `as_agent` does the same). The transcript check requires `init.cwd` to be exactly that directory.
 
@@ -96,18 +96,18 @@ The prompt goes in on stdin. The process starts in the run's project directory: 
 | `CLAUDE_CODE_OAUTH_TOKEN` sessions do not sync claude.ai skills or plugins | skills.md, plugins/loading.md | documented |
 | `syncClaudeAiSkills` / `syncClaudeAiPlugins: false` honoured via `--settings` | CLI 2.1.330 setting descriptions | binary only |
 | `--bare` ignores OAuth; `--safe-mode` disables skills; `--restricted` behaviour | cli-reference.md; `claude --help` | documented |
-| A user skill in `CLAUDE_CONFIG_DIR/skills` is **available under `--restricted`** | none | **UNVERIFIED.** It fails closed: a treatment run is invalid unless `init.skills` lists exactly the skill |
-| `claude auth status --json` `authMethod` is `oauth_token` for the token | cli-reference.md | documented. Whether this build reports it for this token is unverified |
-| `init` fields (`apiKeySource`, `claude_code_version`, `tools`, `mcp_servers`, `model`, `permissionMode`, `slash_commands`, `skills`, `plugins`, optional `effort`) | agent-sdk/typescript.md; CLI init schema | documented shape; **values in a real session are unverified** |
+| A user skill in `CLAUDE_CONFIG_DIR/skills` is available under `--restricted` | real CLI, offline | **FALSE** ("Unknown skill"). Replaced by `--plugin-dir`, which works: listed as `aqd-arm:code-discipline`, launched, text loaded |
+| `claude auth status --json` `authMethod` is `oauth_token` for the token | real CLI, offline | reports `oauth_token`, `firstParty`, `loggedIn: true` **even for a fake token with no network**: it does not validate the token. Real authentication is shown only by a served session (`served_by_anthropic: true`) |
+| `init` fields (`apiKeySource`, `claude_code_version`, `tools`, `mcp_servers`, `model`, `permissionMode`, `slash_commands`, `skills`, `plugins`, optional `effort`) | agent-sdk/typescript.md; CLI init schema | real CLI, offline: shape confirmed (plus `served_by_anthropic`, `plugins` with paths); with the scrub `permissionMode` is `default`; `effort` is absent. Values from Anthropic's service are unverified |
 | `apiKeySource` is `"none"` for OAuth (and for bearer or third-party providers) | CLI schema description | binary only. The environment allow-list is what excludes bearer and third-party credentials |
 | The automatic skill tool is `Skill`, with input field `skill` | tools-reference.md (name); CLI tool schema (field) | name documented, field binary only |
 | A `/skill-name` prompt expansion produces a `Skill` tool_use | none | **not documented, not assumed.** This design doesn't use it |
 | `modelUsage` keys are the bare model id; every model that served a turn appears there | model-config.md (read the model from `modelUsage`) | **key format and completeness unverified.** It fails closed if the pinned id is absent |
-| `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips credentials from the agent's subprocesses and isolates them with bubblewrap (on by default under `GITHUB_ACTIONS`) | CLI 2.1.330 code and error messages | **binary only; behaviour unverified**, because it needs a model-issued Bash call |
-| `--restricted` with `--tools Bash` plus `--allowedTools Bash` and `acceptEdits` lets a headless run edit source files and run tests without a person | headless.md, permission-modes.md (pieces) | **combination unverified** |
+| `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips credentials from the agent's subprocesses and isolates them with bubblewrap (on by default under `GITHUB_ACTIONS`) | real CLI, offline (fake token, local mock API) | **verified offline**: token absent from the Bash environment and from every `/proc/*/environ` Bash can read; PID namespace. **Needs `socat` and bubblewrap with user namespaces**, else every Bash call fails |
+| `--restricted` with `--tools Bash` plus `--allowedTools Bash` and `acceptEdits` lets a headless run edit source files and run tests without a person | real CLI, offline | verified: Bash, Write and Edit work headless |
 | `result.subtype` values `success` / `error_max_turns`; `error_max_turns` carries `is_error: true` | SDK result types; 2.1.330 result builder | documented shape; `is_error` binary only; real values unverified |
-| `Skill` survives `--restricted --tools …,Skill` and appears in `init.tools` | 2.1.330 launch-list filter | **UNVERIFIED.** It fails closed: a treatment run is invalid without it |
-| `init.cwd` is the working directory the process started in, as an absolute path matching `$PROJECT` | SDK init type | **UNVERIFIED** (a symlinked or canonicalised path would fail closed) |
+| `Skill` survives `--restricted --tools …,Skill` and appears in `init.tools` | real CLI, offline | verified: `Skill` is in `init.tools` |
+| `init.cwd` is the working directory the process started in, as an absolute path matching `$PROJECT` | real CLI, offline | verified (the path as given) |
 | `cc_exec.sh` can enter the project as the agent user | tested in the non-root dry run | verified with the mock; a failure exits 96 and the run is invalid |
 | `setup-token` tokens start with `sk-ant-oat` (used to refuse an API key placed in the token slot) | none found | **assumption.** If wrong, `check_token` refuses a valid token and the run stops before any request. It fails closed and can't spend |
 | A turn cap (`--max-turns`, default 200) is a new constraint; Phase 3.2 had only the 45-minute wall limit | harness choice | to pre-register. Every run records whether it was hit (`result_subtype`) |
@@ -183,7 +183,7 @@ Recommendation:
    - write `cc-run-approved.json` listing exactly the approved run ids.
 5. **First things the smoke test must show** (each fails closed if wrong):
    - `authMethod: oauth_token`;
-   - `init.skills` is `[code-discipline]` under `--restricted` in treatment and `[]` in control, and `Skill` is in `init.tools`;
+   - `init.skills` is `[aqd-arm:code-discipline, doctor]` in treatment and `[doctor]` in control, `Skill` is in `init.tools`, and `served_by_anthropic` is true;
    - `init.cwd` is the project directory;
    - the agent's Bash can't read `CLAUDE_CODE_OAUTH_TOKEN`. This needs a dedicated probe task, never a scored task.
 

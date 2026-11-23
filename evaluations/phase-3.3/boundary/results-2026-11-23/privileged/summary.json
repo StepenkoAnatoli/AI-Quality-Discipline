@@ -1,0 +1,509 @@
+[
+  {
+    "auth_exit": 0,
+    "auth_status": {
+      "analyticsDisabled": true,
+      "apiProvider": "firstParty",
+      "authMethod": "oauth_token",
+      "configDirectory": "/bnd/aqd-a/treatment-scrub/home/.claude",
+      "consoleProfileSignInOffered": true,
+      "loggedIn": true,
+      "loginExpiresAt": null,
+      "projectsDirectory": "/bnd/aqd-a/treatment-scrub/home/.claude/projects"
+    },
+    "canary_in_request_headers": false,
+    "canary_in_requests_to_model": false,
+    "canary_in_run_tree": [],
+    "canary_in_stderr": false,
+    "canary_in_temp": [],
+    "canary_in_transcript": false,
+    "checks": {
+      "activation": "AVAILABLE",
+      "auxiliary_models": [],
+      "cli_version": "2.1.330",
+      "cwd": "/bnd/aqd-a/treatment-scrub/project",
+      "effort_reported": null,
+      "invalid_reasons": [
+        "session not served by Anthropic (served_by_anthropic is not true)"
+      ],
+      "invoked": true,
+      "model_ok": true,
+      "models_in_usage": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "skill_text_loaded": true,
+      "skill_tool_offered": true,
+      "skills_available": [
+        "aqd-arm:code-discipline",
+        "doctor"
+      ],
+      "tool_counts": {
+        "Bash": 6,
+        "Glob": 1,
+        "Grep": 1,
+        "Read": 5,
+        "Skill": 1,
+        "Write": 1
+      },
+      "tools": [
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Skill",
+        "Write"
+      ],
+      "valid": false
+    },
+    "duration_seconds": 1.2,
+    "exit_code": 0,
+    "group": "treatment",
+    "probes": {
+      "bash_env": {
+        "canary": false,
+        "is_error": false,
+        "output": "bash_env_token_vars=0"
+      },
+      "bash_links": {
+        "canary": false,
+        "is_error": false,
+        "output": "links_ok"
+      },
+      "bash_namespace": {
+        "canary": false,
+        "is_error": false,
+        "output": "nprocs=5 pid1=bwrap ppid_comm=bwrap uid=999"
+      },
+      "bash_proc_environ": {
+        "canary": false,
+        "is_error": false,
+        "output": "proc_environ_total=2 readable=2 with_token=0"
+      },
+      "bash_self_environ": {
+        "canary": false,
+        "is_error": false,
+        "output": "bash_self_environ_token=0"
+      },
+      "bash_works": {
+        "canary": false,
+        "is_error": false,
+        "output": "bash_ok 42"
+      },
+      "glob_config_dir": {
+        "canary": false,
+        "is_error": true,
+        "output": "/bnd/aqd-a/treatment-scrub/home/.claude is outside /bnd/aqd-a/treatment-scrub/project; --restricted confines the file tools to the working directory."
+      },
+      "grep_proc_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_proc_dotdot_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/self/../self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_proc_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_proc_thread_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/thread-self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_symlink_to_pid1_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "/bnd/aqd-a/treatment-scrub/project/env_link_pid1 resolves through a symlink to /proc/1/environ, which is outside /bnd/aqd-a/treatment-scrub/project; --restricted confines the file tools to the working directory."
+      },
+      "read_symlink_to_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "/bnd/aqd-a/treatment-scrub/project/env_link resolves through a symlink to /proc/49/environ, which is outside /bnd/aqd-a/treatment-scrub/project; --restricted confines the file tools to the working directory."
+      },
+      "skill_invoke": {
+        "canary": false,
+        "is_error": null,
+        "output": "Launching skill: code-discipline"
+      },
+      "write_project": {
+        "canary": false,
+        "is_error": null,
+        "output": "The file /bnd/aqd-a/treatment-scrub/project/notes.txt has been updated successfully. (file state is current in your context \u2014 no need to Read it back)"
+      }
+    },
+    "processes_left_after_exit": 0,
+    "request_paths": [
+      "/v1/messages?beta=true"
+    ],
+    "scrub": "1",
+    "session": "treatment-scrub",
+    "status": "idle"
+  },
+  {
+    "auth_exit": 0,
+    "auth_status": {
+      "analyticsDisabled": true,
+      "apiProvider": "firstParty",
+      "authMethod": "oauth_token",
+      "configDirectory": "/bnd/aqd-b/control-scrub/home/.claude",
+      "consoleProfileSignInOffered": true,
+      "loggedIn": true,
+      "loginExpiresAt": null,
+      "projectsDirectory": "/bnd/aqd-b/control-scrub/home/.claude/projects"
+    },
+    "canary_in_request_headers": false,
+    "canary_in_requests_to_model": false,
+    "canary_in_run_tree": [],
+    "canary_in_stderr": false,
+    "canary_in_temp": [],
+    "canary_in_transcript": false,
+    "checks": {
+      "activation": "NOT_APPLICABLE",
+      "auxiliary_models": [],
+      "cli_version": "2.1.330",
+      "cwd": "/bnd/aqd-b/control-scrub/project",
+      "effort_reported": null,
+      "invalid_reasons": [
+        "session not served by Anthropic (served_by_anthropic is not true)",
+        "control session contains code-discipline content or invokes it"
+      ],
+      "invoked": true,
+      "model_ok": true,
+      "models_in_usage": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "skill_text_loaded": false,
+      "skill_tool_offered": true,
+      "skills_available": [
+        "doctor"
+      ],
+      "tool_counts": {
+        "Bash": 6,
+        "Glob": 1,
+        "Grep": 1,
+        "Read": 5,
+        "Skill": 1,
+        "Write": 1
+      },
+      "tools": [
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Skill",
+        "Write"
+      ],
+      "valid": false
+    },
+    "duration_seconds": 1.2,
+    "exit_code": 0,
+    "group": "control",
+    "probes": {
+      "bash_env": {
+        "canary": false,
+        "is_error": false,
+        "output": "bash_env_token_vars=0"
+      },
+      "bash_links": {
+        "canary": false,
+        "is_error": false,
+        "output": "links_ok"
+      },
+      "bash_namespace": {
+        "canary": false,
+        "is_error": false,
+        "output": "nprocs=5 pid1=bwrap ppid_comm=bwrap uid=998"
+      },
+      "bash_proc_environ": {
+        "canary": false,
+        "is_error": false,
+        "output": "proc_environ_total=2 readable=2 with_token=0"
+      },
+      "bash_self_environ": {
+        "canary": false,
+        "is_error": false,
+        "output": "bash_self_environ_token=0"
+      },
+      "bash_works": {
+        "canary": false,
+        "is_error": false,
+        "output": "bash_ok 42"
+      },
+      "glob_config_dir": {
+        "canary": false,
+        "is_error": true,
+        "output": "/bnd/aqd-b/control-scrub/home/.claude is outside /bnd/aqd-b/control-scrub/project; --restricted confines the file tools to the working directory."
+      },
+      "grep_proc_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_proc_dotdot_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/self/../self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_proc_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_proc_thread_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/thread-self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_symlink_to_pid1_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "/bnd/aqd-b/control-scrub/project/env_link_pid1 resolves through a symlink to /proc/1/environ, which is outside /bnd/aqd-b/control-scrub/project; --restricted confines the file tools to the working directory."
+      },
+      "read_symlink_to_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "/bnd/aqd-b/control-scrub/project/env_link resolves through a symlink to /proc/216/environ, which is outside /bnd/aqd-b/control-scrub/project; --restricted confines the file tools to the working directory."
+      },
+      "skill_invoke": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Unknown skill: code-discipline</tool_use_error>"
+      },
+      "write_project": {
+        "canary": false,
+        "is_error": null,
+        "output": "The file /bnd/aqd-b/control-scrub/project/notes.txt has been updated successfully. (file state is current in your context \u2014 no need to Read it back)"
+      }
+    },
+    "processes_left_after_exit": 0,
+    "request_paths": [
+      "/v1/messages?beta=true"
+    ],
+    "scrub": "1",
+    "session": "control-scrub",
+    "status": "idle"
+  },
+  {
+    "auth_exit": 0,
+    "auth_status": {
+      "analyticsDisabled": true,
+      "apiProvider": "firstParty",
+      "authMethod": "oauth_token",
+      "configDirectory": "/bnd/aqd-a/treatment-noscrub/home/.claude",
+      "consoleProfileSignInOffered": true,
+      "loggedIn": true,
+      "loginExpiresAt": null,
+      "projectsDirectory": "/bnd/aqd-a/treatment-noscrub/home/.claude/projects"
+    },
+    "canary_in_request_headers": false,
+    "canary_in_requests_to_model": false,
+    "canary_in_run_tree": [],
+    "canary_in_stderr": false,
+    "canary_in_temp": [],
+    "canary_in_transcript": false,
+    "checks": {
+      "activation": "AVAILABLE",
+      "auxiliary_models": [],
+      "cli_version": "2.1.330",
+      "cwd": "/bnd/aqd-a/treatment-noscrub/project",
+      "effort_reported": null,
+      "invalid_reasons": [
+        "permission mode 'acceptEdits'",
+        "session not served by Anthropic (served_by_anthropic is not true)"
+      ],
+      "invoked": true,
+      "model_ok": true,
+      "models_in_usage": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "skill_text_loaded": true,
+      "skill_tool_offered": true,
+      "skills_available": [
+        "aqd-arm:code-discipline",
+        "doctor"
+      ],
+      "tool_counts": {
+        "Bash": 6,
+        "Glob": 1,
+        "Grep": 1,
+        "Read": 5,
+        "Skill": 1,
+        "Write": 1
+      },
+      "tools": [
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Skill",
+        "Write"
+      ],
+      "valid": false
+    },
+    "duration_seconds": 0.8,
+    "exit_code": 0,
+    "group": "treatment",
+    "probes": {
+      "bash_env": {
+        "canary": false,
+        "is_error": false,
+        "output": "bash_env_token_vars=0"
+      },
+      "bash_links": {
+        "canary": false,
+        "is_error": false,
+        "output": "links_ok"
+      },
+      "bash_namespace": {
+        "canary": false,
+        "is_error": false,
+        "output": "nprocs=9 pid1=bash ppid_comm=claude uid=999"
+      },
+      "bash_proc_environ": {
+        "canary": false,
+        "is_error": false,
+        "output": "/bin/bash: line 1: /proc/1/environ: Permission denied\n/bin/bash: line 1: /proc/373/environ: Permission denied\n/bin/bash: line 1: /proc/382/environ: Permission denied\n/bin/bash: line 1: /proc/8/environ: Permission denied\nproc_environ_total=6 readable=2 with_token=1"
+      },
+      "bash_self_environ": {
+        "canary": false,
+        "is_error": false,
+        "output": "bash_self_environ_token=0"
+      },
+      "bash_works": {
+        "canary": false,
+        "is_error": false,
+        "output": "bash_ok 42"
+      },
+      "glob_config_dir": {
+        "canary": false,
+        "is_error": true,
+        "output": "/bnd/aqd-a/treatment-noscrub/home/.claude is outside /bnd/aqd-a/treatment-noscrub/project; --restricted confines the file tools to the working directory."
+      },
+      "grep_proc_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_proc_dotdot_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/self/../self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_proc_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_proc_thread_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "<tool_use_error>Cannot read '/proc/thread-self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "read_symlink_to_pid1_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "/bnd/aqd-a/treatment-noscrub/project/env_link_pid1 resolves through a symlink to /proc/1/environ, which is outside /bnd/aqd-a/treatment-noscrub/project; --restricted confines the file tools to the working directory."
+      },
+      "read_symlink_to_self_environ": {
+        "canary": false,
+        "is_error": true,
+        "output": "/bnd/aqd-a/treatment-noscrub/project/env_link resolves through a symlink to /proc/384/environ, which is outside /bnd/aqd-a/treatment-noscrub/project; --restricted confines the file tools to the working directory."
+      },
+      "skill_invoke": {
+        "canary": false,
+        "is_error": null,
+        "output": "Launching skill: code-discipline"
+      },
+      "write_project": {
+        "canary": false,
+        "is_error": null,
+        "output": "The file /bnd/aqd-a/treatment-noscrub/project/notes.txt has been updated successfully. (file state is current in your context \u2014 no need to Read it back)"
+      }
+    },
+    "processes_left_after_exit": 0,
+    "request_paths": [
+      "/v1/messages?beta=true"
+    ],
+    "scrub": "0",
+    "session": "treatment-noscrub",
+    "status": "idle"
+  },
+  {
+    "auth_exit": 0,
+    "auth_status": {
+      "analyticsDisabled": true,
+      "apiProvider": "firstParty",
+      "authMethod": "oauth_token",
+      "configDirectory": "/bnd/aqd-b/timeout/home/.claude",
+      "consoleProfileSignInOffered": true,
+      "loggedIn": true,
+      "loginExpiresAt": null,
+      "projectsDirectory": "/bnd/aqd-b/timeout/home/.claude/projects"
+    },
+    "canary_in_request_headers": false,
+    "canary_in_requests_to_model": false,
+    "canary_in_run_tree": [],
+    "canary_in_stderr": false,
+    "canary_in_temp": [],
+    "canary_in_transcript": false,
+    "checks": {
+      "activation": "NOT_APPLICABLE",
+      "auxiliary_models": [],
+      "cli_version": "2.1.330",
+      "cwd": "/bnd/aqd-b/timeout/project",
+      "effort_reported": null,
+      "invalid_reasons": [
+        "session not served by Anthropic (served_by_anthropic is not true)"
+      ],
+      "invoked": false,
+      "model_ok": true,
+      "models_in_usage": [],
+      "result_subtype": null,
+      "skill_text_loaded": false,
+      "skill_tool_offered": true,
+      "skills_available": [
+        "doctor"
+      ],
+      "tool_counts": {
+        "Bash": 1
+      },
+      "tools": [
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Skill",
+        "Write"
+      ],
+      "valid": false
+    },
+    "duration_seconds": 15.2,
+    "exit_code": 143,
+    "group": "control",
+    "probes": {
+      "wait": {
+        "canary": false,
+        "is_error": true,
+        "output": "Exit code 137"
+      }
+    },
+    "processes_left_after_exit": 0,
+    "request_paths": [
+      "/v1/messages?beta=true"
+    ],
+    "scrub": "1",
+    "session": "timeout",
+    "status": "timeout"
+  }
+]

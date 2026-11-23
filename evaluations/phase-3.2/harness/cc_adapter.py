@@ -14,17 +14,20 @@ schedule (schedule.py), immutable manifests (manifest.py), OS-user isolation and
     cc_adapter.py check-auth     --status-json F --out F        # check saved `claude auth status --json` output
     cc_adapter.py auth-status    --claude BIN --env-file F --secret-file F --out F [--as-user U --wrapper W]
     cc_adapter.py write-settings --out F
-    cc_adapter.py argv           --claude BIN --model REF --settings F --max-turns N
+    cc_adapter.py argv           --claude BIN --model REF --settings F --max-turns N --plugin-dir D
     cc_adapter.py run            --claude BIN --model REF --settings F --max-turns N --prompt-file F \
-                                 --env-file F --secret-file F --timeout S --out-dir D --project DIR [--as-user USER]
-    cc_adapter.py check-transcript --transcript F --group G --model REF --project DIR --driver-result F --out F
+                                 --env-file F --secret-file F --timeout S --out-dir D --project DIR --plugin-dir D \
+                                 [--as-user USER]
+    cc_adapter.py check-transcript --transcript F --group G --model REF --project DIR --plugin-dir D \
+                                 --driver-result F --out F
     cc_adapter.py check-approval --approval F --run-id R         # the owner named this run id in writing
     cc_adapter.py scan-secret    --secret-file F --root D        # exit 21 if the token is in any file under D
     cc_adapter.py fingerprint    --checkout D --claude BIN --sealed D --pristine D --max-turns N --timeout S --out F
     cc_adapter.py check-preflight --preflight F --checkout D --claude BIN --sealed D --pristine D --max-turns N \
                                  --timeout S [--max-age-hours H]  # the launcher's gate
 
-Treatment = the canonical skill is AVAILABLE (a user skill in the run's own CLAUDE_CONFIG_DIR). The prompt is
+Treatment = the canonical skill is AVAILABLE (inside the run's arm plugin, given with --plugin-dir; the same path
+in both arms, empty of skills in control). The prompt is
 byte-identical in both arms; nothing names or forces the skill. Invocation (a Skill tool_use naming it) and
 loading (its text in the transcript) are recorded separately and are NOT validity conditions: the estimand is the
 effect of availability. Whether the agent FOLLOWED the skill is not measured here.
@@ -57,6 +60,22 @@ CODING_TOOLS = ("Bash", "Read", "Edit", "Write", "Glob", "Grep")
 # withheld"), the Skill tool included. It is offered and allowed in BOTH arms so the command stays identical.
 SKILL_TOOL = "Skill"
 SESSION_TOOLS = CODING_TOOLS + (SKILL_TOOL,)
+# Skill delivery. Observed with the real 2.1.330 CLI (offline, local mock API; phase-3.3/boundary): under
+# --restricted a user skill in CLAUDE_CONFIG_DIR/skills is NOT loaded ("Unknown skill"), while a plugin given with
+# --plugin-dir is. Both arms get the SAME --plugin-dir path; only treatment's plugin contains the skill, which the
+# CLI then lists as "aqd-arm:code-discipline".
+ARM_PLUGIN = "aqd-arm"
+ARM_PLUGIN_SOURCE = f"{ARM_PLUGIN}@inline"
+# Built-in plugins 2.1.330 loads by default; turned off in both arms through --settings (observed to work).
+BUILTIN_PLUGINS = ("cc-plugin-agents-md@builtin", "cc-plugin-privacy@builtin", "cc-plugin-plugin-authoring@builtin")
+# A built-in skill that stays listed with the above off and bundled skills disabled; identical in both arms.
+BASE_SKILLS = ("doctor",)
+# Observed: with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 the session reports permissionMode "default" although
+# --permission-mode acceptEdits is passed; Edit/Write are still allowed through --allowedTools.
+EXPECTED_PERMISSION_MODE = "default"
+# The Bash tool's answer when the scrub sandbox cannot start (2.1.330: e.g. socat or bubblewrap missing, or user
+# namespaces refused). Every Bash call fails; the run would otherwise be a silent valid failure.
+SANDBOX_FAILURE = "Sandbox is required but failed to initialize"
 FORBIDDEN_TOOLS = ("WebFetch", "WebSearch")
 OAUTH_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
@@ -89,6 +108,7 @@ HARNESS_SETTINGS = {
     "syncClaudeAiPlugins": False,
     "switchModelsOnFlag": False,
     "disableBundledSkills": True,
+    "enabledPlugins": {p: False for p in BUILTIN_PLUGINS},
     "permissions": {"allow": list(SESSION_TOOLS), "deny": list(FORBIDDEN_TOOLS)},
 }
 
@@ -304,8 +324,8 @@ def model_parts(model_ref):
     return model_id, effort
 
 
-def build_argv(claude, model_ref, settings_path, max_turns):
-    """The full command. It does not depend on the group: the arms differ only in the run's skills directory."""
+def build_argv(claude, model_ref, settings_path, max_turns, plugin_dir):
+    """The full command. It does not depend on the group: the arms differ only in the CONTENT of plugin_dir."""
     model_id, effort = model_parts(model_ref)
     if not isinstance(max_turns, int) or isinstance(max_turns, bool) or max_turns < 1:
         raise AdapterError("max_turns must be a positive int")
@@ -313,7 +333,7 @@ def build_argv(claude, model_ref, settings_path, max_turns):
             "--settings", settings_path, "--strict-mcp-config",
             "--tools", ",".join(SESSION_TOOLS), "--allowedTools", ",".join(SESSION_TOOLS),
             "--permission-mode", "acceptEdits", "--output-format", "stream-json", "--verbose",
-            "--max-turns", str(max_turns), "--no-session-persistence"]
+            "--max-turns", str(max_turns), "--no-session-persistence", "--plugin-dir", plugin_dir]
 
 
 # ------------------------------------------------------------------ driver
@@ -434,7 +454,7 @@ def _end_group(proc):
 
 
 def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secret_file, timeout, out_dir,
-        project, as_user=None, wrapper=None):
+        project, plugin_dir, as_user=None, wrapper=None):
     """Run one session. The token travels as the first line of cc_exec.sh's stdin (then the prompt), never in argv
     or a file the agent can read. With as_user, the command runs as that OS user with exactly the checked
     environment (sudo -u USER env -i ...; the token is not in that list). Writes transcript.ndjson, stderr.txt and
@@ -458,7 +478,8 @@ def run(claude, model_ref, settings_path, max_turns, prompt_file, env_file, secr
         result["refused"] = problems
         _write(os.path.join(out_dir, "driver-result.json"), result)
         return 3
-    command = build_command(build_argv(claude, model_ref, settings_path, max_turns), env, as_user, wrapper, project)
+    command = build_command(build_argv(claude, model_ref, settings_path, max_turns, plugin_dir), env, as_user, wrapper,
+                            project)
     started = time.monotonic()
     with open(os.path.join(out_dir, "transcript.ndjson"), "wb") as out, \
             open(os.path.join(out_dir, "stderr.txt"), "wb") as err:
@@ -540,6 +561,18 @@ def result_outcome(result):
     return None
 
 
+# The CLI's own test for "the sandbox could not start": the command's output is ONLY bwrap/sandbox-exec error lines
+# (2.1.330 binary text), optionally after the "Exit code N" line the Bash tool prepends.
+_SANDBOX_ONLY = re.compile(r"^(?:Exit code \d+\n)?(?:\s*(?:bwrap|sandbox-exec): [^\n]*(?:\n|$))+\s*$")
+
+
+def _is_sandbox_failure(content):
+    if isinstance(content, list):
+        content = "".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+    text = str(content or "")
+    return SANDBOX_FAILURE in text or bool(_SANDBOX_ONLY.match(text))
+
+
 def _blocks(event):
     content = (event.get("message") or {}).get("content")
     return content if isinstance(content, list) else []
@@ -550,7 +583,7 @@ def _skill_target(tool_input):
     return name.split(":")[-1].lstrip("/")
 
 
-def analyse_transcript(path, group, model_ref, project, driver_status):
+def analyse_transcript(path, group, model_ref, project, driver_status, plugin_dir):
     """export-checks.json for run_status.py (same keys as export_checks.py), from a stream-json transcript.
     driver_status is driver-result.json's status: "idle" (the session ended) or "timeout" (the harness killed it;
     no result event is expected, a truncated final line is tolerated, and the outcome stays a valid timeout)."""
@@ -595,12 +628,17 @@ def analyse_transcript(path, group, model_ref, project, driver_status):
     report["effort_reported"] = init.get("effort")  # optional in the SDK type; absent means "not verified"
     if "effort" in init and init.get("effort") != effort:
         reasons.append(f"session effort {init.get('effort')!r} is not the pinned {effort}")
-    if init.get("permissionMode") != "acceptEdits":
+    if init.get("permissionMode") != EXPECTED_PERMISSION_MODE:
         reasons.append(f"permission mode {init.get('permissionMode')!r}")
+    if init.get("served_by_anthropic") is not True:  # init field in 2.1.330 (false against a non-Anthropic endpoint)
+        reasons.append("session not served by Anthropic (served_by_anthropic is not true)")
     if init.get("mcp_servers") != []:
         reasons.append("MCP servers were loaded")
-    if init.get("plugins") != []:
-        reasons.append("plugins were loaded")
+    plugins = init.get("plugins")
+    report["plugins"] = plugins
+    if not isinstance(plugins, list) or [(p.get("source"), p.get("path")) for p in plugins if isinstance(p, dict)] \
+            != [(ARM_PLUGIN_SOURCE, plugin_dir)] or len(plugins) != 1:
+        reasons.append("plugins are not exactly the run's arm plugin")
     tools = init.get("tools")
     report["tools"] = tools
     if not isinstance(tools, list) or any(t in FORBIDDEN_TOOLS or str(t).startswith("mcp__") for t in tools) \
@@ -611,8 +649,8 @@ def analyse_transcript(path, group, model_ref, project, driver_status):
     report["skills_available"] = skills
     if group == "treatment" and not report["skill_tool_offered"]:
         reasons.append("available skills: the Skill tool is not offered, so the skill cannot be loaded")
-    expected_skills = [c.SKILL_ID] if group == "treatment" else []
-    if not isinstance(skills, list) or sorted(str(s).split(":")[-1] for s in skills) != expected_skills:
+    expected_skills = sorted(BASE_SKILLS + ((f"{ARM_PLUGIN}:{c.SKILL_ID}",) if group == "treatment" else ()))
+    if not isinstance(skills, list) or sorted(str(s) for s in skills) != expected_skills:
         reasons.append(f"available skills {skills!r}, expected exactly {expected_skills}")
     commands = init.get("slash_commands")
     if group == "control" and isinstance(commands, list) and any(str(x).split(":")[-1].lstrip("/") == c.SKILL_ID
@@ -643,6 +681,13 @@ def analyse_transcript(path, group, model_ref, project, driver_status):
             last_retry = index
         elif event.get("type") == "assistant":
             last_turn = index
+    sandbox_failures = sum(1 for e in events if e.get("type") == "user"
+                           for b in _blocks(e) if isinstance(b, dict) and b.get("type") == "tool_result"
+                           and _is_sandbox_failure(b.get("content")))
+    report["sandbox_failures"] = sandbox_failures
+    if sandbox_failures:
+        report["errors"].append(f"the Bash sandbox could not start ({sandbox_failures} tool result(s))")
+        reasons.append("the Bash sandbox could not start (infrastructure failure, never a model outcome)")
     if timed_out and not result and last_retry > last_turn:
         report["errors"].append("timed out while retrying provider errors")
     report["max_turns_reached"] = False
@@ -729,6 +774,7 @@ def main(argv=None):
         s.add_argument("--model", required=True)
         s.add_argument("--settings", required=True)
         s.add_argument("--max-turns", type=int, required=True)
+        s.add_argument("--plugin-dir", required=True, help="the run's arm plugin (same path in both arms)")
         if name == "run":
             s.add_argument("--prompt-file", required=True)
             s.add_argument("--env-file", required=True)
@@ -743,6 +789,7 @@ def main(argv=None):
     s.add_argument("--group", choices=("control", "treatment"), required=True)
     s.add_argument("--model", required=True)
     s.add_argument("--project", required=True)
+    s.add_argument("--plugin-dir", required=True)
     s.add_argument("--driver-result", required=True)
     s.add_argument("--out", required=True)
     s = sub.add_parser("check-approval")
@@ -786,11 +833,12 @@ def main(argv=None):
             _write(args.out, HARNESS_SETTINGS)
             return 0
         if args.command == "argv":
-            print(json.dumps(build_argv(args.claude, args.model, args.settings, args.max_turns)))
+            print(json.dumps(build_argv(args.claude, args.model, args.settings, args.max_turns, args.plugin_dir)))
             return 0
         if args.command == "run":
             return run(args.claude, args.model, args.settings, args.max_turns, args.prompt_file, args.env_file,
-                       args.secret_file, args.timeout, args.out_dir, args.project, args.as_user, args.wrapper)
+                       args.secret_file, args.timeout, args.out_dir, args.project, args.plugin_dir, args.as_user,
+                       args.wrapper)
         if args.command == "check-approval":
             try:
                 with open(args.approval, encoding="utf-8") as handle:
@@ -827,7 +875,8 @@ def main(argv=None):
                 driver_status = (json.load(handle) or {}).get("status")
         except (OSError, ValueError, AttributeError):
             driver_status = None
-        report = analyse_transcript(args.transcript, args.group, args.model, args.project, driver_status)
+        report = analyse_transcript(args.transcript, args.group, args.model, args.project, driver_status,
+                                    args.plugin_dir)
         _write(args.out, report)
         print(f"cc_adapter: valid={report['valid']} activation={report['activation']} invoked={report['invoked']}")
         return 0 if report["valid"] else 1

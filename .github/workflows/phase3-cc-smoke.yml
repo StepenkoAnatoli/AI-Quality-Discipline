@@ -1,0 +1,200 @@
+name: Phase 3.3 native Claude Code smoke (manual; mock only)
+
+# NO SECRET IS REFERENCED ANYWHERE IN THIS FILE, and no job can authenticate or reach a model.
+#
+#   pull_request        -> the "mock" job, on the PR head: CI evidence for the native harness.
+#   workflow_dispatch   -> mode "mock": the same job on the commit pinned below (AQD_TEST_SHA).
+#                          mode "live-security-probe": REFUSES. The live probe is designed in
+#                          evaluations/phase-3.3/SMOKE-WORKFLOW.md and is not implemented or authorised.
+#
+# GitHub registers workflow_dispatch only for a workflow file on the DEFAULT branch; a dispatched run uses the
+# workflow file at the dispatched ref. The bootstrap (one reviewed file on the default branch, with AQD_TEST_SHA
+# pinned to a reviewed commit) is described in SMOKE-WORKFLOW.md. On this PR branch AQD_TEST_SHA is the all-zero
+# placeholder, so a dispatch of this copy refuses.
+#
+# The mock job:
+#   1. checks out exactly one commit (persist-credentials: false) and verifies it and the canonical skill hash;
+#   2. downloads the pinned Claude Code linux-x64 package and verifies the tarball AND binary SHA-256 before use;
+#   3. temporarily allows unprivileged user namespaces (the Ubuntu 24.04 AppArmor restriction blocks bubblewrap,
+#      which the CLI's subprocess env scrub needs; anthropics/claude-code-action does the same) and restores the
+#      restriction in a final always() step;
+#   4. runs, in disposable containers with --network none:
+#      a. the real launch-run-cc.sh against a MOCK CLI with a SYNTHETIC token (26 scenarios), and
+#      b. the REAL pinned CLI against a LOCAL mock Messages API with a random FAKE canary token (credential
+#         boundary: Bash env scrub, /proc, Read/Grep on /proc paths, skill delivery, timeout);
+#   5. gates on check_results.py and check_boundary.py, and uploads only the redacted summaries (3-day retention).
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "mock = no secret, no model request. live-security-probe = refuses (not authorised)."
+        type: choice
+        options: [mock, live-security-probe]
+        default: mock
+  pull_request:
+    paths:
+      - "evaluations/phase-3.2/harness/**"
+      - "evaluations/phase-3.3/**"
+      - "skills/**"
+      - ".github/workflows/phase3-cc-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase3-cc-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Immutable references, reviewed with this file. Placeholder here: a dispatch of this copy refuses.
+  AQD_TEST_SHA: "0000000000000000000000000000000000000000"
+  AQD_CLI_VERSION: "2.1.330"
+  AQD_CLI_TARBALL: "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.330.tgz"
+  AQD_CLI_TARBALL_SHA256: "40ff30c5768723958032132065e6fcdd1e2dc3a2b3ff9a0bf36c6620ef1c40ef"
+  AQD_CLI_SHA256: "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb"
+  AQD_CANONICAL_SKILL_SHA256: "d050d00fa8564b08cac71ca221368568420c731c830ef19667a760d5f7ebc842"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  mock:
+    if: github.repository == 'StepenkoAnatoli/AI-Quality-Discipline' && (github.event_name == 'pull_request' || inputs.mode == 'mock')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve the one commit this run may use
+        id: ref
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == pull_request ]]; then sha="$PR_SHA"; else sha="$AQD_TEST_SHA"; fi
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ || "$sha" == 0000000000000000000000000000000000000000 ]]; then
+            echo "STOP: no pinned commit (AQD_TEST_SHA is the placeholder)"; exit 1
+          fi
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+      - name: Check out exactly that commit (no credentials persisted)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.ref.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify the commit and the canonical skill
+        env:
+          SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$SHA" ]] || { echo "STOP: checkout is not the pinned commit"; exit 1; }
+          echo "$AQD_CANONICAL_SKILL_SHA256  skills/code-discipline/SKILL.md" | sha256sum -c --quiet \
+            || { echo "STOP: the canonical skill changed"; exit 1; }
+          echo "commit and canonical skill verified"
+
+      - name: Fetch the pinned CLI and verify the tarball and binary SHA-256 before any use
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/aqd-cli"; mkdir -p "$d"
+          curl -fsSL --proto '=https' --tlsv1.2 "$AQD_CLI_TARBALL" -o "$d/cli.tgz"
+          echo "$AQD_CLI_TARBALL_SHA256  $d/cli.tgz" | sha256sum -c --quiet || { echo "STOP: tarball hash"; exit 1; }
+          tar -xzf "$d/cli.tgz" -C "$d" package/claude
+          echo "$AQD_CLI_SHA256  $d/package/claude" | sha256sum -c --quiet || { echo "STOP: binary hash"; exit 1; }
+          sudo install -d -o root -g root -m 0755 /opt/aqd-cc
+          sudo install -o root -g root -m 0755 "$d/package/claude" /opt/aqd-cc/claude
+          rm -rf "$d"
+          echo "Claude Code $AQD_CLI_VERSION verified ($AQD_CLI_SHA256)"
+
+      - name: Host user namespaces as found, then the temporary AppArmor change (restored at the end)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap socat >/dev/null
+          sudo useradd -M -s /usr/sbin/nologin aqd-probe
+          sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true
+          if sudo -u aqd-probe env -i PATH=/usr/bin:/bin bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true; then
+            echo "as found: unprivileged bubblewrap namespaces WORK"
+          else
+            echo "as found: unprivileged bubblewrap namespaces REFUSED"
+          fi
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          sudo -u aqd-probe env -i PATH=/usr/bin:/bin bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true \
+            && echo "after the change: unprivileged bubblewrap namespaces WORK"
+
+      - name: Build the disposable image
+        run: docker build -q -t aqd-dryrun -f evaluations/phase-3.3/dryrun/Dockerfile evaluations/phase-3.3/dryrun
+
+      - name: Gate unit tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s evaluations/phase-3.3/dryrun -p "test_check_results.py"
+          python3 -m unittest discover -s evaluations/phase-3.3/boundary -p "test_check_boundary.py"
+
+      - name: Launcher dry run (mock CLI, synthetic token, no network, non-root operator)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aqd-out/dryrun"; mkdir -p "$out"
+          docker run --rm --network none --privileged --hostname aqd --add-host aqd:127.0.0.1 \
+            -v "$PWD:/src:ro" -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/dryrun/dryrun-cc.sh
+          docker run --rm --network none --hostname aqd --add-host aqd:127.0.0.1 -e DRYRUN_MODE=preflight-only \
+            -v "$PWD:/src:ro" -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/dryrun/dryrun-cc.sh
+          python3 evaluations/phase-3.3/dryrun/check_results.py "$out"/dryrun-results-*.ndjson
+
+      - name: Credential boundary of the REAL CLI (local mock API, fake canary token, no network)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aqd-out/boundary"; mkdir -p "$out"
+          for mode in privileged unprivileged; do
+            flag=""; [[ "$mode" == privileged ]] && flag="--privileged"
+            # shellcheck disable=SC2086
+            docker run --rm --network none $flag --hostname aqd --add-host aqd:127.0.0.1 -v "$PWD:/src:ro" \
+              -v /opt/aqd-cc:/opt/cc:ro -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/boundary/run-boundary.sh "$mode"
+          done
+          python3 evaluations/phase-3.3/boundary/check_boundary.py "$out"
+
+      - name: Keep only redacted summaries
+        if: always()
+        run: |
+          set -euo pipefail
+          up="$RUNNER_TEMP/aqd-upload"; mkdir -p "$up"
+          if [[ -d "$RUNNER_TEMP/aqd-out" ]]; then
+            (cd "$RUNNER_TEMP/aqd-out" && find . \( -name 'summary.json' -o -name 'dryrun-results-*.ndjson' \) \
+              -exec cp --parents {} "$up" \;)
+          fi
+          if grep -rqE 'sk-ant-(oat|api)[0-9]{2}-[A-Za-z0-9_-]{20,}' "$up"; then
+            # only synthetic tokens exist in this job; a token-shaped string in an upload is still refused
+            grep -rlE 'sk-ant-(oat|api)[0-9]{2}-[A-Za-z0-9_-]{20,}' "$up" | xargs -r rm -f
+            echo "STOP: a token-shaped string was found in the summaries; they were not uploaded"; exit 1
+          fi
+
+      - name: Upload the redacted summaries (3-day retention)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aqd-cc-mock-summaries
+          path: ${{ runner.temp }}/aqd-upload
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Restore the AppArmor user-namespace restriction
+        if: always()
+        run: |
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+          fi
+
+  live-security-probe:
+    # Designed in evaluations/phase-3.3/SMOKE-WORKFLOW.md; NOT implemented and NOT authorised. No environment and no
+    # secret is referenced, so nothing here can authenticate. It refuses unconditionally.
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'live-security-probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Refuse
+        run: |
+          echo "STOP: the live security probe is not implemented or authorised in this workflow version"
+          exit 1

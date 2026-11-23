@@ -7,8 +7,10 @@ It never contacts any network host. It answers `--version` and `auth status --js
      (can it write immutable files, replace the skills directory, read the operator store or the other arm, read
      the token through /proc from a child process);
   2. edits the one mutable SMOKE file, as an agent would;
-  3. replays a SYNTHETIC stream-json transcript whose init event reflects the real working directory and the real
-     contents of $CLAUDE_CONFIG_DIR/skills, unless the scenario deliberately falsifies a field.
+  3. replays a SYNTHETIC stream-json transcript in the init shape the REAL 2.1.330 CLI emits (observed offline
+     against a local mock API, phase-3.3/boundary): the real working directory, the plugin given with --plugin-dir
+     and the skills it really contains ("aqd-arm:<name>", plus the built-in "doctor"), permissionMode "default",
+     served_by_anthropic true; unless the scenario deliberately falsifies a field.
 
 The scenario comes from scenario.json next to this file (root-owned; written by dryrun-cc.sh). The token's value is
 never printed: only "present"/"matches" booleans. The probe is emitted as a system event of subtype "mock_probe",
@@ -66,6 +68,7 @@ def probe():
                             tmp_hits.append(name)
                 except OSError:
                     pass
+    plugin = sys.argv[sys.argv.index("--plugin-dir") + 1] if "--plugin-dir" in sys.argv else "/nonexistent"
     renamed = can(lambda: os.rename(skills, skills + ".moved"))
     if renamed:
         os.rename(skills + ".moved", skills)
@@ -79,7 +82,9 @@ def probe():
         "prompt_sha256": hashlib.sha256(PROMPT).hexdigest(),
         "can_write_TASK_md": os.access("TASK.md", os.W_OK),
         "can_write_notes_txt": os.access("notes.txt", os.W_OK),
-        "can_create_in_skills": can(lambda: open(os.path.join(skills, "planted.md"), "w").close()),
+        "can_create_in_skills": can(lambda: open(os.path.join(skills, "planted.md"), "w").close())
+        or can(lambda: open(os.path.join(plugin, "skills", "planted.md"), "w").close()),
+        "can_rename_arm_plugin": can(lambda: os.rename(plugin, plugin + ".moved")),
         "can_rename_skills_dir": renamed,
         "can_create_in_config_dir": can(lambda: open(os.path.join(config, ".mock-state"), "w").close()),
         "skills_dir_listing": sorted(os.listdir(skills)) if os.path.isdir(skills) else None,
@@ -108,15 +113,18 @@ def main():
     PROMPT = sys.stdin.buffer.read()
     s = SCENARIO
     model = s["model"]
-    skills_dir = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", "/nonexistent"), "skills")
+    plugin = args[args.index("--plugin-dir") + 1] if "--plugin-dir" in args else "/nonexistent"
+    skills_dir = os.path.join(plugin, "skills")
     real_skills = sorted(n for n in (os.listdir(skills_dir) if os.path.isdir(skills_dir) else [])
                          if os.path.isfile(os.path.join(skills_dir, n, "SKILL.md")))
+    listed = sorted([f"aqd-arm:{n}" for n in real_skills] + ["doctor"])
     emit({"type": "system", "subtype": "mock_probe", "probe": probe()})
     init = {"type": "system", "subtype": "init", "session_id": "mock-session", "uuid": "u0", "apiKeySource": "none",
             "claude_code_version": "2.1.330", "cwd": os.getcwd(), "model": s.get("init_model", model),
             "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Skill"], "mcp_servers": [],
-            "permissionMode": "acceptEdits", "slash_commands": list(real_skills), "output_style": "default",
-            "skills": list(real_skills), "plugins": []}
+            "permissionMode": "default", "served_by_anthropic": True, "slash_commands": listed + ["clear"],
+            "output_style": "default", "skills": listed,
+            "plugins": [{"name": "aqd-arm", "path": plugin, "source": "aqd-arm@inline", "version": "1.0.0"}]}
     init.update(s.get("init_overrides") or {})
     emit(init)
     if s.get("background_child"):  # a leftover process in the session's group, as a Bash tool job would be

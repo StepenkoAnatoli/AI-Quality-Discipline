@@ -54,7 +54,7 @@ cp "$SEALED/credentials.env" "$HOME/credentials.good"
 
 # The expected command, from the adapter itself (what the mock compares its argv with).
 EXPECTED_ARGV="$(python3 "$H/cc_adapter.py" argv --claude "$MOCK" --model "$MODEL_REF" \
-    --settings /PLACEHOLDER --max-turns "$AQD_CC_MAX_TURNS")"
+    --settings /PLACEHOLDER --max-turns "$AQD_CC_MAX_TURNS" --plugin-dir /PLUGIN-PLACEHOLDER)"
 TOKEN_SHA="$(printf '%s' "$FAKE_TOKEN" | sha256sum | cut -d' ' -f1)"
 
 # scenario NAME GROUP JSON-OVERRIDES: write scenario.json, run the launcher on the next unused run of GROUP.
@@ -75,10 +75,10 @@ write_scenario() {  # write_scenario GROUP OVERRIDES-JSON ENV_LABEL RUN_ID
     local env="$3" other="env-a"
     [[ "$env" == "env-a" ]] && other="env-b"
     python3 - "$HOME/scenario.json" "$EXPECTED_ARGV" "$TOKEN_SHA" "$2" "$OPERATOR" "/aqd/$other" "$CHECKOUT" \
-        "/aqd/$env/runs/$4/cc-settings.json" <<'PY'
+        "/aqd/$env/runs/$4/cc-settings.json" "/aqd/$env/runs/$4/arm-plugin" <<'PY'
 import json, sys
-path, argv, sha, overrides, operator, other, checkout, settings = sys.argv[1:9]
-argv = [settings if a == "/PLACEHOLDER" else a for a in json.loads(argv)]
+path, argv, sha, overrides, operator, other, checkout, settings, plugin = sys.argv[1:10]
+argv = [settings if a == "/PLACEHOLDER" else plugin if a == "/PLUGIN-PLACEHOLDER" else a for a in json.loads(argv)]
 scenario = {"expected_argv": argv[1:], "token_sha256": sha, "model": "claude-opus-5-5",
             "operator_dir": operator, "other_env_dir": other, "checkout": checkout}
 scenario.update(json.loads(overrides))
@@ -174,8 +174,8 @@ scenario turn-limit              treatment valid  '{"result": ["error_max_turns"
 scenario auth-api-key            control   stop20 '{"auth": {"loggedIn": true, "authMethod": "api_key", "apiKeySource": "ANTHROPIC_API_KEY"}}'
 scenario wrong-model             treatment invalid '{"turn_model": "claude-haiku-5-5"}'
 scenario wrong-init-model        control   invalid '{"init_model": "claude-sonnet-5-5"}'
-scenario missing-skill           treatment invalid '{"init_overrides": {"skills": []}}'
-scenario unexpected-skill        control   invalid '{"init_overrides": {"skills": ["other-skill"]}}'
+scenario missing-skill           treatment invalid '{"init_overrides": {"skills": ["doctor"]}}'
+scenario unexpected-skill        control   invalid '{"init_overrides": {"skills": ["doctor", "other-skill"]}}'
 scenario wrong-cwd               control   invalid '{"init_overrides": {"cwd": "/root"}}'
 scenario corrupted-transcript    treatment invalid '{"corrupt": true}'
 scenario provider-error          control   invalid '{"result": ["error_during_execution", true], "exit": 1}'
@@ -209,8 +209,16 @@ write_scenario treatment '{"sleep": 8}' "$env" "$RUN"
 bash "$H/launch-run-cc.sh" "$RUN" >"$OUT/launcher-proc-probe-run.log" 2>&1 &
 LPID=$!
 user=aqd-a; other=aqd-b; [[ "$env" == env-b ]] && { user=aqd-b; other=aqd-a; }
-for _ in $(seq 1 40); do pid="$(pgrep -u "$user" -f mock-claude/claude | head -n 1 || true)"; [[ -n "$pid" ]] && break; sleep 0.25; done
-same="$(sudo -u "$user" cat "/proc/$pid/environ" 2>/dev/null | tr '\0' '\n' | grep -c '^CLAUDE_CODE_OAUTH_TOKEN=' || true)"
+# The session process is the one named "claude" (cc_exec.sh, which still has no token, also has the path in argv).
+pid=""; same=0
+for _ in $(seq 1 40); do
+    pid="$(pgrep -u "$user" -x claude | head -n 1 || true)"
+    if [[ -n "$pid" ]]; then
+        same="$(sudo -u "$user" cat "/proc/$pid/environ" 2>/dev/null | tr '\0' '\n' | grep -c '^CLAUDE_CODE_OAUTH_TOKEN=' || true)"
+        [[ "$same" -gt 0 ]] && break
+    fi
+    sleep 0.25
+done
 cross="$(sudo -u "$other" cat "/proc/$pid/environ" 2>/dev/null | tr '\0' '\n' | grep -c '^CLAUDE_CODE_OAUTH_TOKEN=' || true)"
 cmdline="$(tr '\0' ' ' <"/proc/${pid:-0}/cmdline" 2>/dev/null | grep -c 'sk-ant' || true)"
 sudo_pid="$(pgrep -f "sudo -n -u $user" | head -n 1 || true)"

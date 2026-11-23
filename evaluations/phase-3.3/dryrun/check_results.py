@@ -7,6 +7,20 @@ import json
 import sys
 
 
+# The exact scenario set and each scenario's expectation. A missing, duplicated or unexpected scenario fails.
+EXPECTED = {
+    "control-ok": "valid", "treatment-ok-invoked": "valid", "treatment-not-invoked": "valid", "timeout": "valid",
+    "timeout-with-child": "valid", "turn-limit": "valid", "proc-probe-run": "valid",
+    "auth-api-key": "stop20", "wrong-token": "stop20", "api-key-in-token-slot": "stop20", "leaked-token": "stop21",
+    "wrong-model": "invalid", "wrong-init-model": "invalid", "missing-skill": "invalid", "unexpected-skill": "invalid",
+    "wrong-cwd": "invalid", "corrupted-transcript": "invalid", "provider-error": "invalid",
+    "missing-credentials": "invalid",
+    "unapproved-run": "refused", "binary-changed-after-preflight": "refused", "stale-preflight": "refused",
+    "opencode-preflight-only": "refused", "not-a-dry-run-timeout": "refused",
+    "timeout-changed-after-preflight": "refused", "stop-file-present": "refused",
+}
+MODES = ("full", "preflight-only")
+
 # Each scenario must fail (or pass) for ITS reason, not merely end with the right exit code.
 REASONS = {
     "timeout": lambda r: r["timed_out"] is True and r["driver_status"] == "timeout",
@@ -21,8 +35,8 @@ REASONS = {
     "api-key-in-token-slot": lambda r: _reason(r, "api_checks exit 3"),
     "wrong-model": lambda r: _reason(r, "not served by the pinned model"),
     "wrong-init-model": lambda r: _reason(r, "session model"),
-    "missing-skill": lambda r: _reason(r, "available skills []"),
-    "unexpected-skill": lambda r: _reason(r, "available skills ['other-skill']"),
+    "missing-skill": lambda r: _reason(r, "available skills ['doctor']"),
+    "unexpected-skill": lambda r: _reason(r, "available skills ['doctor', 'other-skill']"),
     "wrong-cwd": lambda r: _reason(r, "working directory"),
     "corrupted-transcript": lambda r: _reason(r, "not JSON objects"),
     "provider-error": lambda r: _reason(r, "provider/API error"),
@@ -89,9 +103,9 @@ def main(paths):
             failures.append("the token is in a process command line")
         probe = row.get("probe")
         if probe:
-            bad = [k for k in ("can_write_TASK_md", "can_create_in_skills", "can_rename_skills_dir",
+            bad = [k for k in ("can_write_TASK_md", "can_create_in_skills", "can_rename_skills_dir", "can_rename_arm_plugin",
                                "can_read_operator_store", "can_read_other_arm", "can_read_checkout",
-                               "can_read_root_home") if probe[k]]
+                               "can_read_root_home") if probe.get(k)]
             bad += [k for k in ("argv_matches_expected", "token_matches", "can_write_notes_txt") if not probe[k]]
             if not probe["cwd"].endswith("/project"):
                 bad.append("cwd")
@@ -107,6 +121,29 @@ def main(paths):
         if mode == "full" and pf and pf[0] != 0:
             failures.append("full mode: preflight did not pass")
     scenarios = [r for r in rows if "scenario" in r]
+    names = [r["scenario"] for r in scenarios]
+    for name in sorted(set(EXPECTED) - set(names)):
+        failures.append(f"missing scenario {name}")
+    for name in sorted({n for n in names if names.count(n) > 1}):
+        failures.append(f"duplicated scenario {name}")
+    for row in scenarios:
+        if row["scenario"] in EXPECTED and row["expect"] != EXPECTED[row["scenario"]]:
+            failures.append(f"{row['scenario']}: declared expectation {row['expect']!r}, required "
+                            f"{EXPECTED[row['scenario']]!r}")
+        if row["scenario"] not in EXPECTED:
+            failures.append(f"unexpected scenario {row['scenario']}")
+    # every run that started (all but refusals) has exactly one cleanup record
+    cleanups = [r["cleanup_for"] for r in rows if "cleanup_for" in r]
+    for row in scenarios:
+        if EXPECTED.get(row["scenario"]) != "refused" and cleanups.count(row["run_id"]) != 1:
+            failures.append(f"{row['scenario']}: {cleanups.count(row['run_id'])} cleanup records, expected 1")
+    for mode in MODES:
+        for key in ("bwrap_userns_as_agent", "preflight_exit"):
+            if sum(1 for r in rows if r.get("mode") == mode and key in r) != 1:
+                failures.append(f"mode {mode}: expected exactly one {key} record")
+    for key in ("proc_probe", "out_dir_token_scan"):
+        if sum(1 for r in rows if key in r) != 1:
+            failures.append(f"expected exactly one {key} record")
     print(f"{len(scenarios)} scenarios, {len(failures)} failure(s)")
     for f in failures:
         print("FAIL:", f)

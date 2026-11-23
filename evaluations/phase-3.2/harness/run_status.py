@@ -55,8 +55,11 @@ def _load(path):
 
 
 def expected_home_listing(group, interface="opencode"):
-    if interface == "claude-code":
-        return ["code-discipline", "code-discipline/SKILL.md"] if group == "treatment" else []
+    if interface == "claude-code":  # the arm plugin (--plugin-dir); CLAUDE_CONFIG_DIR/skills must stay empty
+        listing = ["arm-plugin/.claude-plugin", "arm-plugin/.claude-plugin/plugin.json", "arm-plugin/skills"]
+        if group == "treatment":
+            listing += ["arm-plugin/skills/code-discipline", "arm-plugin/skills/code-discipline/SKILL.md"]
+        return sorted(listing)
     listing = ["opencode", "opencode/opencode.jsonc"]
     if group == "treatment":
         listing += ["opencode/skills", "opencode/skills/code-discipline", "opencode/skills/code-discipline/SKILL.md"]

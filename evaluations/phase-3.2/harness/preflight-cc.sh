@@ -40,6 +40,8 @@ rm -f "$REPORT"
 [[ ! -e /etc/claude-code ]] || die "/etc/claude-code (managed settings) exists"
 [[ ! -e /etc/opencode ]] || die "/etc/opencode exists"
 command -v bwrap >/dev/null || die "bubblewrap is required (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB)"
+# Observed with the real 2.1.330 CLI: without socat the scrub sandbox cannot start and EVERY Bash call fails.
+command -v socat >/dev/null || die "socat is required (the CLI's subprocess sandbox needs it)"
 # bubblewrap installed is not enough: the agent users must be able to create the namespaces it needs. Where they
 # cannot (unprivileged containers; hosts that restrict unprivileged user namespaces, e.g. AppArmor on Ubuntu 24.04),
 # what Claude Code 2.1.330 does with SUBPROCESS_ENV_SCRUB is unverified (it may refuse every Bash call, which would
