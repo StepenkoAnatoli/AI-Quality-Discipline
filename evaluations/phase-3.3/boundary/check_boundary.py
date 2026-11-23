@@ -35,7 +35,35 @@ def _canary_anywhere(r):
     return where
 
 
+REPORT_KEYS = ("session", "group", "scrub", "exit_code", "status", "processes_left_after_exit", "auth_status",
+               "canary_in_transcript", "canary_in_requests_to_model", "canary_in_request_headers", "canary_in_stderr",
+               "canary_in_run_tree", "canary_in_temp", "probes", "checks", "diagnostics", "live_probe_check")
+SCRIPTED_PROBES = ("live_probe", "bash_env", "bash_proc_environ", "bash_self_environ", "bash_namespace", "bash_works",
+                   "bash_links") + FILE_PROBES + ("glob_config_dir", "skill_invoke", "write_project", "edit_project")
+PROBE_FIELDS = ("is_error", "canary", "output")
+
+
+def check_shape(r):
+    """A malformed report is a failure, never a silent pass."""
+    if not isinstance(r, dict):
+        return ["a session report is not an object"]
+    missing = [k for k in REPORT_KEYS if k not in r]
+    if missing:
+        return [f"report lacks {missing}"]
+    if r["session"] == "timeout":
+        return []
+    probes = r.get("probes")
+    if not isinstance(probes, dict):
+        return ["probes is not an object"]
+    bad = [n for n in SCRIPTED_PROBES if not isinstance(probes.get(n), dict) or
+           any(k not in probes[n] for k in PROBE_FIELDS)]
+    return [f"probe results missing or malformed: {bad}"] if bad else []
+
+
 def check_session(label, r):
+    shape = check_shape(r)
+    if shape:
+        return shape
     f = []
     name = r["session"]
     where = _canary_anywhere(r)
@@ -78,6 +106,15 @@ def check_session(label, r):
     if "has been updated successfully" not in _out(r, "edit_project"):
         f.append("Edit in the project failed")
     allowed = {NOT_ANTHROPIC} | ({CONTROL_INVOKES} if not treatment else set())
+    live = r.get("live_probe_check") or {}
+    if label == "unprivileged" or name == "treatment-nosocat":
+        if live.get("pass") is not False:
+            f.append("the live-probe check passed although the sandbox could not run Bash")
+    elif name == "treatment-noscrub":
+        if live.get("exposure") is not True:
+            f.append("without the scrub the live-probe check did not report the exposure (insensitive check)")
+    elif live.get("pass") is not True:
+        f.append(f"the live-probe check failed with the scrub on: {live.get('reasons')}")
     if label == "unprivileged" or name == "treatment-nosocat":
         # no user namespaces, or no socat: the CLI must refuse Bash, and the check must say so
         if SANDBOX_DOWN not in reasons:
@@ -120,11 +157,14 @@ def main(out_dir):
         except (OSError, ValueError):
             failures.append(f"{label}: no summary")
             continue
-        got = [r.get("session") for r in reports]
-        if sorted(got) != sorted(names) or len(set(got)) != len(got):
+        got = [r.get("session") if isinstance(r, dict) else None for r in reports] if isinstance(reports, list) else []
+        if sorted(map(str, got)) != sorted(names) or len(set(got)) != len(got):
             failures.append(f"{label}: sessions {got}, expected exactly {list(names)}")
+        if not isinstance(reports, list):
+            failures.append(f"{label}: summary is not a list")
+            continue
         for r in reports:
-            failures += [f"{label}/{r.get('session')}: {x}" for x in check_session(label, r)]
+            failures += [f"{label}/{r.get('session') if isinstance(r, dict) else '?'}: {x}" for x in check_session(label, r)]
     print(f"boundary: {len(failures)} failure(s)")
     for x in failures:
         print("FAIL:", x)

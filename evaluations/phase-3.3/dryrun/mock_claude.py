@@ -114,6 +114,8 @@ def main():
     s = SCENARIO
     model = s["model"]
     plugin = args[args.index("--plugin-dir") + 1] if "--plugin-dir" in args else "/nonexistent"
+    if b"credential-boundary probe" in PROMPT:
+        return probe_session(s, model, plugin)
     skills_dir = os.path.join(plugin, "skills")
     real_skills = sorted(n for n in (os.listdir(skills_dir) if os.path.isdir(skills_dir) else [])
                          if os.path.isfile(os.path.join(skills_dir, n, "SKILL.md")))
@@ -162,6 +164,39 @@ def main():
                                            "cache_creation_input_tokens": 0},
           "modelUsage": {model: {"inputTokens": 1}}})
     return s.get("exit", 0)
+
+
+# Synthetic probe.sh output: what the REAL CLI's sandbox produced offline with the scrub on (phase-3.3/boundary).
+# The mock does NOT run probe.sh: its own process holds the token unscrubbed, so the real measurement belongs to
+# the real-CLI boundary run. This mode rehearses delivery, approval, capture and the verdict, including a leak.
+PROBE_CLEAN = ("probe_v1_begin\nbash_env_token_vars=0\nbash_env_sk_ant=0\nself_environ_token_vars=0\n"
+               "proc_environ_total=2 readable=2 with_token_var=0 with_sk_ant=0\nnprocs=5 pid1=bwrap uid=999\n"
+               "bash_ok 42\nprobe_v1_end\n")
+
+
+def probe_session(s, model, plugin):
+    """The PROBE-CC session: exactly one Bash call `sh probe.sh` (in the real CLI's event shapes)."""
+    # what the CLI actually received on stdin (after cc_exec.sh took the token line): its hash only
+    emit({"type": "system", "subtype": "mock_probe", "probe": {"prompt_sha256": hashlib.sha256(PROMPT).hexdigest()}})
+    emit({"type": "system", "subtype": "init", "session_id": "mock-probe", "uuid": "u0", "apiKeySource": "none",
+          "claude_code_version": "2.1.330", "cwd": os.getcwd(), "model": model,
+          "tools": ["Bash", "Edit", "Glob", "Grep", "Read", "Skill", "Write"], "mcp_servers": [],
+          "permissionMode": "default", "served_by_anthropic": True, "slash_commands": ["doctor", "clear"],
+          "output_style": "default", "skills": ["doctor"],
+          "plugins": [{"name": "aqd-arm", "path": plugin, "source": "aqd-arm@inline", "version": "1.0.0"}]})
+    emit({"type": "assistant", "message": {"model": model, "role": "assistant", "content": [
+        {"type": "tool_use", "id": "p1", "name": "Bash", "input": {"command": s.get("probe_command", "sh probe.sh")}}]}})
+    output = s.get("probe_output", PROBE_CLEAN)
+    if s.get("probe_leak_token"):  # a probe that would echo the value: the launcher's token scan must stop it
+        output += TOKEN + "\n"
+    emit({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "p1", "content": output}]}})
+    emit({"type": "assistant", "message": {"model": model, "role": "assistant",
+                                           "content": [{"type": "text", "text": "PROBE DONE"}]}})
+    emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 2, "session_id": "mock-probe",
+          "total_cost_usd": 0.0, "usage": {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0,
+                                           "cache_creation_input_tokens": 0}, "modelUsage": {model: {"inputTokens": 1}}})
+    return 0
 
 
 if __name__ == "__main__":

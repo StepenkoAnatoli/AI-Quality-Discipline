@@ -5,8 +5,9 @@
 # Usage: launch-run-cc.sh RUN_ID
 #
 # NOT YET EXECUTED ANYWHERE: only static checks (bash -n, shellcheck when present) and the offline adapter tests
-# have run. Running it sends a model request on the owner's subscription; it refuses unless the owner named THIS
-# run id in writing ($AQD_SEALED/cc-run-approved.json, {"approved_run_ids": [...]}) and preflight has passed.
+# have run. Running it sends a model request on the owner's subscription; it refuses unless the owner approved THIS
+# run in writing ($AQD_SEALED/cc-run-approved.json, {"approved_runs": [{run_id, task, group, model, prompt_sha256,
+# cli_sha256, workspace_sha256}]}) and the native preflight has passed.
 #
 # Reused unchanged from launch-run.sh / lib.sh: sealed schedule lookup, preflight and STOP gates, the
 # evaluator-must-be-empty rule, per-group OS users, root-owned immutable project tree from the manifest,
@@ -34,14 +35,20 @@ AQD_CC_RUN_TIMEOUT_SECONDS="${AQD_CC_RUN_TIMEOUT_SECONDS:-$AQD_RUN_TIMEOUT_SECON
 
 RUN_ID="${1:-}"
 [[ "$RUN_ID" =~ ^r-[0-9a-f]{10}$ ]] || { echo "usage: launch-run-cc.sh RUN_ID (r-<10 hex>)" >&2; exit 2; }
-"$PY" "$CC" check-approval --approval "$AQD_SEALED/cc-run-approved.json" --run-id "$RUN_ID" \
-    || { log "run $RUN_ID is not approved in writing in $AQD_SEALED/cc-run-approved.json"; exit 2; }
 sched() { "$PY" "$AQD_HARNESS/schedule.py" get --schedule "$SCHEDULE" --run-id "$RUN_ID" --key "$1"; }
 TASK="$(sched task)"
 GROUP="$(sched group)"
 ENV_LABEL="$(sched env)"
 MODEL_REF="$(sched model)"
 parse_model_ref "$MODEL_REF"
+# The owner's approval names this run AND the exact prompt and CLI binary it will use.
+PROMPT_SHA256="$(sha256sum "$AQD_PRISTINE/$TASK/project/TASK.md" | cut -d' ' -f1)"
+CLI_SHA256="$(sha256sum "$AQD_CLAUDE_BIN" | cut -d' ' -f1)"
+WORKSPACE_SHA256="$(json_get "$AQD_PRISTINE/$TASK/manifest.json" workspace_sha256)"
+"$PY" "$CC" check-approval --approval "$AQD_SEALED/cc-run-approved.json" --run-id "$RUN_ID" --task "$TASK" \
+    --group "$GROUP" --model "$MODEL_REF" --prompt-sha256 "$PROMPT_SHA256" --cli-sha256 "$CLI_SHA256" \
+    --workspace-sha256 "$WORKSPACE_SHA256" \
+    || { log "run $RUN_ID is not approved in writing (run, prompt and CLI) in $AQD_SEALED/cc-run-approved.json"; exit 2; }
 # The NATIVE preflight record (preflight-cc.sh), recomputed now: any change since it ran, or age, refuses the run.
 # The OpenCode preflight.ok is never accepted here.
 "$PY" "$CC" check-preflight --preflight "$AQD_SEALED/preflight-cc.json" --checkout "$AQD_CHECKOUT" \

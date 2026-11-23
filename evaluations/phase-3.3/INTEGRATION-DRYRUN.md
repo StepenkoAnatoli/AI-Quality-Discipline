@@ -89,7 +89,7 @@ The run record stores the preflight file's SHA-256. A `schedule.py rerun` change
   - checks what it receives from inside the agent's uid;
   - edits the mutable SMOKE file;
   - emits a synthetic transcript whose `init.cwd` and `init.skills` are the **real** working directory and skills directory, unless a scenario falsifies them.
-- **Results:** `dryrun/results-2026-11-23/`; checked by `check_results.py`: **26 scenarios, 0 failures**. The same run passes on a GitHub `ubuntu-24.04` runner in CI (§5).
+- **Results:** `dryrun/results-2026-11-23/`; checked by `check_results.py`: **26 scenarios, 0 failures** at the time of this report (27 since `sandbox-failure` was added; see SMOKE-WORKFLOW.md). The same run passed on a GitHub `ubuntu-24.04` runner in CI at `ba463ff` (§5).
 
 | Scenario | Expected | Observed |
 |---|---|---|

@@ -60,13 +60,19 @@ TOKEN_SHA="$(printf '%s' "$FAKE_TOKEN" | sha256sum | cut -d' ' -f1)"
 # scenario NAME GROUP JSON-OVERRIDES: write scenario.json, run the launcher on the next unused run of GROUP.
 mapfile -t CONTROL_RUNS < <(python3 -c 'import json,sys; [print(r["run_id"]) for r in json.load(open(sys.argv[1]))["runs"] if r["group"]=="control"]' "$SEALED/schedule.json")
 mapfile -t TREATMENT_RUNS < <(python3 -c 'import json,sys; [print(r["run_id"]) for r in json.load(open(sys.argv[1]))["runs"] if r["group"]=="treatment"]' "$SEALED/schedule.json")
-python3 - "$SEALED/schedule.json" "$SEALED/cc-run-approved.json" <<'PY'
-import json, sys
-runs = [r["run_id"] for r in json.load(open(sys.argv[1]))["runs"]]
-# every run but the LAST control run is approved (the unapproved case uses it)
-last_control = [r["run_id"] for r in json.load(open(sys.argv[1]))["runs"] if r["group"] == "control"][-1]
-json.dump({"approved_run_ids": [r for r in runs if r != last_control], "approved_by": "dry run (synthetic)",
-           "approved_utc": "2026-11-23T00:00:00Z"}, open(sys.argv[2], "w"), indent=2)
+python3 - "$SEALED/schedule.json" "$SEALED/cc-run-approved.json" "$OPERATOR/pristine/SMOKE/project/TASK.md" "$MOCK" \
+    "$OPERATOR/pristine/SMOKE/manifest.json" <<'PY'
+import hashlib, json, sys
+sha = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
+runs = json.load(open(sys.argv[1]))["runs"]
+# every run but the LAST control run is approved (the unapproved case uses it); each with its prompt and CLI hash
+last_control = [r["run_id"] for r in runs if r["group"] == "control"][-1]
+approved = [{"run_id": r["run_id"], "task": r["task"], "group": r["group"], "model": r["model"],
+             "prompt_sha256": sha(sys.argv[3]), "cli_sha256": sha(sys.argv[4]),
+             "workspace_sha256": json.load(open(sys.argv[5]))["workspace_sha256"]}
+            for r in runs if r["run_id"] != last_control]
+json.dump({"approved_runs": approved, "approved_by": "dry run (synthetic)", "approved_utc": "2026-11-23T00:00:00Z"},
+          open(sys.argv[2], "w"), indent=2)
 PY
 CI=0; TI=0
 next_run() { if [[ "$1" == control ]]; then RUN="${CONTROL_RUNS[$CI]}"; CI=$((CI + 1)); else RUN="${TREATMENT_RUNS[$TI]}"; TI=$((TI + 1)); fi; }

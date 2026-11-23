@@ -1,5 +1,7 @@
 # Native Claude Code: smoke workflow, credential boundary and live-probe proposal (2026-11-23)
 
+> **Status note.** Counts and CI references in this file describe the commit where each was recorded. Each CI result is tied to a commit; a green prior commit is not evidence for a later head. The current live-probe implementation, its evidence and the CI status of the reviewed head are in **LIVE-PROBE.md**.
+
 **Scope:** offline preparation only.
 - No real token was created.
 - No model request was made and no live workflow was dispatched.
@@ -22,7 +24,7 @@
 | `phase-3.2/tests/test_cc_adapter.py` | 73 tests, real-CLI shapes. New: skill delivery and plugins, `served_by_anthropic`, permission mode, sandbox failure (both real messages), an ordinary failing command that only mentions bwrap, the scan never following symlinks, and the batch stop on a sandbox failure. |
 | `phase-3.3/dryrun/check_results.py` + `test_check_results.py` | **Exactly** the named scenarios (26, plus `sandbox-failure` after review: 27), each with its required expectation. Fails on a missing, duplicated or unexpected scenario, on a missing or extra cleanup record, on a missing mode, on a missing probe record, or when any session scenario lacks its full isolation probe. 10 tests. |
 | `phase-3.3/dryrun/{mock_claude.py,dryrun-cc.sh,Dockerfile}` | The mock emits the real CLI's `init` shape. The `/proc` probe race is fixed. The image adds `socat`. |
-| `phase-3.3/boundary/` (new) | `mock_api.py` (local mock Messages API), `boundary_probe.py`, `run-boundary.sh`, `check_boundary.py` + `test_check_boundary.py` (8 tests), and results. The probe also calls Edit, and runs a session with `socat` hidden. |
+| `phase-3.3/boundary/` (new) | `mock_api.py` (local mock Messages API), `boundary_probe.py`, `run-boundary.sh`, `check_boundary.py` + `test_check_boundary.py` (10 tests), and results. The probe also calls Edit, runs a session with `socat` hidden, and runs the live probe's exact `probe.sh` with its checker. |
 | `cc_adapter.files_containing` (the launcher's token scan) | **Never follows symlinks.** The agent can plant links, to `/proc/*/environ` or to operator files, and what a link points at is not captured content. Found when CI flagged reads through agent-planted links (§2). |
 | `.github/workflows/phase3-cc-smoke.yml` (new) | The manual smoke workflow. The mock job also runs on pull requests. The live job refuses. **No secret is referenced.** |
 
@@ -63,8 +65,8 @@ Method:
 
 | Gate | Result |
 |---|---|
-| `check_boundary.py` | 0 failures on both modes (privileged: 4 sessions; unprivileged: 2) |
-| `check_results.py` (mock-CLI launcher dry run, non-root operator) | 26 scenarios, 0 failures |
+| `check_boundary.py` | 0 failures on both modes (privileged: **5** sessions: treatment-scrub, control-scrub, treatment-noscrub, treatment-nosocat, timeout; unprivileged: 2) |
+| `check_results.py` (mock-CLI launcher dry run, non-root operator) | **27** scenarios (the original 26 plus `sandbox-failure`), 0 failures |
 
 Results are in `boundary/results-2026-11-23/` and `dryrun/results-2026-11-23/`.
 

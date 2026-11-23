@@ -223,6 +223,8 @@ def check_run_records(records):
     shared = {}
     for run, record in records:
         where = f"{run['run_id']}: run-record.json"
+        if run.get("task") in ("SMOKE", "PROBE-CC"):
+            raise AnalysisError(f"{where} task {run.get('task')} is a harness check and never evidence")
         for key in ("run_id", "task", "group", "model"):
             if record.get(key) != run.get(key):
                 raise AnalysisError(f"{where} {key} {record.get(key)!r} differs from the schedule's {run.get(key)!r}")

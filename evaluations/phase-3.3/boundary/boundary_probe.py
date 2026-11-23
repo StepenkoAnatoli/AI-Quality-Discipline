@@ -34,6 +34,12 @@ sys.path.insert(0, HARNESS)
 import aqd_common as c  # noqa: E402
 import cc_adapter as cc  # noqa: E402
 
+sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "live")))
+import check_live_probe as clp  # noqa: E402
+
+# The live probe's exact script (task PROBE-CC), run here against the REAL CLI with a fake canary.
+PROBE_SH = os.path.normpath(os.path.join(HERE, "..", "..", "phase-3.2", "tasks", "PROBE-CC", "project", "probe.sh"))
+
 MODEL_REF = "anthropic/claude-opus-5-5#medium"
 ROOT = "/bnd"
 SKILL = os.path.normpath(os.path.join(HERE, "..", "..", "..", "skills", c.SKILL_ID, "SKILL.md"))
@@ -69,8 +75,9 @@ def file_probes(project, config):
 
 
 def script(group, project, config):
-    turns = [{"tool": "Bash", "input": {"command": cmd, "description": name}, "probe": name}
-             for name, cmd in BASH_PROBES]
+    turns = [{"tool": "Bash", "input": {"command": "sh probe.sh", "description": "live probe"}, "probe": "live_probe"}]
+    turns += [{"tool": "Bash", "input": {"command": cmd, "description": name}, "probe": name}
+              for name, cmd in BASH_PROBES]
     turns += [{"tool": tool, "input": inp, "probe": name} for name, tool, inp in file_probes(project, config)]
     turns.append({"tool": "Skill", "input": {"skill": c.SKILL_ID}, "probe": "skill_invoke"})
     turns.append({"tool": "Write", "input": {"file_path": os.path.join(project, "notes.txt"),
@@ -119,6 +126,7 @@ def build_run(name, group, user, settings_extra=None):
     with open(f"{project}/TASK.md", "w", encoding="utf-8") as h:
         h.write("# Boundary probe\n\nThis session is scripted by a local mock; it is never scored.\n")
     sh("chmod", "0444", f"{project}/TASK.md")
+    sh("install", "-o", "root", "-g", "root", "-m", "0444", PROBE_SH, f"{project}/probe.sh")
     with open(f"{project}/notes.txt", "w", encoding="utf-8") as h:
         h.write("notes\n")
     sh("chown", f"{user}:{user}", f"{project}/notes.txt")
@@ -219,6 +227,8 @@ def session(claude, out_dir, name, group, user, scrub="1", timeout=180, turns=No
         "request_paths": sorted({r["path"] for r in requests}),
         "probes": probe_results(transcript, turns, canary),
         "diagnostics": diag,
+        "live_probe_check": {k: v for k, v in clp.analyse(transcript, strict=False).items()
+                             if k in ("pass", "exposure", "counts", "reasons", "probe_calls")},
         "checks": _checks(transcript, group, project, status, f"{run_root}/arm-plugin"),
     }
     for path in (transcript, os.path.join(sdir, "stderr.txt"), api_log):  # never keep the canary on disk

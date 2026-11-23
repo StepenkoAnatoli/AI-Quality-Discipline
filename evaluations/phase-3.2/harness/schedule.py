@@ -41,7 +41,7 @@ from aqd_common import parse_model
 
 TASKS = ("NEW-01", "NEW-02", "NEW-03")
 # Tasks a schedule may name explicitly. The default design (TASKS) is the pre-registered pilot.
-KNOWN_TASKS = TASKS + ("NEW-04", "SMOKE")  # SMOKE: harness smoke tests only, never scored as evidence
+KNOWN_TASKS = TASKS + ("NEW-04", "SMOKE", "PROBE-CC")  # SMOKE, PROBE-CC: harness checks only, never scored
 REPETITIONS = 3
 GROUPS = ("control", "treatment")
 

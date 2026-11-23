@@ -41,7 +41,7 @@
         "doctor"
       ],
       "tool_counts": {
-        "Bash": 6,
+        "Bash": 7,
         "Edit": 1,
         "Glob": 1,
         "Grep": 1,
@@ -66,9 +66,18 @@
       "reader_self_environ_has_canary": false,
       "symlinks": []
     },
-    "duration_seconds": 0.9,
+    "duration_seconds": 1.2,
     "exit_code": 0,
     "group": "treatment",
+    "live_probe_check": {
+      "counts": null,
+      "exposure": false,
+      "pass": false,
+      "probe_calls": 1,
+      "reasons": [
+        "the probe output must hold exactly one begin and one end marker"
+      ]
+    },
     "probes": {
       "bash_env": {
         "canary": false,
@@ -114,6 +123,11 @@
         "canary": false,
         "is_error": true,
         "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "live_probe": {
+        "canary": false,
+        "is_error": true,
+        "output": "Exit code 1\nbwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>."
       },
       "read_proc_dotdot_environ": {
         "canary": false,
@@ -201,7 +215,7 @@
         "doctor"
       ],
       "tool_counts": {
-        "Bash": 6,
+        "Bash": 7,
         "Edit": 1,
         "Glob": 1,
         "Grep": 1,
@@ -226,9 +240,18 @@
       "reader_self_environ_has_canary": false,
       "symlinks": []
     },
-    "duration_seconds": 0.9,
+    "duration_seconds": 1.0,
     "exit_code": 0,
     "group": "control",
+    "live_probe_check": {
+      "counts": null,
+      "exposure": false,
+      "pass": false,
+      "probe_calls": 1,
+      "reasons": [
+        "the probe output must hold exactly one begin and one end marker"
+      ]
+    },
     "probes": {
       "bash_env": {
         "canary": false,
@@ -274,6 +297,11 @@
         "canary": false,
         "is_error": true,
         "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "live_probe": {
+        "canary": false,
+        "is_error": true,
+        "output": "Exit code 1\nbwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>."
       },
       "read_proc_dotdot_environ": {
         "canary": false,

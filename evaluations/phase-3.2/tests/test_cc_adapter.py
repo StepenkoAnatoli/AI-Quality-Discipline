@@ -201,12 +201,22 @@ class CommandTests(Workdir):
         self.assertIn("WebFetch", s["permissions"]["deny"])
         self.assertIn("Skill", s["permissions"]["allow"])
 
-    def test_approval_names_each_run(self):
-        good = {"approved_run_ids": ["r-0123456789"], "approved_by": "owner", "approved_utc": "2026-11-23T00:00:00Z"}
-        self.assertEqual(cc.check_approval(good, "r-0123456789"), [])
-        for data in (good, {}, {"approved_run_ids": "r-0123456789"}, None, {"approved_run_ids": ["*"]}):
-            with self.subTest(data=data):
-                self.assertTrue(cc.check_approval(data, "r-aaaaaaaaaa"))
+    def test_approval_names_each_run_with_its_prompt_and_cli(self):
+        run = {"run_id": "r-0123456789", "task": "PROBE-CC", "group": "control", "model": MODEL_REF,
+               "prompt_sha256": "aa" * 32, "cli_sha256": "bb" * 32, "workspace_sha256": "ee" * 32}
+        good = {"approved_runs": [dict(run)], "approved_by": "owner", "approved_utc": "2026-11-23T00:00:00Z"}
+        self.assertEqual(cc.check_approval(good, **run), [])
+        for key, value in (("run_id", "r-aaaaaaaaaa"), ("task", "SMOKE"), ("group", "treatment"),
+                           ("model", "anthropic/claude-opus-5-5#high"), ("prompt_sha256", "cc" * 32),
+                           ("cli_sha256", "dd" * 32), ("workspace_sha256", "ff" * 32)):
+            with self.subTest(changed=key):
+                self.assertTrue(cc.check_approval(good, **dict(run, **{key: value})))
+        for data in ({}, None, {"approved_runs": "x"}, {"approved_run_ids": ["r-0123456789"]},
+                     {"approved_runs": [dict(run), dict(run)]},  # one entry per run id, never ambiguous
+                     {"approved_runs": [{k: v for k, v in run.items() if k != "prompt_sha256"}]},
+                     dict(good, approved_by=""), dict(good, approved_utc=None)):  # a template is not an approval
+            with self.subTest(data=str(data)[:40]):
+                self.assertTrue(cc.check_approval(data, **run))
 
     def test_run_as_user_never_puts_the_token_in_argv(self):
         cmd = cc.build_command(cc.build_argv("/usr/bin/claude", MODEL_REF, "/s.json", 40, PLUGIN_DIR), clean_env(self.tmp),
@@ -555,6 +565,14 @@ class AnalyzeRecordTests(unittest.TestCase):
                 analyze.check_run_records(self.records((None, change)))
         with self.assertRaises(analyze.AnalysisError):
             analyze.check_run_records(self.records(({"claude_cli_sha256": None}, {"claude_cli_sha256": None})))
+
+    def test_harness_check_tasks_are_never_evidence(self):
+        import analyze
+        for task in ("SMOKE", "PROBE-CC"):
+            with self.subTest(task=task):
+                records = [(dict(run, task=task), dict(rec, task=task)) for run, rec in self.records()]
+                with self.assertRaisesRegex(analyze.AnalysisError, "never evidence"):
+                    analyze.check_run_records(records)
 
     def test_native_records_need_the_pre_registered_timeout(self):
         import analyze
@@ -987,11 +1005,17 @@ class LauncherStaticTests(unittest.TestCase):
     def test_smoke_is_schedulable_but_not_in_the_default_design(self):
         import schedule
         self.assertIn("SMOKE", schedule.KNOWN_TASKS)
+        self.assertIn("PROBE-CC", schedule.KNOWN_TASKS)
         self.assertEqual(schedule.TASKS, ("NEW-01", "NEW-02", "NEW-03"))
 
     def test_a_sandbox_failure_stops_the_whole_batch(self):
         self.assertIn('INFRASTRUCTURE STOP in run %s: the Bash sandbox could not start', self.TEXT)
         self.assertIn("exit 22", self.TEXT)
+
+    def test_setup_host_task_list_is_opt_in_and_unchanged_by_default(self):
+        text = open(os.path.join(HARNESS, "setup-host.sh"), encoding="utf-8").read()
+        self.assertIn('AQD_TASKS="${AQD_TASKS:-SMOKE NEW-01 NEW-02 NEW-03 NEW-04}"', text)
+        self.assertIn('for task in $AQD_TASKS; do', text)
 
     def test_managed_settings_are_refused(self):
         self.assertRegex(self.TEXT, r'\[\[ ! -e /etc/claude-code \]\] \|\| die')

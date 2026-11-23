@@ -58,7 +58,10 @@ assert_clean_ancestors "$AQD_ROOT/env-a/runs/x/project"
 
 # Pristine store, built only from the allowlist, with JSON manifests.
 COMMIT="$(git -C "$AQD_CHECKOUT" rev-parse HEAD)"
-for task in SMOKE NEW-01 NEW-02 NEW-03 NEW-04; do
+# Tasks built into the pristine store. Unset = the Phase 3.2 set; the native probe opts in with AQD_TASKS.
+AQD_TASKS="${AQD_TASKS:-SMOKE NEW-01 NEW-02 NEW-03 NEW-04}"
+# shellcheck disable=SC2086  # a space-separated list of task ids (validated by manifest.py build)
+for task in $AQD_TASKS; do
     dest="$AQD_PRISTINE/$task"
     if [[ -f "$dest/manifest.json" ]]; then
         "$(python_bin)" "$AQD_HARNESS/manifest.py" verify --manifest "$dest/manifest.json" --tree "$dest/project" \

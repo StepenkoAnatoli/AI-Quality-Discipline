@@ -20,7 +20,8 @@ schedule (schedule.py), immutable manifests (manifest.py), OS-user isolation and
                                  [--as-user USER]
     cc_adapter.py check-transcript --transcript F --group G --model REF --project DIR --plugin-dir D \
                                  --driver-result F --out F
-    cc_adapter.py check-approval --approval F --run-id R         # the owner named this run id in writing
+    cc_adapter.py check-approval --approval F --run-id R --task T --group G --model REF --prompt-sha256 H \
+                                 --cli-sha256 H --workspace-sha256 H   # the owner approved exactly this run
     cc_adapter.py scan-secret    --secret-file F --root D        # exit 21 if the token is in any file under D
     cc_adapter.py fingerprint    --checkout D --claude BIN --sealed D --pristine D --max-turns N --timeout S --out F
     cc_adapter.py check-preflight --preflight F --checkout D --claude BIN --sealed D --pristine D --max-turns N \
@@ -169,13 +170,26 @@ def check_auth_status(status):
     return reasons
 
 
-def check_approval(data, run_id):
-    """The owner's written approval must name this run id. One approval never covers other runs."""
-    if not isinstance(data, dict) or not isinstance(data.get("approved_run_ids"), list):
-        return ["approval file has no approved_run_ids list"]
-    if run_id not in data["approved_run_ids"]:
-        return [f"run {run_id} is not in the owner's approved_run_ids"]
-    return []
+APPROVAL_KEYS = ("run_id", "task", "group", "model", "prompt_sha256", "cli_sha256", "workspace_sha256")
+
+
+def check_approval(data, run_id, task, group, model, prompt_sha256, cli_sha256, workspace_sha256):
+    """The owner's written approval must name this exact run: its id, task, arm, model, the SHA-256 of the prompt
+    it will send, of the starting workspace (every project file, e.g. PROBE-CC's probe.sh) and of the CLI binary. One entry per run id; one approval never covers another
+    run, another prompt or another binary."""
+    if not isinstance(data, dict) or not isinstance(data.get("approved_runs"), list):
+        return ["approval file has no approved_runs list"]
+    for key in ("approved_by", "approved_utc"):
+        if not isinstance(data.get(key), str) or not data[key].strip():
+            return [f"approval has no {key} (an unfilled template is not an approval)"]
+    entries = [e for e in data["approved_runs"] if isinstance(e, dict) and e.get("run_id") == run_id]
+    if not entries:
+        return [f"run {run_id} is not in the owner's approved_runs"]
+    if len(entries) > 1:
+        return [f"run {run_id} is approved more than once (ambiguous)"]
+    current = {"run_id": run_id, "task": task, "group": group, "model": model, "prompt_sha256": prompt_sha256,
+               "cli_sha256": cli_sha256, "workspace_sha256": workspace_sha256}
+    return [f"approved {k} does not match this run" for k in APPROVAL_KEYS if entries[0].get(k) != current[k]]
 
 
 # ------------------------------------------------------------------ native preflight binding
@@ -798,7 +812,8 @@ def main(argv=None):
     s.add_argument("--out", required=True)
     s = sub.add_parser("check-approval")
     s.add_argument("--approval", required=True)
-    s.add_argument("--run-id", required=True)
+    for key in APPROVAL_KEYS:
+        s.add_argument("--" + key.replace("_", "-"), required=True)
     for name in ("fingerprint", "check-preflight"):
         s = sub.add_parser(name)
         for flag in ("--checkout", "--claude", "--sealed", "--pristine"):
@@ -849,7 +864,7 @@ def main(argv=None):
                     data = json.load(handle)
             except (OSError, ValueError):
                 data = None
-            reasons = check_approval(data, args.run_id)
+            reasons = check_approval(data, **{k: getattr(args, k) for k in APPROVAL_KEYS})
             for r in reasons:
                 print(f"cc_adapter: {r}", file=sys.stderr)
             return 0 if not reasons else 3

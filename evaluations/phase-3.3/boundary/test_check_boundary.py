@@ -72,6 +72,30 @@ class CheckBoundaryTests(unittest.TestCase):
         self.assertEqual(self.mutate("privileged", "control-scrub", lambda r: r["probes"]["skill_invoke"].update(
             output="Launching skill: code-discipline")), 1)
 
+    def test_malformed_results_fail(self):
+        data = load()
+        data["privileged"] = {"not": "a list"}
+        self.assertEqual(self.check(data), 1)
+        data = load()
+        data["privileged"][0] = "not an object"
+        self.assertEqual(self.check(data), 1)
+        for key in ("probes", "live_probe_check", "diagnostics", "checks"):
+            with self.subTest(dropped=key):
+                self.assertEqual(self.mutate("privileged", "treatment-scrub", lambda r: r.pop(key)), 1)
+        for probe in ("live_probe", "edit_project", "read_proc_self_environ"):
+            with self.subTest(probe=probe):
+                self.assertEqual(self.mutate("privileged", "control-scrub", lambda r: r["probes"].pop(probe)), 1)
+        self.assertEqual(self.mutate("privileged", "control-scrub",
+                                     lambda r: r["probes"]["bash_env"].pop("output")), 1)
+
+    def test_the_live_probe_verdict_is_required(self):
+        self.assertEqual(self.mutate("privileged", "treatment-scrub",
+                                     lambda r: r["live_probe_check"].update(**{"pass": False})), 1)
+        self.assertEqual(self.mutate("privileged", "treatment-noscrub",
+                                     lambda r: r["live_probe_check"].update(exposure=False)), 1)
+        self.assertEqual(self.mutate("unprivileged", "treatment-scrub",
+                                     lambda r: r["live_probe_check"].update(**{"pass": True})), 1)
+
     def test_missing_or_duplicated_sessions_fail(self):
         data = load()
         data["privileged"] = [r for r in data["privileged"] if r["session"] != "timeout"]

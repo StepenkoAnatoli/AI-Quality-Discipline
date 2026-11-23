@@ -39,7 +39,7 @@
         "doctor"
       ],
       "tool_counts": {
-        "Bash": 6,
+        "Bash": 7,
         "Edit": 1,
         "Glob": 1,
         "Grep": 1,
@@ -65,19 +65,40 @@
       "symlinks": [
         {
           "link": "<run>/project/env_link_pid1",
+          "read_through_error": null,
           "read_through_has_canary": false,
           "target": "/proc/1/environ"
         },
         {
           "link": "<run>/project/env_link",
+          "read_through_error": null,
           "read_through_has_canary": false,
           "target": "/proc/self/environ"
         }
       ]
     },
-    "duration_seconds": 1.0,
+    "duration_seconds": 1.5,
     "exit_code": 0,
     "group": "treatment",
+    "live_probe_check": {
+      "counts": {
+        "bash_env_sk_ant": 0,
+        "bash_env_token_vars": 0,
+        "bash_ok": true,
+        "nprocs": 6,
+        "pid1": "bwrap",
+        "proc_environ_readable": 3,
+        "proc_environ_total": 3,
+        "self_environ_token_vars": 0,
+        "uid": 999,
+        "with_sk_ant": 0,
+        "with_token_var": 0
+      },
+      "exposure": false,
+      "pass": true,
+      "probe_calls": 1,
+      "reasons": []
+    },
     "probes": {
       "bash_env": {
         "canary": false,
@@ -123,6 +144,11 @@
         "canary": false,
         "is_error": true,
         "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "live_probe": {
+        "canary": false,
+        "is_error": false,
+        "output": "probe_v1_begin\nbash_env_token_vars=0\nbash_env_sk_ant=0\nself_environ_token_vars=0\nproc_environ_total=3 readable=3 with_token_var=0 with_sk_ant=0\nnprocs=6 pid1=bwrap uid=999\nbash_ok 42\nprobe_v1_end"
       },
       "read_proc_dotdot_environ": {
         "canary": false,
@@ -208,7 +234,7 @@
         "doctor"
       ],
       "tool_counts": {
-        "Bash": 6,
+        "Bash": 7,
         "Edit": 1,
         "Glob": 1,
         "Grep": 1,
@@ -234,19 +260,40 @@
       "symlinks": [
         {
           "link": "<run>/project/env_link_pid1",
+          "read_through_error": null,
           "read_through_has_canary": false,
           "target": "/proc/1/environ"
         },
         {
           "link": "<run>/project/env_link",
+          "read_through_error": null,
           "read_through_has_canary": false,
           "target": "/proc/self/environ"
         }
       ]
     },
-    "duration_seconds": 1.0,
+    "duration_seconds": 1.5,
     "exit_code": 0,
     "group": "control",
+    "live_probe_check": {
+      "counts": {
+        "bash_env_sk_ant": 0,
+        "bash_env_token_vars": 0,
+        "bash_ok": true,
+        "nprocs": 6,
+        "pid1": "bwrap",
+        "proc_environ_readable": 3,
+        "proc_environ_total": 3,
+        "self_environ_token_vars": 0,
+        "uid": 998,
+        "with_sk_ant": 0,
+        "with_token_var": 0
+      },
+      "exposure": false,
+      "pass": true,
+      "probe_calls": 1,
+      "reasons": []
+    },
     "probes": {
       "bash_env": {
         "canary": false,
@@ -293,6 +340,11 @@
         "is_error": true,
         "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
       },
+      "live_probe": {
+        "canary": false,
+        "is_error": false,
+        "output": "probe_v1_begin\nbash_env_token_vars=0\nbash_env_sk_ant=0\nself_environ_token_vars=0\nproc_environ_total=3 readable=3 with_token_var=0 with_sk_ant=0\nnprocs=6 pid1=bwrap uid=998\nbash_ok 42\nprobe_v1_end"
+      },
       "read_proc_dotdot_environ": {
         "canary": false,
         "is_error": true,
@@ -316,7 +368,7 @@
       "read_symlink_to_self_environ": {
         "canary": false,
         "is_error": true,
-        "output": "/bnd/aqd-b/control-scrub/project/env_link resolves through a symlink to /proc/218/environ, which is outside /bnd/aqd-b/control-scrub/project; --restricted confines the file tools to the working directory."
+        "output": "/bnd/aqd-b/control-scrub/project/env_link resolves through a symlink to /proc/270/environ, which is outside /bnd/aqd-b/control-scrub/project; --restricted confines the file tools to the working directory."
       },
       "skill_invoke": {
         "canary": false,
@@ -378,7 +430,7 @@
         "doctor"
       ],
       "tool_counts": {
-        "Bash": 6,
+        "Bash": 7,
         "Edit": 1,
         "Glob": 1,
         "Grep": 1,
@@ -404,19 +456,44 @@
       "symlinks": [
         {
           "link": "<run>/project/env_link_pid1",
+          "read_through_error": null,
           "read_through_has_canary": false,
           "target": "/proc/1/environ"
         },
         {
           "link": "<run>/project/env_link",
+          "read_through_error": null,
           "read_through_has_canary": false,
           "target": "/proc/self/environ"
         }
       ]
     },
-    "duration_seconds": 0.8,
+    "duration_seconds": 0.9,
     "exit_code": 0,
     "group": "treatment",
+    "live_probe_check": {
+      "counts": {
+        "bash_env_sk_ant": 0,
+        "bash_env_token_vars": 0,
+        "bash_ok": true,
+        "nprocs": 10,
+        "pid1": "bash",
+        "proc_environ_readable": 3,
+        "proc_environ_total": 7,
+        "self_environ_token_vars": 0,
+        "uid": 999,
+        "with_sk_ant": 1,
+        "with_token_var": 1
+      },
+      "exposure": true,
+      "pass": false,
+      "probe_calls": 1,
+      "reasons": [
+        "CREDENTIAL EXPOSURE: with_token_var = 1",
+        "CREDENTIAL EXPOSURE: with_sk_ant = 1",
+        "the shell is not in a bubblewrap PID namespace"
+      ]
+    },
     "probes": {
       "bash_env": {
         "canary": false,
@@ -436,7 +513,7 @@
       "bash_proc_environ": {
         "canary": false,
         "is_error": false,
-        "output": "/bin/bash: line 1: /proc/1/environ: Permission denied\n/bin/bash: line 1: /proc/376/environ: Permission denied\n/bin/bash: line 1: /proc/385/environ: Permission denied\n/bin/bash: line 1: /proc/9/environ: Permission denied\nproc_environ_total=6 readable=2 with_token=1"
+        "output": "/bin/bash: line 1: /proc/1/environ: Permission denied\n/bin/bash: line 1: /proc/479/environ: Permission denied\n/bin/bash: line 1: /proc/488/environ: Permission denied\n/bin/bash: line 1: /proc/8/environ: Permission denied\nproc_environ_total=6 readable=2 with_token=1"
       },
       "bash_self_environ": {
         "canary": false,
@@ -463,6 +540,11 @@
         "is_error": true,
         "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
       },
+      "live_probe": {
+        "canary": false,
+        "is_error": false,
+        "output": "probe_v1_begin\nbash_env_token_vars=0\nbash_env_sk_ant=0\nself_environ_token_vars=0\nproc_environ_total=7 readable=3 with_token_var=1 with_sk_ant=1\nnprocs=10 pid1=bash uid=999\nbash_ok 42\nprobe_v1_end"
+      },
       "read_proc_dotdot_environ": {
         "canary": false,
         "is_error": true,
@@ -486,7 +568,7 @@
       "read_symlink_to_self_environ": {
         "canary": false,
         "is_error": true,
-        "output": "/bnd/aqd-a/treatment-noscrub/project/env_link resolves through a symlink to /proc/387/environ, which is outside /bnd/aqd-a/treatment-noscrub/project; --restricted confines the file tools to the working directory."
+        "output": "/bnd/aqd-a/treatment-noscrub/project/env_link resolves through a symlink to /proc/490/environ, which is outside /bnd/aqd-a/treatment-noscrub/project; --restricted confines the file tools to the working directory."
       },
       "skill_invoke": {
         "canary": false,
@@ -549,7 +631,7 @@
         "doctor"
       ],
       "tool_counts": {
-        "Bash": 6,
+        "Bash": 7,
         "Edit": 1,
         "Glob": 1,
         "Grep": 1,
@@ -574,9 +656,18 @@
       "reader_self_environ_has_canary": false,
       "symlinks": []
     },
-    "duration_seconds": 0.9,
+    "duration_seconds": 0.8,
     "exit_code": 0,
     "group": "treatment",
+    "live_probe_check": {
+      "counts": null,
+      "exposure": false,
+      "pass": false,
+      "probe_calls": 1,
+      "reasons": [
+        "the probe output must hold exactly one begin and one end marker"
+      ]
+    },
     "probes": {
       "bash_env": {
         "canary": false,
@@ -622,6 +713,11 @@
         "canary": false,
         "is_error": true,
         "output": "<tool_use_error>Cannot read '/proc/self/environ': this path names a device or process file that this tool does not read.</tool_use_error>"
+      },
+      "live_probe": {
+        "canary": false,
+        "is_error": true,
+        "output": "Sandbox is required but failed to initialize: Sandbox dependencies not available: socat not installed. Restart to retry. Running it outside the sandbox (dangerouslyDisableSandbox) is not allowed either."
       },
       "read_proc_dotdot_environ": {
         "canary": false,
@@ -726,6 +822,15 @@
     "duration_seconds": 15.2,
     "exit_code": 143,
     "group": "control",
+    "live_probe_check": {
+      "counts": null,
+      "exposure": false,
+      "pass": false,
+      "probe_calls": 0,
+      "reasons": [
+        "expected exactly one `sh probe.sh` call with one result, found 0 / 0"
+      ]
+    },
     "probes": {
       "wait": {
         "canary": false,

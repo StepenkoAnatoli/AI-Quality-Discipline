@@ -48,8 +48,9 @@ REASONS = {
     "provider-error": lambda r: _reason(r, "provider/API error"),
     "missing-credentials": lambda r: _log(r, "CLAUDE_CODE_OAUTH_TOKEN is not set"),
     "leaked-token": lambda r: _reason(r, "token-leak"),
-    "unapproved-run": lambda r: _log(r, "not in the owner's approved_run_ids"),
-    "binary-changed-after-preflight": lambda r: _log(r, "cli_sha256 changed since preflight"),
+    "unapproved-run": lambda r: _log(r, "not in the owner's approved_runs"),
+    # the approval names the CLI hash, so a changed binary is refused there first (the preflight would refuse too)
+    "binary-changed-after-preflight": lambda r: _log(r, "approved cli_sha256 does not match this run"),
     "stale-preflight": lambda r: _log(r, "(stale)"),
     "opencode-preflight-only": lambda r: _log(r, "no native preflight record"),
     "timeout-changed-after-preflight": lambda r: _log(r, "timeout_seconds changed since preflight"),
