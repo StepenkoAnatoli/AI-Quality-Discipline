@@ -237,5 +237,69 @@ class PackEvidenceTests(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
 
 
+SMOKE_RUNS = ["r-709f207e78", "r-2cffa4db9c"]
+
+
+def smoke_store(root, runs=SMOKE_RUNS):
+    files = {"preflight.log": "preflight passed\n", "launcher.log": "[smoke]\n", "smoke-verdict.json": '{"pass": true}',
+             "sealed/schedule.json": "{}", "sealed/cc-run-approved.json": '{"approved_runs": []}',
+             "sealed/preflight-cc.json": '{"ok": true}'}
+    for run in runs:
+        for rel in pe.REQUIRED_CAPTURE:
+            if rel == "live-probe.json":
+                continue
+            files[f"captures/{run}/{rel}"] = '{"type": "result"}\n' if rel.endswith(".ndjson") else (
+                '{"valid": true}' if rel.endswith(".json") else "x\n")
+    for rel, body in files.items():
+        p = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as h:
+            h.write(body)
+    return files
+
+
+class SmokeKindTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.op = os.path.join(self.tmp, "operator")
+        self.out = os.path.join(self.tmp, "capture.tar.gz")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_required_files_for_two_runs_and_the_verdict_without_the_probe_file(self):
+        req = pe.required(SMOKE_RUNS, "smoke")
+        self.assertIn("smoke-verdict.json", req)
+        for run in SMOKE_RUNS:
+            self.assertIn(f"captures/{run}/run-status.json", req)
+            self.assertNotIn(f"captures/{run}/live-probe.json", req)
+        self.assertEqual(pe.required(RUN), pe.required([RUN], "probe"))  # the probe is unchanged
+        self.assertNotIn("smoke-verdict.json", pe.required(RUN))
+
+    def test_complete_smoke_store(self):
+        smoke_store(self.op)
+        code, m = pe.pack(self.op, SMOKE_RUNS, self.out, "smoke")
+        self.assertEqual((code, m["status"], m["run_ids"], m["kind"]), (0, "complete", SMOKE_RUNS, "smoke"))
+
+    def test_a_second_run_that_never_started_is_incomplete(self):
+        smoke_store(self.op, SMOKE_RUNS[:1])
+        code, m = pe.pack(self.op, SMOKE_RUNS, self.out, "smoke")
+        self.assertEqual((code, m["status"]), (3, "incomplete"))
+        self.assertTrue(all(p.startswith(f"captures/{SMOKE_RUNS[1]}/") for p in m["missing"]))
+
+    def test_a_missing_verdict_is_incomplete(self):
+        smoke_store(self.op)
+        os.remove(os.path.join(self.op, "smoke-verdict.json"))
+        self.assertEqual(pe.pack(self.op, SMOKE_RUNS, self.out, "smoke")[0], 3)
+
+    def test_cli_run_id_counts(self):
+        smoke_store(self.op)
+        base = ["--operator", self.op, "--out", self.out]
+        self.assertEqual(pe.main(base + ["--kind", "smoke", "--run-id", SMOKE_RUNS[0], "--run-id", SMOKE_RUNS[1]]), 0)
+        self.assertEqual(pe.main(base + ["--kind", "smoke", "--run-id", SMOKE_RUNS[0]]), 1)
+        self.assertEqual(pe.main(base + ["--kind", "smoke", "--run-id", SMOKE_RUNS[0], "--run-id", SMOKE_RUNS[0]]), 1)
+        self.assertEqual(pe.main(base + ["--run-id", SMOKE_RUNS[0], "--run-id", SMOKE_RUNS[1]]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

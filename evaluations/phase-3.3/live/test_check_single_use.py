@@ -41,5 +41,20 @@ class SingleUseTests(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
 
 
+class SingleUseEnvironmentNameTests(unittest.TestCase):
+    def test_the_smoke_environment_has_its_own_single_use(self):
+        smoke = dict(D, environment="aqd-cc-live-smoke")
+        self.assertEqual(su.check([smoke], "aqd-cc-live-smoke"), [])
+        self.assertTrue(su.check([smoke, dict(smoke, id=2)], "aqd-cc-live-smoke"))
+        self.assertTrue(su.check([smoke]))  # the probe's name refuses another environment's deployment
+        self.assertTrue(su.check([D], "aqd-cc-live-smoke"))
+
+    def test_only_the_two_reviewed_names(self):
+        self.assertTrue(su.check([dict(D, environment="x")], "x"))
+        r = subprocess.run([sys.executable, "-I", os.path.join(LIVE, "check_single_use.py"), "--deployments",
+                            os.devnull, "--name", "x"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

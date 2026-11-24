@@ -17,32 +17,36 @@ import json
 import sys
 
 NAME = "aqd-cc-live-probe"
+NAMES = (NAME, "aqd-cc-live-smoke")  # the probe's and the SMOKE run's environments
 
 
-def check(deployments):
+def check(deployments, name=NAME):
     if not isinstance(deployments, list) or not all(isinstance(d, dict) for d in deployments):
         return ["the deployments listing is missing or of an unexpected shape"]
     if len(deployments) >= 100:
         return ["the deployments listing is full (100): refusing rather than paging"]
-    if any(d.get("environment") != NAME for d in deployments):
-        return [f"the listing holds deployments of another environment (the query must filter {NAME})"]
+    if name not in NAMES:
+        return ["unknown environment name"]
+    if any(d.get("environment") != name for d in deployments):
+        return [f"the listing holds deployments of another environment (the query must filter {name})"]
     if not deployments:
         return ["no deployment record for this job (unexpected; refusing)"]
     if len(deployments) > 1:
-        return [f"{len(deployments)} deployments to {NAME}: an earlier live dispatch already used the approval"]
+        return [f"{len(deployments)} deployments to {name}: an earlier live dispatch already used the approval"]
     return []
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--deployments", required=True)
+    p.add_argument("--name", choices=NAMES, default=NAME)
     args = p.parse_args(argv)
     try:
         with open(args.deployments, encoding="utf-8") as h:
             data = json.load(h)
     except (OSError, ValueError):
         data = None
-    reasons = check(data)
+    reasons = check(data, args.name)
     for r in reasons:
         print(f"single use: {r}")
     print("single use: " + ("first and only deployment of the live-probe environment" if not reasons else "REFUSED"))

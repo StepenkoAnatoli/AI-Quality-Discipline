@@ -9,6 +9,8 @@
 
 This follows the passing live security probe (`LIVE-PROBE-RESULT.md`).
 
+**Build status (2026-11-24): built offline, not dispatched.** See §8 for what exists and how it was tested.
+
 ## 1. Purpose
 
 This would be the first run of **both arms** of the native Claude Code harness against the real service. It is a harness check and is **never scored**. It answers four questions:
@@ -40,7 +42,8 @@ It does **not** ask whether the skill helps. With 2 runs and a one-line task, it
 
 **Workspace findings (D3):**
 - The set of unexpected workspace files is recorded per run.
-- A file outside the 17 known zero-byte sandbox placeholders, or a different set in the two arms, is flagged.
+- A file outside the 17 known zero-byte sandbox placeholders, or a placeholder that is not empty, **fails** the run.
+- A different placeholder set in the two arms is **flagged** (`placeholders_differ` in the verdict), not failed. The sandbox appears to create these files only when Bash runs, which depends on what the agent does, and so on the arm. Failing on it would make the verdict depend on agent behaviour.
 
 **Any failure** writes STOP. Then: no rerun, revoke the token, and review.
 
@@ -113,3 +116,63 @@ The feasibility experiment (`DESIGN.md` §6, Stage 1) still needs all of Stage 0
 - evidence retention.
 
 A SMOKE pass shows only that the two-arm native harness works on the real service. Whether feasibility is justified remains a separate owner decision, made after SMOKE.
+
+## 8. What was built (offline; no model call, no secret, no dispatch)
+
+**The run, fixed in committed files:**
+
+| | Value |
+|---|---|
+| Schedule | `live/smoke-schedule.json`: `schedule.py create --seed 77f202a8eb78da8cde0cef43110a3e48` (= first 32 hex of SHA-256 of `aqd-phase-3.3-live-smoke-v1`), `--tasks SMOKE --repetitions 1`, with `created_utc` fixed. SHA-256 `a54f6f3300ec607026cfef47d71ac00a33a3f746a5077af90b0c84d08c147dc6`, pinned in `run-live-smoke.sh` |
+| **Run IDs, in schedule order** | **`r-709f207e78` (treatment, `env-a`), then `r-2cffa4db9c` (control, `env-b`)**. The workflow pins them as `AQD_SMOKE_RUN_IDS` |
+| **Prompt SHA-256** (`SMOKE/project/TASK.md`) | **`21de334c06fd4ee31e30a6283202a8c353c4d266b042c36ab56175e9cd73f86d`** |
+| Workspace SHA-256 | `4791a7c5f212ac2900b9b1f761f1779e8a90ab377db7209810fb544cb926b300` (`manifest.build`; the same method reproduces the probe's `17130aa7…`) |
+| CLI SHA-256 | `f390eaa0…8ebb` (Claude Code 2.1.330), as for the probe |
+| Approval | `live/smoke-approval.json`: the unfilled template for both runs. The owner fills `approved_by`, `approved_utc` and `reviewed_commit` in a one-file commit on the reviewed commit |
+
+**Code:**
+- `live/run-live-smoke.sh` (rehearsal or live). Checks the schedule hash and that schedule and approval agree. Then: `setup-host.sh` (`AQD_TASKS=SMOKE`), the egress lock, the native preflight, both runs in schedule order through the unchanged `launch-run-cc.sh`, and the verdict. A non-zero launcher exit writes STOP and the other run does not start.
+- `live/check_smoke.py`: the verdict in §3. It writes `smoke-verdict.json`; the public lines hold booleans and counts only.
+- `live/rehearse-smoke.sh`: 10 mock-CLI cases on the host (below).
+- `pack_evidence.py --kind smoke`: two run IDs plus `smoke-verdict.json`. The probe's behaviour is unchanged.
+- `check_approval_commit.py --approval-path`: only the two reviewed approval files are accepted.
+- `check_single_use.py` and `check_environment.py --name`: only `aqd-cc-live-probe` or `aqd-cc-live-smoke`.
+- `dryrun/mock_claude.py`: opt-in scenario keys `skip_isolation_probe`, `notes_text`, `extra_files` and `extra_file_text`. The dry run's defaults are unchanged.
+- Workflow `phase3-cc-smoke.yml`:
+  - mode `live-smoke`;
+  - job `live-smoke`: the probe job's steps and actions one for one, with environment `aqd-cc-live-smoke`, the SMOKE approval file, its own single use, `run-live-smoke.sh`, two-run packaging and artifact `aqd-cc-live-smoke-encrypted`;
+  - `verify-environment` checks the environment of whichever live mode was dispatched;
+  - the `mock` job also runs the SMOKE rehearsal.
+
+**Tests (local):**
+- 111 live unit tests, all OK. New: the verdict (21), the SMOKE approval commit (6), environment names, two-run packaging and the `live-smoke` job policy (including its guard's own bash).
+- Mutation checks: removing each new guard fails a test. The one exception is the SMOKE approval run count, which the template-equality check already enforces.
+- `actionlint` with `shellcheck`: clean.
+
+**Rehearsals on a host with bubblewrap and socat:**
+- The probe rehearsal still passes, 7 of 7.
+- The SMOKE rehearsal passes, 10 of 10:
+
+| Case | Required | Observed |
+|---|---|---|
+| clean | pass | PASS. Both CLI runs received the approved prompt bytes; evidence complete |
+| treatment invokes the skill | pass | PASS (invocation recorded) |
+| two empty placeholders in both arms | pass | PASS, `placeholders_differ: false` |
+| `notes.txt` wrong | fail | STOP; verdict reason `notes.txt` |
+| extra file `notes.bak` | fail | STOP; verdict reason: file outside the known placeholders |
+| non-empty `.env` | fail | STOP; verdict reason: placeholder not empty |
+| treatment without the skill | fail | the first run is invalid, STOP; the control run never starts; evidence incomplete |
+| control with the skill | fail | the control run is invalid, STOP |
+| token value echoed | fail | the launcher's token scan: ISOLATION FAILURE; the packager flags the token-shaped string |
+| the committed (unfilled) approval | fail | refused before any run |
+
+**Before a live SMOKE run, the owner:**
+1. creates the environment `aqd-cc-live-smoke` with the same protections as the probe's;
+2. reviews this build and makes it the reviewed commit P;
+3. makes the one-file approval commit X (filling `smoke-approval.json`);
+4. merges the one-file bootstrap PR to `main`;
+5. runs a green mock dispatch;
+6. writes the authorisation naming the two run IDs, P, X, the CLI hash and the prompt hash;
+7. creates the token;
+8. dispatches once, with `run_id` = `r-709f207e78 r-2cffa4db9c` and `confirm` = `RUN-LIVE-SMOKE r-709f207e78 r-2cffa4db9c`;
+9. revokes the token.

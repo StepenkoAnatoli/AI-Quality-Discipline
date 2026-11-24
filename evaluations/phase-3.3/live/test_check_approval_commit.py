@@ -6,6 +6,7 @@ that (an unfilled template is not an approval), so the documented procedure coul
 throwaway git repositories; no network, no credential, no model.
 """
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -178,6 +179,87 @@ class ApprovalCommitTests(unittest.TestCase):
                               self.repo, "--pinned", self.reviewed], capture_output=True, text=True)
         self.assertEqual(bad.returncode, 1)
         self.assertNotIn("owner-login", bad.stdout + bad.stderr)
+
+
+SMOKE_APPROVAL = cac.SMOKE_APPROVAL_PATH
+SMOKE_COMMITTED = json.load(open(os.path.join(LIVE, "smoke-approval.json"), encoding="utf-8"))
+SMOKE_TEMPLATE = dict(SMOKE_COMMITTED, approved_by="", approved_utc="", reviewed_commit="")
+
+
+class SmokeApprovalCommitTests(unittest.TestCase):
+    """The same one-file owner approval, for SMOKE's two-run approval file (--approval-path)."""
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        git(self.repo, "init", "-q", "-b", "work")
+        write(self.repo, APPROVAL, json.dumps(TEMPLATE, indent=2) + "\n")
+        write(self.repo, SMOKE_APPROVAL, json.dumps(SMOKE_TEMPLATE, indent=2) + "\n")
+        write(self.repo, WORKFLOW, WORKFLOW_TEXT)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "reviewed head")
+        self.reviewed = git(self.repo, "rev-parse", "HEAD")
+
+    def tearDown(self):
+        shutil.rmtree(self.repo)
+
+    def approve(self, path=SMOKE_APPROVAL, **override):
+        a = json.loads(json.dumps(SMOKE_TEMPLATE if path == SMOKE_APPROVAL else TEMPLATE))
+        a.update(approved_by="owner-login", approved_utc="2026-11-24T09:00:00Z", reviewed_commit=self.reviewed)
+        a.update(override)
+        write(self.repo, path, json.dumps(a, indent=2) + "\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "owner approval")
+        return git(self.repo, "rev-parse", "HEAD")
+
+    def test_a_smoke_approval_commit_passes_with_the_smoke_path(self):
+        pinned = self.approve()
+        self.assertEqual(cac.check(self.repo, pinned, approval_path=SMOKE_APPROVAL), [])
+        main_wf = WORKFLOW_TEXT.replace(cac.PLACEHOLDER, f'AQD_TEST_SHA: "{pinned}"')
+        self.assertEqual(cac.check(self.repo, pinned, main_wf, SMOKE_APPROVAL), [])
+        data = json.load(open(os.path.join(self.repo, SMOKE_APPROVAL), encoding="utf-8"))
+        for entry in data["approved_runs"]:  # the launcher accepts each run from this file
+            self.assertEqual(cc_adapter.check_approval(data, **{k: entry[k] for k in cc_adapter.APPROVAL_KEYS}), [])
+
+    def test_the_path_must_match_the_file_the_commit_changes(self):
+        pinned = self.approve()
+        self.assertTrue(cac.check(self.repo, pinned))  # the probe path: its approval is still the template
+        pinned = self.approve(path=APPROVAL)
+        self.assertTrue(cac.check(self.repo, pinned, approval_path=SMOKE_APPROVAL))
+
+    def test_only_the_reviewed_approval_paths(self):
+        pinned = self.approve()
+        self.assertTrue(any("reviewed approval files" in r for r in
+                            cac.check(self.repo, pinned, approval_path="evaluations/other.json")))
+
+    def test_a_smoke_approval_with_one_run_or_changed_values_is_refused(self):
+        pinned = self.approve(approved_runs=SMOKE_TEMPLATE["approved_runs"][:1])
+        self.assertTrue(cac.check(self.repo, pinned, approval_path=SMOKE_APPROVAL))
+        runs = json.loads(json.dumps(SMOKE_TEMPLATE["approved_runs"]))
+        runs[1]["group"] = "treatment"
+        git(self.repo, "checkout", "-q", "-B", "work", self.reviewed)
+        pinned = self.approve(approved_runs=runs)
+        self.assertTrue(any("approved_runs" in r for r in cac.check(self.repo, pinned, approval_path=SMOKE_APPROVAL)))
+
+    def test_the_committed_smoke_file_is_the_template_or_a_complete_owner_approval(self):
+        by, utc, reviewed = (SMOKE_COMMITTED[k] for k in cac.OWNER_FIELDS)
+        if (by, utc, reviewed) != ("", "", ""):
+            self.assertTrue(isinstance(by, str) and by.strip(), "approved_by")
+            self.assertRegex(utc, cac.UTC)
+            self.assertRegex(reviewed, cac.SHA)
+        self.assertEqual(set(SMOKE_COMMITTED), {"approved_runs", "note", *cac.OWNER_FIELDS})
+
+    def test_the_committed_smoke_values_are_the_schedule_the_task_and_the_pinned_cli(self):
+        import hashlib
+        import manifest
+        schedule = json.load(open(os.path.join(LIVE, "smoke-schedule.json"), encoding="utf-8"))
+        root = os.path.join(LIVE, "..", "..", "phase-3.2")
+        prompt = hashlib.sha256(open(os.path.join(root, "tasks", "SMOKE", "project", "TASK.md"), "rb").read()).hexdigest()
+        workspace = manifest.build(root, "SMOKE")["workspace_sha256"]
+        cli = re.search(r'AQD_CLI_SHA256: "([0-9a-f]{64})"', WORKFLOW_TEXT).group(1)
+        want = [{"run_id": r["run_id"], "task": "SMOKE", "group": r["group"], "model": r["model"],
+                 "prompt_sha256": prompt, "cli_sha256": cli, "workspace_sha256": workspace}
+                for r in sorted(schedule["runs"], key=lambda r: r["order"])]
+        self.assertEqual(SMOKE_COMMITTED["approved_runs"], want)
 
 
 if __name__ == "__main__":

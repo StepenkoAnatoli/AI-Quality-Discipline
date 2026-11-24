@@ -2,7 +2,12 @@
 """Package the live probe's operator-side evidence into ONE archive, with a manifest, and say honestly whether it
 is complete. Replaces `tar ... 2>/dev/null || true`, which could hide a missing or unreadable file.
 
-    python3 -I pack_evidence.py --operator DIR --run-id RUN --out ARCHIVE.tar.gz
+    python3 -I pack_evidence.py --operator DIR --run-id RUN --out ARCHIVE.tar.gz                  (the probe)
+    python3 -I pack_evidence.py --operator DIR --kind smoke --run-id RUN1 --run-id RUN2 --out ARCHIVE.tar.gz
+
+--kind smoke (the two-arm SMOKE run, SMOKE-PROPOSAL.md) requires each run's capture files except the probe's
+live-probe.json, plus the top-level smoke-verdict.json. A run that never started (an earlier run stopped the batch)
+is reported as missing, so the archive is INCOMPLETE, which is the truth.
 
 What is collected (as before): DIR/preflight.log, DIR/launcher.log, DIR/sealed/**, DIR/captures/**. Each regular
 file is opened once (no symlink followed) and streamed into the archive while its SHA-256 is computed and it is
@@ -43,7 +48,7 @@ OVERLAP = 256          # bytes kept between chunks so a token split across two r
 CHUNK = 1024 * 1024
 MAX_PARSE = 64 * 1024 * 1024          # required JSON/NDJSON larger than this is archived but flagged
 TOTAL_BUDGET = 2 * 1024 * 1024 * 1024  # non-required bytes; required files are always archived
-TOP = ("preflight.log", "launcher.log")
+TOP = ("preflight.log", "launcher.log", "smoke-verdict.json")
 TREES = ("sealed", "captures")
 REQUIRED_TOP = ("preflight.log", "launcher.log", "sealed/schedule.json", "sealed/cc-run-approved.json",
                 "sealed/preflight-cc.json")
@@ -53,8 +58,18 @@ REQUIRED_CAPTURE = ("launcher.log", "run-record.json", "run-status.json", "cc-en
 SYMLINK = "symlink (not followed)"
 
 
-def required(run_id):
-    return list(REQUIRED_TOP) + [f"captures/{run_id}/{p}" for p in REQUIRED_CAPTURE]
+REQUIRED_SMOKE_TOP = ("smoke-verdict.json",)
+KINDS = ("probe", "smoke")
+
+
+def required(run_ids, kind="probe"):
+    if isinstance(run_ids, str):
+        run_ids = [run_ids]
+    if kind == "probe":
+        return list(REQUIRED_TOP) + [f"captures/{run_ids[0]}/{p}" for p in REQUIRED_CAPTURE]
+    per_run = [p for p in REQUIRED_CAPTURE if p != "live-probe.json"]
+    return (list(REQUIRED_TOP) + list(REQUIRED_SMOKE_TOP)
+            + [f"captures/{r}/{p}" for r in run_ids for p in per_run])
 
 
 def _walk(operator, problems):
@@ -166,10 +181,14 @@ def _add(tar, operator, rel, is_required):
     return entry
 
 
-def pack(operator, run_id, out):
-    """Returns (exit_code, manifest)."""
-    manifest = {"schema": 2, "run_id": run_id, "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "files": [], "required": required(run_id), "missing": [], "problems": [], "token_shaped_files": 0}
+def pack(operator, run_id, out, kind="probe"):
+    """Returns (exit_code, manifest). run_id: one id (probe) or a list of ids (smoke)."""
+    run_ids = [run_id] if isinstance(run_id, str) else list(run_id)
+    manifest = {"schema": 2, "run_id": run_ids[0] if kind == "probe" else None,
+                "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "files": [], "required": required(run_ids, kind), "missing": [], "problems": [], "token_shaped_files": 0}
+    if kind != "probe":
+        manifest["kind"], manifest["run_ids"] = kind, run_ids
     req = set(manifest["required"])
     tmp = out + ".partial"
     try:
@@ -252,13 +271,16 @@ def pack(operator, run_id, out):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--operator", required=True)
-    p.add_argument("--run-id", required=True)
+    p.add_argument("--run-id", required=True, action="append")
+    p.add_argument("--kind", choices=KINDS, default="probe")
     p.add_argument("--out", required=True)
     args = p.parse_args(argv)
-    if not re.match(r"^r-[0-9a-f]{10}$", args.run_id):
-        print("evidence: bad run id")
+    want = 1 if args.kind == "probe" else 2
+    if len(args.run_id) != want or len(set(args.run_id)) != want \
+            or not all(re.match(r"^r-[0-9a-f]{10}$", r) for r in args.run_id):
+        print("evidence: bad run id(s)")
         return 1
-    code, m = pack(args.operator, args.run_id, args.out)
+    code, m = pack(args.operator, args.run_id if args.kind == "smoke" else args.run_id[0], args.out, args.kind)
     print("evidence: status=%s files=%d required_missing=%d problems=%d token_shaped_files=%d archive=%s" % (
         m.get("status"), len(m["files"]), len(m["missing"]), len(m["problems"]), m["token_shaped_files"],
         "written" if code != 1 else "NOT WRITTEN"))

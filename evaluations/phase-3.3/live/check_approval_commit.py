@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Fail-closed check that the owner's approval exists in the EXACT commit the live job checks out.
 
-    python3 -I check_approval_commit.py --repo DIR --pinned SHA [--main-workflow FILE]
+    python3 -I check_approval_commit.py --repo DIR --pinned SHA [--main-workflow FILE] [--approval-path PATH]
+
+--approval-path selects the approval file: the probe's (default) or SMOKE's (smoke-approval.json, two runs). Only
+these two reviewed paths are accepted.
 
 The approval is a one-file commit made by the owner directly on top of the reviewed commit:
 
@@ -27,6 +30,8 @@ import subprocess
 import sys
 
 APPROVAL_PATH = "evaluations/phase-3.3/live/probe-approval.json"
+SMOKE_APPROVAL_PATH = "evaluations/phase-3.3/live/smoke-approval.json"
+APPROVAL_PATHS = (APPROVAL_PATH, SMOKE_APPROVAL_PATH)
 WORKFLOW_PATH = ".github/workflows/phase3-cc-smoke.yml"
 PLACEHOLDER = 'AQD_TEST_SHA: "0000000000000000000000000000000000000000"'
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -41,11 +46,13 @@ def _git(repo, *args):
     return out.stdout
 
 
-def _approval_at(repo, commit):
-    return json.loads(_git(repo, "show", f"{commit}:{APPROVAL_PATH}"))
+def _approval_at(repo, commit, path=APPROVAL_PATH):
+    return json.loads(_git(repo, "show", f"{commit}:{path}"))
 
 
-def check(repo, pinned, main_workflow=None):
+def check(repo, pinned, main_workflow=None, approval_path=APPROVAL_PATH):
+    if approval_path not in APPROVAL_PATHS:
+        return ["the approval path is not one of the reviewed approval files"]
     if not isinstance(pinned, str) or not SHA.match(pinned) or pinned == "0" * 40:
         return ["the pinned commit is not a 40-hex SHA"]
     try:
@@ -53,7 +60,7 @@ def check(repo, pinned, main_workflow=None):
         if head != pinned:
             return ["the checkout is not the pinned commit"]
         try:
-            approval = _approval_at(repo, head)
+            approval = _approval_at(repo, head, approval_path)
         except (RuntimeError, ValueError):
             return ["the approval at the pinned commit is missing or not JSON"]
         if not isinstance(approval, dict):
@@ -73,16 +80,17 @@ def check(repo, pinned, main_workflow=None):
             return ["the approval commit's only parent is not reviewed_commit (fetch-depth 2; one-file commit on "
                     "the reviewed head)"]
         changed = [p for p in _git(repo, "diff", "--name-only", "--no-renames", reviewed, head).splitlines() if p]
-        if changed != [APPROVAL_PATH]:
-            return [f"the approval commit changes more than {APPROVAL_PATH} ({len(changed)} path(s))"]
+        if changed != [approval_path]:
+            return [f"the approval commit changes more than {approval_path} ({len(changed)} path(s))"]
         try:
-            template = _approval_at(repo, reviewed)
+            template = _approval_at(repo, reviewed, approval_path)
         except (RuntimeError, ValueError):
             return ["the approval at reviewed_commit is missing or not JSON"]
         if not isinstance(template, dict) or any(template.get(k) not in ("", None) for k in OWNER_FIELDS):
             reasons.append("the approval at reviewed_commit is not the unfilled template")
+        want_runs = 1 if approval_path == APPROVAL_PATH else 2
         if not isinstance(template, dict) or template.get("approved_runs") != approval.get("approved_runs") \
-                or not isinstance(approval.get("approved_runs"), list) or len(approval["approved_runs"]) != 1:
+                or not isinstance(approval.get("approved_runs"), list) or len(approval["approved_runs"]) != want_runs:
             reasons.append("approved_runs differ from the reviewed template (run, task, arm, model or a SHA-256)")
         extra = set(approval) - set(template if isinstance(template, dict) else {}) - set(OWNER_FIELDS)
         if extra:
@@ -104,6 +112,7 @@ def main(argv=None):
     p.add_argument("--repo", required=True)
     p.add_argument("--pinned", required=True)
     p.add_argument("--main-workflow")
+    p.add_argument("--approval-path", choices=APPROVAL_PATHS, default=APPROVAL_PATH)
     args = p.parse_args(argv)
     main_wf = None
     if args.main_workflow:
@@ -113,7 +122,7 @@ def main(argv=None):
         except OSError:
             print("approval: main's workflow copy is unreadable")
             return 1
-    reasons = check(args.repo, args.pinned, main_wf)
+    reasons = check(args.repo, args.pinned, main_wf, args.approval_path)
     for r in reasons:
         print(f"approval: {r}")
     print("approval commit: " + ("VERIFIED (one-file owner approval on the reviewed commit)" if not reasons

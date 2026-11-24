@@ -16,12 +16,15 @@ import json
 import sys
 
 NAME = "aqd-cc-live-probe"
+NAMES = (NAME, "aqd-cc-live-smoke")  # the probe's and the SMOKE run's environments
 
 
-def check(environment, policies, actor):
+def check(environment, policies, actor, name=NAME):
     reasons = []
-    if not isinstance(environment, dict) or environment.get("name") != NAME:
-        return [f"environment {NAME} not found or of an unexpected shape"]
+    if name not in NAMES:
+        return ["unknown environment name"]
+    if not isinstance(environment, dict) or environment.get("name") != name:
+        return [f"environment {name} not found or of an unexpected shape"]
     if environment.get("can_admins_bypass") is not False:
         reasons.append("administrators can bypass the protection rules (turn on 'Prevent administrators from bypassing')")
     rules = environment.get("protection_rules")
@@ -57,6 +60,7 @@ def main(argv=None):
     p.add_argument("--environment", required=True)
     p.add_argument("--branch-policies", required=True)
     p.add_argument("--actor", required=True)
+    p.add_argument("--name", choices=NAMES, default=NAME)
     args = p.parse_args(argv)
     loaded = []
     for path in (args.environment, args.branch_policies):
@@ -65,10 +69,10 @@ def main(argv=None):
                 loaded.append(json.load(h))
         except (OSError, ValueError):
             loaded.append(None)
-    reasons = check(loaded[0], loaded[1], args.actor)
+    reasons = check(loaded[0], loaded[1], args.actor, args.name)
     for r in reasons:
         print(f"environment: {r}")
-    print(f"environment {NAME}: {'protected as required' if not reasons else 'NOT protected as required'}")
+    print(f"environment {args.name}: {'protected as required' if not reasons else 'NOT protected as required'}")
     return 0 if not reasons else 1
 
 
