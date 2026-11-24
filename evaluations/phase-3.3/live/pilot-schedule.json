@@ -1,0 +1,94 @@
+{
+  "schema_version": 2,
+  "kind": "aqd-phase-3.2-sealed-schedule",
+  "seed": "139fa8e904da0cdfcc75fc30d562d637",
+  "created_utc": "2026-11-24T00:00:00Z",
+  "design": {
+    "models": [
+      "anthropic/claude-opus-5-5#medium"
+    ],
+    "tasks": [
+      "NEW-02",
+      "NEW-03",
+      "NEW-04"
+    ],
+    "repetitions": 1,
+    "groups": [
+      "control",
+      "treatment"
+    ],
+    "counterbalanced": true
+  },
+  "env_for_group": {
+    "control": "env-b",
+    "treatment": "env-a"
+  },
+  "runs": [
+    {
+      "order": 1,
+      "block": 1,
+      "model": "anthropic/claude-opus-5-5#medium",
+      "task": "NEW-04",
+      "repetition": 1,
+      "group": "treatment",
+      "env": "env-a",
+      "run_id": "r-49a8ed9516",
+      "blind_id": "b-adb41321"
+    },
+    {
+      "order": 2,
+      "block": 1,
+      "model": "anthropic/claude-opus-5-5#medium",
+      "task": "NEW-04",
+      "repetition": 1,
+      "group": "control",
+      "env": "env-b",
+      "run_id": "r-b77ae663bf",
+      "blind_id": "b-d001d750"
+    },
+    {
+      "order": 3,
+      "block": 2,
+      "model": "anthropic/claude-opus-5-5#medium",
+      "task": "NEW-02",
+      "repetition": 1,
+      "group": "control",
+      "env": "env-b",
+      "run_id": "r-2467089ae3",
+      "blind_id": "b-dd6f014d"
+    },
+    {
+      "order": 4,
+      "block": 2,
+      "model": "anthropic/claude-opus-5-5#medium",
+      "task": "NEW-02",
+      "repetition": 1,
+      "group": "treatment",
+      "env": "env-a",
+      "run_id": "r-3dbe15e184",
+      "blind_id": "b-54d4f77d"
+    },
+    {
+      "order": 5,
+      "block": 3,
+      "model": "anthropic/claude-opus-5-5#medium",
+      "task": "NEW-03",
+      "repetition": 1,
+      "group": "treatment",
+      "env": "env-a",
+      "run_id": "r-bc23637fc1",
+      "blind_id": "b-ff5c6a0f"
+    },
+    {
+      "order": 6,
+      "block": 3,
+      "model": "anthropic/claude-opus-5-5#medium",
+      "task": "NEW-03",
+      "repetition": 1,
+      "group": "control",
+      "env": "env-b",
+      "run_id": "r-6568760496",
+      "blind_id": "b-c4e2af37"
+    }
+  ]
+}

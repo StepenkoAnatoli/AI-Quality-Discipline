@@ -3,8 +3,8 @@
 
     python3 -I check_approval_commit.py --repo DIR --pinned SHA [--main-workflow FILE] [--approval-path PATH]
 
---approval-path selects the approval file: the probe's (default) or SMOKE's (smoke-approval.json, two runs). Only
-these two reviewed paths are accepted.
+--approval-path selects the approval file: the probe's (default), SMOKE's (smoke-approval.json, two runs) or the G1
+pilot's (pilot-approval.json, six runs). Only these reviewed paths are accepted.
 
 The approval is a one-file commit made by the owner directly on top of the reviewed commit:
 
@@ -31,7 +31,9 @@ import sys
 
 APPROVAL_PATH = "evaluations/phase-3.3/live/probe-approval.json"
 SMOKE_APPROVAL_PATH = "evaluations/phase-3.3/live/smoke-approval.json"
-APPROVAL_PATHS = (APPROVAL_PATH, SMOKE_APPROVAL_PATH)
+PILOT_APPROVAL_PATH = "evaluations/phase-3.3/live/pilot-approval.json"
+APPROVAL_PATHS = (APPROVAL_PATH, SMOKE_APPROVAL_PATH, PILOT_APPROVAL_PATH)
+RUNS_PER_APPROVAL = {APPROVAL_PATH: 1, SMOKE_APPROVAL_PATH: 2, PILOT_APPROVAL_PATH: 6}
 WORKFLOW_PATH = ".github/workflows/phase3-cc-smoke.yml"
 PLACEHOLDER = 'AQD_TEST_SHA: "0000000000000000000000000000000000000000"'
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -88,7 +90,7 @@ def check(repo, pinned, main_workflow=None, approval_path=APPROVAL_PATH):
             return ["the approval at reviewed_commit is missing or not JSON"]
         if not isinstance(template, dict) or any(template.get(k) not in ("", None) for k in OWNER_FIELDS):
             reasons.append("the approval at reviewed_commit is not the unfilled template")
-        want_runs = 1 if approval_path == APPROVAL_PATH else 2
+        want_runs = RUNS_PER_APPROVAL[approval_path]
         if not isinstance(template, dict) or template.get("approved_runs") != approval.get("approved_runs") \
                 or not isinstance(approval.get("approved_runs"), list) or len(approval["approved_runs"]) != want_runs:
             reasons.append("approved_runs differ from the reviewed template (run, task, arm, model or a SHA-256)")

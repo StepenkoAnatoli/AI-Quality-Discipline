@@ -5,6 +5,7 @@ is complete. Replaces `tar ... 2>/dev/null || true`, which could hide a missing 
     python3 -I pack_evidence.py --operator DIR --run-id RUN --out ARCHIVE.tar.gz                  (the probe)
     python3 -I pack_evidence.py --operator DIR --kind smoke --run-id RUN1 --run-id RUN2 --out ARCHIVE.tar.gz
 
+--kind pilot (the G1 invocation pilot, PILOT-G1.md): six --run-id values and the top-level pilot-verdict.json.
 --kind smoke (the two-arm SMOKE run, SMOKE-PROPOSAL.md) requires each run's capture files except the probe's
 live-probe.json, plus the top-level smoke-verdict.json. A run that never started (an earlier run stopped the batch)
 is reported as missing, so the archive is INCOMPLETE, which is the truth.
@@ -48,7 +49,7 @@ OVERLAP = 256          # bytes kept between chunks so a token split across two r
 CHUNK = 1024 * 1024
 MAX_PARSE = 64 * 1024 * 1024          # required JSON/NDJSON larger than this is archived but flagged
 TOTAL_BUDGET = 2 * 1024 * 1024 * 1024  # non-required bytes; required files are always archived
-TOP = ("preflight.log", "launcher.log", "smoke-verdict.json")
+TOP = ("preflight.log", "launcher.log", "smoke-verdict.json", "pilot-verdict.json")
 TREES = ("sealed", "captures")
 REQUIRED_TOP = ("preflight.log", "launcher.log", "sealed/schedule.json", "sealed/cc-run-approved.json",
                 "sealed/preflight-cc.json")
@@ -59,7 +60,9 @@ SYMLINK = "symlink (not followed)"
 
 
 REQUIRED_SMOKE_TOP = ("smoke-verdict.json",)
-KINDS = ("probe", "smoke")
+REQUIRED_PILOT_TOP = ("pilot-verdict.json",)
+KINDS = ("probe", "smoke", "pilot")
+RUN_COUNT = {"probe": 1, "smoke": 2, "pilot": 6}
 
 
 def required(run_ids, kind="probe"):
@@ -68,8 +71,8 @@ def required(run_ids, kind="probe"):
     if kind == "probe":
         return list(REQUIRED_TOP) + [f"captures/{run_ids[0]}/{p}" for p in REQUIRED_CAPTURE]
     per_run = [p for p in REQUIRED_CAPTURE if p != "live-probe.json"]
-    return (list(REQUIRED_TOP) + list(REQUIRED_SMOKE_TOP)
-            + [f"captures/{r}/{p}" for r in run_ids for p in per_run])
+    top = REQUIRED_SMOKE_TOP if kind == "smoke" else REQUIRED_PILOT_TOP
+    return list(REQUIRED_TOP) + list(top) + [f"captures/{r}/{p}" for r in run_ids for p in per_run]
 
 
 def _walk(operator, problems):
@@ -275,12 +278,12 @@ def main(argv=None):
     p.add_argument("--kind", choices=KINDS, default="probe")
     p.add_argument("--out", required=True)
     args = p.parse_args(argv)
-    want = 1 if args.kind == "probe" else 2
+    want = RUN_COUNT[args.kind]
     if len(args.run_id) != want or len(set(args.run_id)) != want \
             or not all(re.match(r"^r-[0-9a-f]{10}$", r) for r in args.run_id):
         print("evidence: bad run id(s)")
         return 1
-    code, m = pack(args.operator, args.run_id if args.kind == "smoke" else args.run_id[0], args.out, args.kind)
+    code, m = pack(args.operator, args.run_id[0] if args.kind == "probe" else args.run_id, args.out, args.kind)
     print("evidence: status=%s files=%d required_missing=%d problems=%d token_shaped_files=%d archive=%s" % (
         m.get("status"), len(m["files"]), len(m["missing"]), len(m["problems"]), m["token_shaped_files"],
         "written" if code != 1 else "NOT WRITTEN"))

@@ -69,5 +69,12 @@ class SingleUseMessageTests(unittest.TestCase):
                 self.assertIn(f"first and only deployment of environment {name}", r.stdout)
 
 
+class PilotEnvironmentNameTests(unittest.TestCase):
+    def test_the_pilot_environment_is_a_reviewed_name(self):
+        pilot = dict(D, environment="aqd-cc-live-pilot")
+        self.assertEqual(su.check([pilot], "aqd-cc-live-pilot"), [])
+        self.assertTrue(su.check([pilot, dict(pilot, id=2)], "aqd-cc-live-pilot"))
+
+
 if __name__ == "__main__":
     unittest.main()

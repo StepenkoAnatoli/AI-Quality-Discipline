@@ -69,9 +69,11 @@ class VerifyEnvironmentJobTests(unittest.TestCase):
         self.assertEqual(self.JOB["permissions"], {"contents": "read", "actions": "read"})
 
     def test_each_live_mode_checks_its_own_environment(self):
-        self.assertIn("inputs.mode == 'live-security-probe' || inputs.mode == 'live-smoke'", self.JOB["if"])
+        self.assertIn("inputs.mode == 'live-security-probe' || inputs.mode == 'live-smoke' || "
+                      "inputs.mode == 'live-pilot'", self.JOB["if"])
         self.assertEqual(self.JOB["env"]["AQD_ENV_NAME"],
-                         "${{ inputs.mode == 'live-smoke' && 'aqd-cc-live-smoke' || 'aqd-cc-live-probe' }}")
+                         "${{ inputs.mode == 'live-smoke' && 'aqd-cc-live-smoke' || inputs.mode == 'live-pilot' && "
+                         "'aqd-cc-live-pilot' || 'aqd-cc-live-probe' }}")
         self.assertIn('--name "$AQD_ENV_NAME"', self.steps()[2]["run"])
         self.assertIn('environments/$AQD_ENV_NAME"', self.steps()[0]["run"])
 
@@ -147,10 +149,11 @@ class GuardScriptTests(unittest.TestCase):
 
 class SecretPlacementTests(unittest.TestCase):
     def test_each_secret_in_exactly_one_step_and_only_in_the_live_job(self):
-        # once in the probe job and once in the SMOKE job (each job's own environment holds its own secrets)
+        # once in each live job: probe, SMOKE and pilot (each job's own environment holds its own secrets)
         self.assertEqual(sorted(re.findall(r"secrets\.([A-Z_]+)", TEXT)),
-                         ["AQD_CC_OAUTH_TOKEN"] * 2 + ["AQD_RESULTS_PASSPHRASE"] * 2)
-        self.assertEqual(sorted(WF["jobs"]), ["live-security-probe", "live-smoke", "mock", "verify-environment"])
+                         ["AQD_CC_OAUTH_TOKEN"] * 3 + ["AQD_RESULTS_PASSPHRASE"] * 3)
+        self.assertEqual(sorted(WF["jobs"]), ["live-pilot", "live-security-probe", "live-smoke", "mock",
+                                              "verify-environment"])
         token = [s["name"] for s in STEPS if "secrets.AQD_CC_OAUTH_TOKEN" in str(s)]
         passphrase = [s["name"] for s in STEPS if "secrets.AQD_RESULTS_PASSPHRASE" in str(s)]
         self.assertEqual(token, [step("Write the credentials file")["name"]])
@@ -332,6 +335,124 @@ class SmokeJobTests(unittest.TestCase):
         smoke = [n for n in names if n.startswith("Rehearsal of the two-arm SMOKE run")]
         self.assertEqual(len(smoke), 1)
         self.assertLess(names.index(smoke[0]), names.index("Keep only redacted summaries"))
+
+
+PILOT = WF["jobs"]["live-pilot"]
+PILOT_STEPS = PILOT["steps"]
+PILOT_RUN_IDS = WF["env"]["AQD_PILOT_RUN_IDS"]
+PILOT_SCHEDULE = json.load(open(os.path.join(ROOT, "evaluations", "phase-3.3", "live", "pilot-schedule.json"),
+                                encoding="utf-8"))
+
+
+def pstep(prefix):
+    return step(prefix, PILOT_STEPS)
+
+
+def pindex(prefix):
+    return index(prefix, PILOT_STEPS)
+
+
+class PilotJobTests(unittest.TestCase):
+    """The live-pilot job (PILOT-G1.md): the same gates, its own environment, approval and six runs."""
+
+    def test_job_condition_environment_and_permissions(self):
+        cond = PILOT["if"]
+        for part in ("github.event_name == 'workflow_dispatch'", "inputs.mode == 'live-pilot'",
+                     "github.ref == 'refs/heads/main'", "github.run_attempt == 1"):
+            self.assertIn(part, cond)
+        self.assertNotIn("||", cond)
+        self.assertEqual(PILOT["environment"], "aqd-cc-live-pilot")
+        self.assertEqual(sorted(PILOT["needs"]), ["mock", "verify-environment"])
+        self.assertEqual(PILOT["permissions"], {"contents": "read", "deployments": "read"})
+        self.assertNotIn("aqd-cc-live-probe", str(PILOT))
+        self.assertNotIn("AQD_PROBE_RUN_ID", str(PILOT))
+
+    def test_same_steps_and_actions_as_the_reviewed_probe_job(self):
+        self.assertEqual(len(PILOT_STEPS), len(STEPS))
+        self.assertEqual([s.get("uses") for s in PILOT_STEPS], [s.get("uses") for s in STEPS])
+        self.assertEqual([s.get("if") for s in PILOT_STEPS], [s.get("if") for s in STEPS])
+
+    def test_the_run_ids_are_the_committed_schedule_in_order(self):
+        ordered = [r["run_id"] for r in sorted(PILOT_SCHEDULE["runs"], key=lambda r: r["order"])]
+        self.assertEqual(PILOT_RUN_IDS.split(" "), ordered)
+
+    def run_guard(self, event="workflow_dispatch", ref="refs/heads/main", attempt="1", run_id=PILOT_RUN_IDS,
+                  confirm=f"RUN-LIVE-PILOT {PILOT_RUN_IDS}", pin=PIN):
+        g = pstep("Guard")
+        env = {"PATH": "/usr/bin:/bin", "EVENT": event, "REF": ref, "ATTEMPT": attempt, "RUN_INPUT": run_id,
+               "CONFIRM": confirm, "AQD_TEST_SHA": pin, "AQD_PILOT_RUN_IDS": PILOT_RUN_IDS}
+        self.assertNotIn("secrets.", str(g))
+        return subprocess.run(["bash", "-c", g["run"]], env=env, capture_output=True, text=True).returncode
+
+    def test_guard(self):
+        self.assertEqual(self.run_guard(), 0)
+        ids = PILOT_RUN_IDS.split(" ")
+        first, second = ids[0], " ".join(reversed(ids))
+        for kw in ({"event": "pull_request"}, {"ref": "refs/heads/feature"}, {"attempt": "2"}, {"pin": "0" * 40},
+                   {"run_id": first}, {"run_id": second}, {"run_id": RUN},
+                   {"confirm": f"RUN-LIVE-PROBE {RUN}"}, {"confirm": f"RUN-LIVE-PILOT {first}"}, {"confirm": ""}):
+            with self.subTest(kw=kw):
+                self.assertEqual(self.run_guard(**kw), 1)
+
+    def test_each_secret_in_exactly_one_step_of_this_job(self):
+        token = [s["name"] for s in PILOT_STEPS if "secrets.AQD_CC_OAUTH_TOKEN" in str(s)]
+        passphrase = [s["name"] for s in PILOT_STEPS if "secrets.AQD_RESULTS_PASSPHRASE" in str(s)]
+        self.assertEqual(token, [pstep("Write the credentials file")["name"]])
+        self.assertEqual(passphrase, [pstep("Package and encrypt the evidence")["name"]])
+
+    def test_every_check_runs_before_the_token_is_written(self):
+        creds = pindex("Write the credentials file")
+        for prefix in ("Guard", "Check out exactly the pinned commit", "Verify the owner's approval commit",
+                       "Single use of the approval", "Verify the commit, the canonical skill"):
+            self.assertLess(pindex(prefix), creds, prefix)
+        self.assertEqual(pstep("Check out exactly the pinned commit")["with"]["fetch-depth"], 2)
+
+    def test_the_pilot_approval_file_the_reviewed_checker_and_the_marker(self):
+        run = pstep("Verify the owner's approval commit")["run"]
+        self.assertIn('git show "$AQD_TEST_SHA^:evaluations/phase-3.3/live/check_approval_commit.py"', run)
+        self.assertIn("--main-workflow", run)
+        self.assertIn("--approval-path evaluations/phase-3.3/live/pilot-approval.json", run)
+        lines = [l.strip() for l in run.splitlines() if l.strip() and not l.strip().startswith("#")]
+        self.assertTrue(lines[-1].startswith("printf") and "aqd-approval-verified" in lines[-1])
+
+    def test_single_use_of_the_pilot_environment(self):
+        run = pstep("Single use of the approval")["run"]
+        self.assertIn("deployments?environment=aqd-cc-live-pilot&per_page=100", run)
+        self.assertIn("--name aqd-cc-live-pilot", run)
+
+    def test_runs_the_pilot_script_and_packs_all_runs_behind_the_marker(self):
+        self.assertIn("run-live-pilot.sh live", pstep("Run the six approved pilot runs")["run"])
+        pack = pstep("Package and encrypt the evidence")["run"]
+        self.assertIn("--kind pilot", pack)
+        self.assertLess(pack.index("aqd-approval-verified"), pack.index("sudo python3"))
+        self.assertNotIn("|| true", pack)
+        self.assertRegex(pack, r'0\) echo "evidence encrypted: COMPLETE" ;;')
+        head = pack[:pack.index("p=\"$RUNNER_TEMP/aqd-pack\"")]
+        with tempfile.TemporaryDirectory() as t:
+            env = {"PATH": "/usr/bin:/bin", "AQD_PASS": "x" * 40, "AQD_TEST_SHA": PIN, "RUNNER_TEMP": t,
+                   "GITHUB_WORKSPACE": t}
+            self.assertEqual(subprocess.run(["bash", "-c", head], env=env, capture_output=True).returncode, 1)
+
+    def test_cleanup_and_upload_only_ciphertext(self):
+        for prefix in ("Remove the credentials file", "Package and encrypt the evidence", "Upload the encrypted capture",
+                       "Restore the AppArmor"):
+            self.assertEqual(pstep(prefix).get("if"), "always()", prefix)
+        up = pstep("Upload the encrypted capture")["with"]
+        self.assertEqual(up["name"], "aqd-cc-live-pilot-encrypted")
+        self.assertTrue(up["path"].endswith("aqd-cc-live-pilot.tar.gz.gpg"))
+        self.assertEqual(up["retention-days"], 1)
+
+    def test_the_mock_job_rehearses_the_pilot_run(self):
+        names = [s.get("name", "") for s in WF["jobs"]["mock"]["steps"]]
+        pilot = [n for n in names if n.startswith("Rehearsal of the G1 invocation pilot")]
+        self.assertEqual(len(pilot), 1)
+        self.assertLess(names.index(pilot[0]), names.index("Keep only redacted summaries"))
+
+
+
+    def test_the_pilot_job_has_room_for_six_runs(self):
+        self.assertEqual(PILOT["timeout-minutes"], 330)
+        self.assertLessEqual(PILOT["timeout-minutes"], 360)  # GitHub-hosted jobs stop at 6 hours
 
 
 if __name__ == "__main__":

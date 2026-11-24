@@ -16,7 +16,7 @@ import json
 import sys
 
 NAME = "aqd-cc-live-probe"
-NAMES = (NAME, "aqd-cc-live-smoke")  # the probe's and the SMOKE run's environments
+NAMES = (NAME, "aqd-cc-live-smoke", "aqd-cc-live-pilot")  # probe, SMOKE and the G1 pilot
 
 
 def check(environment, policies, actor, name=NAME):

@@ -262,5 +262,72 @@ class SmokeApprovalCommitTests(unittest.TestCase):
         self.assertEqual(SMOKE_COMMITTED["approved_runs"], want)
 
 
+PILOT_APPROVAL = cac.PILOT_APPROVAL_PATH
+PILOT_COMMITTED = json.load(open(os.path.join(LIVE, "pilot-approval.json"), encoding="utf-8"))
+PILOT_TEMPLATE = dict(PILOT_COMMITTED, approved_by="", approved_utc="", reviewed_commit="")
+
+
+class PilotApprovalCommitTests(unittest.TestCase):
+    """The G1 pilot's six-run approval file (--approval-path pilot-approval.json)."""
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        git(self.repo, "init", "-q", "-b", "work")
+        for path, data in ((APPROVAL, TEMPLATE), (PILOT_APPROVAL, PILOT_TEMPLATE)):
+            write(self.repo, path, json.dumps(data, indent=2) + "\n")
+        write(self.repo, WORKFLOW, WORKFLOW_TEXT)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "reviewed head")
+        self.reviewed = git(self.repo, "rev-parse", "HEAD")
+
+    def tearDown(self):
+        shutil.rmtree(self.repo)
+
+    def approve(self, **override):
+        a = json.loads(json.dumps(PILOT_TEMPLATE))
+        a.update(approved_by="owner-login", approved_utc="2026-11-24T09:00:00Z", reviewed_commit=self.reviewed)
+        a.update(override)
+        write(self.repo, PILOT_APPROVAL, json.dumps(a, indent=2) + "\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "owner approval")
+        return git(self.repo, "rev-parse", "HEAD")
+
+    def test_a_pilot_approval_commit_passes_only_with_the_pilot_path(self):
+        pinned = self.approve()
+        main_wf = WORKFLOW_TEXT.replace(cac.PLACEHOLDER, f'AQD_TEST_SHA: "{pinned}"')
+        self.assertEqual(cac.check(self.repo, pinned, main_wf, PILOT_APPROVAL), [])
+        self.assertTrue(cac.check(self.repo, pinned))
+        self.assertTrue(cac.check(self.repo, pinned, approval_path=cac.SMOKE_APPROVAL_PATH))
+        data = json.load(open(os.path.join(self.repo, PILOT_APPROVAL), encoding="utf-8"))
+        for entry in data["approved_runs"]:
+            self.assertEqual(cc_adapter.check_approval(data, **{k: entry[k] for k in cc_adapter.APPROVAL_KEYS}), [])
+
+    def test_fewer_runs_are_refused(self):
+        pinned = self.approve(approved_runs=PILOT_TEMPLATE["approved_runs"][:5])
+        self.assertTrue(cac.check(self.repo, pinned, approval_path=PILOT_APPROVAL))
+
+    def test_the_committed_pilot_file_is_the_template_or_a_complete_owner_approval(self):
+        by, utc, reviewed = (PILOT_COMMITTED[k] for k in cac.OWNER_FIELDS)
+        if (by, utc, reviewed) != ("", "", ""):
+            self.assertTrue(isinstance(by, str) and by.strip(), "approved_by")
+            self.assertRegex(utc, cac.UTC)
+            self.assertRegex(reviewed, cac.SHA)
+        self.assertEqual(set(PILOT_COMMITTED), {"approved_runs", "note", *cac.OWNER_FIELDS})
+
+    def test_the_committed_pilot_values_are_the_schedule_the_tasks_and_the_pinned_cli(self):
+        import hashlib
+        import manifest
+        schedule = json.load(open(os.path.join(LIVE, "pilot-schedule.json"), encoding="utf-8"))
+        root = os.path.join(LIVE, "..", "..", "phase-3.2")
+        cli = re.search(r'AQD_CLI_SHA256: "([0-9a-f]{64})"', WORKFLOW_TEXT).group(1)
+        want = []
+        for r in sorted(schedule["runs"], key=lambda r: r["order"]):
+            prompt = hashlib.sha256(open(os.path.join(root, "tasks", r["task"], "project", "TASK.md"), "rb").read())
+            want.append({"run_id": r["run_id"], "task": r["task"], "group": r["group"], "model": r["model"],
+                         "prompt_sha256": prompt.hexdigest(), "cli_sha256": cli,
+                         "workspace_sha256": manifest.build(root, r["task"])["workspace_sha256"]})
+        self.assertEqual(PILOT_COMMITTED["approved_runs"], want)
+
+
 if __name__ == "__main__":
     unittest.main()

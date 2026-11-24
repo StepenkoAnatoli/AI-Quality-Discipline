@@ -301,5 +301,43 @@ class SmokeKindTests(unittest.TestCase):
         self.assertEqual(pe.main(base + ["--run-id", SMOKE_RUNS[0], "--run-id", SMOKE_RUNS[1]]), 1)
 
 
+PILOT_RUNS = ["r-49a8ed9516", "r-b77ae663bf", "r-2467089ae3", "r-3dbe15e184", "r-bc23637fc1", "r-6568760496"]
+
+
+class PilotKindTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.op = os.path.join(self.tmp, "operator")
+        self.out = os.path.join(self.tmp, "capture.tar.gz")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def store(self, runs):
+        smoke_store(self.op, runs)
+        os.remove(os.path.join(self.op, "smoke-verdict.json"))
+        with open(os.path.join(self.op, "pilot-verdict.json"), "w") as h:
+            h.write('{"harness_pass": true}')
+
+    def test_six_runs_and_the_pilot_verdict_are_required(self):
+        req = pe.required(PILOT_RUNS, "pilot")
+        self.assertIn("pilot-verdict.json", req)
+        self.assertNotIn("smoke-verdict.json", req)
+        self.store(PILOT_RUNS)
+        self.assertEqual(pe.pack(self.op, PILOT_RUNS, self.out, "pilot")[0], 0)
+
+    def test_a_run_that_never_started_is_incomplete(self):
+        self.store(PILOT_RUNS[:4])
+        self.assertEqual(pe.pack(self.op, PILOT_RUNS, self.out, "pilot")[0], 3)
+
+    def test_cli_needs_exactly_six_distinct_ids(self):
+        self.store(PILOT_RUNS)
+        base = ["--operator", self.op, "--out", self.out, "--kind", "pilot"]
+        ids = lambda runs: [x for r in runs for x in ("--run-id", r)]
+        self.assertEqual(pe.main(base + ids(PILOT_RUNS)), 0)
+        self.assertEqual(pe.main(base + ids(PILOT_RUNS[:5])), 1)
+        self.assertEqual(pe.main(base + ids(PILOT_RUNS[:5] + PILOT_RUNS[:1])), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

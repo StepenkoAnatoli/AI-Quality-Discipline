@@ -82,7 +82,7 @@ This is a security-relevant redesign. It gets its own audit and its own mock reh
 | Gate | When | Go if | Otherwise |
 |---|---|---|---|
 | **G0** | Now | The owner chooses D0 (a) and names the people for D5 | Stop. Phase 3.3's result is: the harness is ready and safe; no effect measured |
-| **G1. Invocation pilot** | Before building tasks | On 3–4 existing *public* realistic tasks (the Phase 3.2 NEW-01..04 prompts, treatment arm only, unscored), record whether the agent invokes the skill. Needs a separate written authorisation and the H4-lite single-batch job (≤ 4 runs fits the SMOKE pattern) | Choose D1 (b) or (c), or stop |
+| **G1. Invocation pilot** | Before building tasks | On 3 existing *public* realistic tasks (NEW-02, NEW-03, NEW-04), one pair each (6 runs, unscored), record whether the agent invokes the skill. Pairs, because the native preflight accepts only control+treatment blocks. Owner's choice of 2026-11-24; built in `PILOT-G1.md`; needs a separate written authorisation | Choose D1 (b) or (c), or stop |
 | **G2. Pilot batch** | After 2 tasks per tier are built, validated and rated | Build effort within about 2× of §3; rater agreement acceptable; each oracle passes the alternative design | Re-plan the volume (D2) or stop |
 | **G3. Freeze** | Before Stage 1 | All of §4 merged with green CI and mock rehearsals; `DESIGN.md` §9 freeze recorded | Do not run Stage 1 |
 | **G4. Stage 1 stop rules** | After Stage 1 | `DESIGN.md` §6: hard-task control success below 7 of 8; infrastructure-invalid rate at most 10% | Return to Stage 0 |
