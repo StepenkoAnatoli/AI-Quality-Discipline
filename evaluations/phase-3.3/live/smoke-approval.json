@@ -19,8 +19,8 @@
       "workspace_sha256": "4791a7c5f212ac2900b9b1f761f1779e8a90ab377db7209810fb544cb926b300"
     }
   ],
-  "approved_by": "",
-  "approved_utc": "",
-  "reviewed_commit": "",
+  "approved_by": "StepenkoAnatoli",
+  "approved_utc": "2026-11-24T20:23:58Z",
+  "reviewed_commit": "7ea1ae676f485ba6140619c6527c698b400b8a01",
   "note": "TEMPLATE. The owner approves in ONE commit directly on top of the reviewed commit that changes only this file: approved_by, approved_utc (YYYY-MM-DDTHH:MM:SSZ) and reviewed_commit (the 40-hex reviewed commit = the approval commit's parent). main's workflow then pins AQD_TEST_SHA to that approval commit (SMOKE-PROPOSAL.md). Until then the launcher refuses both runs."
 }
