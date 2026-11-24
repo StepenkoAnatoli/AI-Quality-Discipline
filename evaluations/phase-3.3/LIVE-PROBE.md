@@ -63,7 +63,7 @@ Anything else writes STOP. Nothing else may run.
 | Job | Runs when | Secrets |
 |---|---|---|
 | `mock` | every pull request and every dispatch (in live mode it is the same-run gate) | none |
-| `verify-environment` | dispatch with `mode: live-security-probe` | none (reads the environment's **public** settings; `check_environment.py`) |
+| `verify-environment` | dispatch with `mode: live-security-probe` | none. Reads the environment's settings with the job's own token (`actions: read`, one step that runs no checkout code), then `check_environment.py` in a step without it |
 | `live-security-probe` | `workflow_dispatch` **and** `inputs.mode == 'live-security-probe'` **and** `github.ref == 'refs/heads/main'` **and** `github.run_attempt == 1`; `needs: [mock, verify-environment]`; `environment: aqd-cc-live-probe`; permissions `contents: read`, `deployments: read` | `AQD_CC_OAUTH_TOKEN` in exactly one step; `AQD_RESULTS_PASSPHRASE` in exactly one step |
 
 The live job's steps (1-5 hold no secret; any failure stops before the token is written):

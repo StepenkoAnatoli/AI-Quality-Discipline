@@ -55,6 +55,62 @@ class LiveJobConditionTests(unittest.TestCase):
         self.assertEqual(TEXT.count('AQD_TEST_SHA: "0000000000000000000000000000000000000000"'), 1)
 
 
+class VerifyEnvironmentJobTests(unittest.TestCase):
+    """verify-environment reads the settings with its own job token (anonymous reads were refused, 403, in live
+    dispatches 22 and 23). The token is in one step that runs no checkout code; the checker step holds no token."""
+    JOB = WF["jobs"]["verify-environment"]
+
+    def steps(self):
+        return self.JOB["steps"]
+
+    def test_permissions_are_read_only_and_minimal(self):
+        self.assertEqual(self.JOB["permissions"], {"contents": "read", "actions": "read"})
+
+    def test_job_token_only_in_the_read_step_before_any_checkout(self):
+        steps = self.steps()
+        with_token = [s.get("name") for s in steps if "github.token" in str(s) or "GH_TOKEN" in str(s)]
+        self.assertEqual(with_token, [steps[0]["name"]])
+        self.assertNotIn("uses", steps[0])
+        self.assertNotIn("evaluations/", steps[0]["run"])  # runs no code from the checkout
+        self.assertNotIn("secrets.", str(self.JOB))
+        self.assertTrue(str(steps[1].get("uses", "")).startswith("actions/checkout@"))
+        self.assertIn("check_environment.py", steps[2]["run"])
+
+    def run_read_step(self, code, body):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = os.path.join(tmp, "bin")
+            os.mkdir(fake)
+            with open(os.path.join(fake, "curl"), "w") as h:  # writes the body to -o, prints the code for -w
+                h.write('#!/bin/bash\nprintf "%s\\n" "$*" >>"$RUNNER_TEMP/curl-args"\n'
+                        'while [[ $# -gt 0 ]]; do [[ "$1" == -o ]] && { printf %s "$FAKE_BODY" >"$2"; shift; }; '
+                        'shift; done\nprintf %s "$FAKE_CODE"\n')
+            os.chmod(os.path.join(fake, "curl"), 0o755)
+            env = {"PATH": fake + ":/usr/bin:/bin", "RUNNER_TEMP": tmp, "GH_TOKEN": "ghs_fake", "REPO": "o/r",
+                   "FAKE_CODE": code, "FAKE_BODY": body}
+            out = subprocess.run(["bash", "-c", self.steps()[0]["run"]], env=env, capture_output=True, text=True)
+            files = {n: open(os.path.join(tmp, "aqd-env", n)).read() for n in ("env.json", "policies.json")}
+            calls = open(os.path.join(tmp, "curl-args")).read().splitlines()
+            self.assertEqual(len(calls), 2)
+            for c in calls:  # both reads authenticated with the job token
+                self.assertIn("Authorization: Bearer ghs_fake", c)
+            self.assertTrue(calls[0].endswith("/repos/o/r/environments/aqd-cc-live-probe"))
+            self.assertTrue(calls[1].endswith("/environments/aqd-cc-live-probe/deployment-branch-policies"))
+            return out, files
+
+    def test_a_refused_read_leaves_an_empty_object_and_says_why(self):
+        out, files = self.run_read_step("403", '{"message":"API rate limit exceeded"}')
+        self.assertEqual(out.returncode, 0)
+        self.assertEqual(files, {"env.json": "{}\n", "policies.json": "{}\n"})
+        self.assertIn("HTTP 403", out.stdout)
+        self.assertIn("rate limit", out.stdout)
+
+    def test_a_200_read_keeps_the_body(self):
+        out, files = self.run_read_step("200", '{"name":"aqd-cc-live-probe"}')
+        self.assertEqual(out.returncode, 0)
+        self.assertEqual(files["env.json"], '{"name":"aqd-cc-live-probe"}')
+        self.assertNotIn("ghs_fake", out.stdout + out.stderr)
+
+
 class GuardScriptTests(unittest.TestCase):
     """Runs the guard step's own bash with the values GitHub would pass."""
 
