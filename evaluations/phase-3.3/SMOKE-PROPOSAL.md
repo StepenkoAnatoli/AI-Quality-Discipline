@@ -9,7 +9,7 @@
 
 This follows the passing live security probe (`LIVE-PROBE-RESULT.md`).
 
-**Build status (2026-11-24): built offline, not dispatched.** See §8 for what exists and how it was tested.
+**Build status (2026-11-24): built offline (§8), then run once with the owner's written authorisation: PASS.** See `SMOKE-RESULT.md`.
 
 ## 1. Purpose
 

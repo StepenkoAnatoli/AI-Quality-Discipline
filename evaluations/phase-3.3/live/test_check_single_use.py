@@ -56,5 +56,18 @@ class SingleUseEnvironmentNameTests(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+class SingleUseMessageTests(unittest.TestCase):
+    def test_the_success_line_names_the_environment_that_was_checked(self):
+        with tempfile.TemporaryDirectory() as t:
+            for name in ("aqd-cc-live-probe", "aqd-cc-live-smoke"):
+                path = os.path.join(t, "d.json")
+                with open(path, "w") as h:
+                    json.dump([dict(D, environment=name)], h)
+                r = subprocess.run([sys.executable, "-I", os.path.join(LIVE, "check_single_use.py"), "--deployments",
+                                    path, "--name", name], capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, r.stdout)
+                self.assertIn(f"first and only deployment of environment {name}", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

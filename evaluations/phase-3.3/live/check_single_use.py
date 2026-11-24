@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single use of the live-probe environment: refuse if environment aqd-cc-live-probe has EVER had a deployment
+"""Single use of a live environment (aqd-cc-live-probe, or aqd-cc-live-smoke with --name): refuse if it has EVER had a deployment
 other than this job's own.
 
     python3 -I check_single_use.py --deployments deployments.json
@@ -49,7 +49,7 @@ def main(argv=None):
     reasons = check(data, args.name)
     for r in reasons:
         print(f"single use: {r}")
-    print("single use: " + ("first and only deployment of the live-probe environment" if not reasons else "REFUSED"))
+    print("single use: " + (f"first and only deployment of environment {args.name}" if not reasons else "REFUSED"))
     return 0 if not reasons else 1
 
 

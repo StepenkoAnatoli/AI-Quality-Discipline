@@ -82,7 +82,7 @@ Mock dispatches on the pinned approval commits were green: run 19 (old X `bc4a62
 - The secret was deleted after the run (owner confirmed).
 
 **Revocation.**
-- The account-wide Log Out was **pending when this record was drafted**. The owner confirms it in this PR.
+- The account-wide Log Out after run 28: **done (owner confirmed, 2026-11-24)**. It was pending when this record was first drafted.
 - Two earlier tokens (created for runs 22 and 23) were revoked by an account-wide Log Out on 2026-11-24, before run 28.
 - Observation: immediately after that Log Out, another OAuth-authenticated client of the same account was refused with "OAuth token revoked". This supports the Log Out taking effect at once. It does not test a setup token directly.
 
