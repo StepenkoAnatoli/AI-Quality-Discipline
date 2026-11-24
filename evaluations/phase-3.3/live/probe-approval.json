@@ -10,8 +10,8 @@
       "workspace_sha256": "17130aa73f08ce35aaf10e68c98c89416dae0d890fbc6b1e692c02003ae1fc6f"
     }
   ],
-  "approved_by": "",
-  "approved_utc": "",
-  "reviewed_commit": "",
+  "approved_by": "StepenkoAnatoli",
+  "approved_utc": "2026-11-24T09:20:48Z",
+  "reviewed_commit": "15a16c07b48f6753cdab2a5f92675620e6924545",
   "note": "TEMPLATE. The owner approves in ONE commit directly on top of the reviewed commit that changes only this file: approved_by, approved_utc (YYYY-MM-DDTHH:MM:SSZ) and reviewed_commit (the 40-hex reviewed commit = the approval commit's parent). main's workflow then pins AQD_TEST_SHA to that approval commit (LIVE-PROBE.md section 6). Until then the launcher refuses this run."
 }
