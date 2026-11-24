@@ -1,6 +1,7 @@
 # The first live security probe: implementation, evidence and approval checklist (2026-11-23)
 
 **Status:**
+- **2026-11-24: run once with the owner's written authorisation; PASS.** See `LIVE-PROBE-RESULT.md`. The bullets below describe the state before that run.
 - **Implemented and mock-tested offline. Not dispatched and not authorised.**
 - No real token was created, no Anthropic model request was made, and nothing was merged.
 - The canonical skill is unchanged (`d050d00f…`).
