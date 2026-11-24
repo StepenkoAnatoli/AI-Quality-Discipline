@@ -53,7 +53,7 @@ concurrency:
 
 env:
   # Immutable references, reviewed with this file. Placeholder here: a dispatch of this copy refuses.
-  AQD_TEST_SHA: "bc4a629692c2639207998894f55859c09c0149e2"
+  AQD_TEST_SHA: "76cf0d9bd072df5fd57b372397c823e59831a625"
   AQD_CLI_VERSION: "2.1.330"
   AQD_CLI_TARBALL: "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.330.tgz"
   AQD_CLI_TARBALL_SHA256: "40ff30c5768723958032132065e6fcdd1e2dc3a2b3ff9a0bf36c6620ef1c40ef"
@@ -206,28 +206,48 @@ jobs:
           fi
 
   verify-environment:
-    # Public settings only (no token, no secret): the environment must be main-only, reviewed, without admin bypass.
+    # Settings only (no secret): the environment must be main-only, reviewed, without admin bypass. The two reads use
+    # this job's own token (actions: read, as GitHub documents for both endpoints): anonymous reads from shared runner
+    # addresses hit GitHub's per-IP limit and were refused with 403 in live dispatches 22 and 23 (fail-closed).
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'live-security-probe'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     steps:
+      - name: Read the environment settings (job token; runs no checkout code)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/aqd-env"; mkdir -p "$d"
+          api="https://api.github.com/repos/$REPO/environments/aqd-cc-live-probe"
+          read_one() {  # $1 output file, $2 URL. Anything but HTTP 200 leaves '{}', which the checker refuses.
+            local code
+            code=$(curl -sS -o "$d/$1" -w '%{http_code}' -H 'Accept: application/vnd.github+json' \
+              -H "Authorization: Bearer $GH_TOKEN" "$2" || true)
+            echo "read $1: HTTP $code"
+            if [[ "$code" != 200 ]]; then
+              if [[ -s "$d/$1" ]]; then head -c 300 "$d/$1" | tr -cd '[:print:]' | sed 's/^/GitHub said: /'; echo; fi
+              echo '{}' >"$d/$1"
+            fi
+          }
+          read_one env.json "$api"
+          read_one policies.json "$api/deployment-branch-policies"
       - name: Check out the pinned commit (no credentials persisted)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.AQD_TEST_SHA }}
           persist-credentials: false
           fetch-depth: 1
-      - name: Verify the environment protection settings
+      - name: Verify the environment protection settings (no token in this step)
         env:
-          REPO: ${{ github.repository }}
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          d="$RUNNER_TEMP/aqd-env"; mkdir -p "$d"
-          api="https://api.github.com/repos/$REPO/environments/aqd-cc-live-probe"
-          curl -fsS -H 'Accept: application/vnd.github+json' "$api" -o "$d/env.json" || echo '{}' >"$d/env.json"
-          curl -fsS -H 'Accept: application/vnd.github+json' "$api/deployment-branch-policies" -o "$d/policies.json" \
-            || echo '{}' >"$d/policies.json"
+          d="$RUNNER_TEMP/aqd-env"
           python3 -I evaluations/phase-3.3/live/check_environment.py --environment "$d/env.json" \
             --branch-policies "$d/policies.json" --actor "$ACTOR"
 
