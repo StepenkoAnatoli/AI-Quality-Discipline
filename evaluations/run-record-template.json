@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "task_id": "CD-01",
+  "task_set_revision": "commit-sha",
+  "run_id": "blind-run-id",
+  "condition": "control-or-treatment",
+  "operator": "operator-id",
+  "timestamp_utc": "YYYY-MM-DDTHH:MM:SSZ",
+  "agent": {
+    "product": "agent-name",
+    "version": "version",
+    "model": "model-and-version",
+    "surface": "cli-or-ide-or-web"
+  },
+  "treatment": {
+    "skill_name": null,
+    "skill_revision": null,
+    "activation": "not-applicable-or-confirmed-or-failed"
+  },
+  "fixture": {
+    "path": "evaluations/fixtures/...",
+    "revision": "commit-sha",
+    "sha256_manifest": "manifest-hash",
+    "clean_copy_confirmed": true
+  },
+  "environment": {
+    "tools": [],
+    "permissions": [],
+    "network": "enabled-or-disabled-or-limited",
+    "configuration_notes": ""
+  },
+  "execution": {
+    "duration_seconds": null,
+    "tool_call_count": null,
+    "execution_error": null,
+    "transcript_artifact": "",
+    "final_output_artifact": "",
+    "diff_artifact": "",
+    "test_output_artifact": ""
+  },
+  "scores": {
+    "correctness": null,
+    "request_compliance": null,
+    "evidence_verification": null,
+    "scope_economy": null,
+    "clarity_usability": null,
+    "weighted_total": null,
+    "critical_failures": [],
+    "regressions": []
+  },
+  "review": {
+    "reviewer_ids": [],
+    "blind_review": true,
+    "notes": "",
+    "adjudication": ""
+  },
+  "limitations": [],
+  "excluded": false,
+  "exclusion_reason": null
+}

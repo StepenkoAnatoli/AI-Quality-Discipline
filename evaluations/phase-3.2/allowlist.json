@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "description": "Exhaustive list of files that may enter a Phase 3.2 agent project. Paths are relative to evaluations/phase-3.2/. Anything not listed here is never copied.",
+  "categories": {
+    "immutable": "Must be byte-identical before and after the run. Root-owned and read-only inside the run.",
+    "mutable": "The one file the task asks the agent to change. Owned by the agent user.",
+    "additive": "Existing file inside an additive directory. The agent may change it or add siblings."
+  },
+  "additive_dirs": ["tests/additive"],
+  "protected_dirs": ["tests/baseline"],
+  "tolerated_artifacts": ["__pycache__", ".pytest_cache"],
+  "common_files": {
+    "opencode.jsonc": {"source": "config/opencode.jsonc", "category": "immutable"}
+  },
+  "test_command": ["python3", "-m", "unittest", "discover", "-s", "tests", "-t", ".", "-v"],
+  "tasks": {
+    "SMOKE": {
+      "title": "Harness smoke check (runtime gates only; never scored)",
+      "source_dir": "tasks/SMOKE/project",
+      "files": {
+        "README.md": "immutable",
+        "TASK.md": "immutable",
+        "notes.txt": "mutable"
+      }
+    },
+    "NEW-01": {
+      "title": "Duplicate webhook processing (idempotency)",
+      "source_dir": "tasks/NEW-01/project",
+      "files": {
+        "README.md": "immutable",
+        "TASK.md": "immutable",
+        "webhooks/__init__.py": "immutable",
+        "webhooks/app.py": "immutable",
+        "webhooks/handler.py": "mutable",
+        "webhooks/outbox.py": "immutable",
+        "webhooks/store.py": "immutable",
+        "webhooks/types.py": "immutable",
+        "tests/__init__.py": "immutable",
+        "tests/baseline/__init__.py": "immutable",
+        "tests/baseline/test_webhooks_baseline.py": "immutable",
+        "tests/additive/__init__.py": "additive"
+      }
+    },
+    "NEW-02": {
+      "title": "Concurrent inventory reservations",
+      "source_dir": "tasks/NEW-02/project",
+      "files": {
+        "README.md": "immutable",
+        "TASK.md": "immutable",
+        "inventory/__init__.py": "immutable",
+        "inventory/db.py": "immutable",
+        "inventory/errors.py": "immutable",
+        "inventory/service.py": "mutable",
+        "inventory/worker.py": "immutable",
+        "tests/__init__.py": "immutable",
+        "tests/baseline/__init__.py": "immutable",
+        "tests/baseline/test_inventory_baseline.py": "immutable",
+        "tests/additive/__init__.py": "additive"
+      }
+    },
+    "NEW-03": {
+      "title": "CSV import compatibility",
+      "source_dir": "tasks/NEW-03/project",
+      "files": {
+        "README.md": "immutable",
+        "TASK.md": "immutable",
+        "importer/__init__.py": "immutable",
+        "importer/csv_import.py": "mutable",
+        "importer/models.py": "immutable",
+        "sample_data/crm_export.csv": "immutable",
+        "sample_data/excel export (semicolon).csv": "immutable",
+        "tests/__init__.py": "immutable",
+        "tests/baseline/__init__.py": "immutable",
+        "tests/baseline/test_import_baseline.py": "immutable",
+        "tests/additive/__init__.py": "additive"
+      }
+    },
+    "NEW-04": {
+      "title": "Job queue leases for several workers",
+      "source_dir": "tasks/NEW-04/project",
+      "files": {
+        "README.md": "immutable",
+        "TASK.md": "immutable",
+        "jobqueue/__init__.py": "immutable",
+        "jobqueue/db.py": "immutable",
+        "jobqueue/errors.py": "immutable",
+        "jobqueue/jobs.py": "mutable",
+        "jobqueue/models.py": "immutable",
+        "jobqueue/worker.py": "immutable",
+        "tests/__init__.py": "immutable",
+        "tests/baseline/__init__.py": "immutable",
+        "tests/baseline/test_jobs_baseline.py": "immutable",
+        "tests/additive/__init__.py": "additive"
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# Prompts, task files and configuration are hashed byte-for-byte (prompt and
+# workspace SHA-256 in run records): keep LF on every platform.
+tasks/** text eol=lf
+config/** text eol=lf
+# Fixture sample files are byte-exact test inputs (BOM, CRLF): never convert.
+tasks/**/sample_data/*.csv -text
+# Scripts run on Linux.
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf

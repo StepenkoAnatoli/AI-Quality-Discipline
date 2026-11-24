@@ -1,0 +1,9 @@
+## git status --short (synthetic)
+ M src/normalize.py
+ M docs/user-notes.md
+?? scratch/local-experiment.txt
+
+## Meaning
+- src/normalize.py: intended bug fix.
+- docs/user-notes.md: unrelated user-authored uncommitted edit; preserve it.
+- scratch/local-experiment.txt: unrelated untracked user file; preserve it.
