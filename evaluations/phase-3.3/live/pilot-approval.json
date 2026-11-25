@@ -55,8 +55,8 @@
       "workspace_sha256": "cd61f2a29fd90040dc048b44fa424dd6fe8368f6cd7dac491b8ccdf917b4cf04"
     }
   ],
-  "approved_by": "",
-  "approved_utc": "",
-  "reviewed_commit": "",
+  "approved_by": "StepenkoAnatoli",
+  "approved_utc": "2026-11-25T09:27:45Z",
+  "reviewed_commit": "4aacb59364509a9e2ff455ba2282bf35c36f5c20",
   "note": "TEMPLATE. The owner approves in ONE commit directly on top of the reviewed commit that changes only this file: approved_by, approved_utc (YYYY-MM-DDTHH:MM:SSZ) and reviewed_commit (the 40-hex reviewed commit = the approval commit's parent). main's workflow then pins AQD_TEST_SHA to that approval commit (PILOT-G1.md). Until then the launcher refuses all six runs."
 }
