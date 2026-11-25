@@ -77,7 +77,7 @@ class InspectTests(unittest.TestCase):
         (row,) = ii.inspect(self.store, self.schedule)
         self.assertTrue(row["disagrees_with_harness"])
 
-    def test_controls_are_skipped_and_missing_captures_reported(self):
+    def test_controls_are_left_out_and_missing_captures_reported(self):
         self.add("r-c", "control", [use(*EDIT, "e")], False, False)
         self.schedule["runs"].append({"run_id": "r-x", "group": "treatment", "task": "T", "order": 9})
         rows = ii.inspect(self.store, self.schedule)
