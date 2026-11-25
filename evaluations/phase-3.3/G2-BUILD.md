@@ -35,7 +35,7 @@
 | M3 | Add a column with backfill to a migration runner; re-runnable | 2 | 15 | 8 of 8 | passes all | 51 of 51 | 13 / 15 | **hard** |
 | M6 | Bulk import with per-row errors and a resumable checkpoint | 2 | 16 | 8 of 8 | passes all | 49 of 49 | 12 / 13 | medium / hard (on the boundary) |
 | H4 | Recurring scheduler: exactly-once across workers and DST changes | 2 | 15 | 10 of 10 | passes all | 60 of 60 | 13 / 15 | hard |
-| H6 | Cross-process token-bucket rate limiter in SQLite, fair under contention | 2 | 15 | pending | pending | pending | 16 / 16 | hard |
+| H6 | Cross-process token-bucket rate limiter in SQLite, fair under contention | 2 | 15 | 13 of 13 | passes all | 40 of 40 | 16 / 16 | hard |
 
 **Validator:**
 - Every package: the reference passes every check; the pristine project and the shortcut each fail at least one; the source map is clean.
@@ -43,7 +43,7 @@
 
 **Ratings:**
 - **Within one point on every factor:** 12 of 12 rating pairs (6 tasks × S and D) for each of the 8 factors. The `DESIGN.md` §3 threshold is 0.6.
-- **Exact agreement:** from 6 of 12 to 12 of 12, depending on the factor.
+- **Exact agreement:** from 8 of 12 to 12 of 12, depending on the factor.
 - **What this agreement means:** it is model-rater agreement (T2), not inter-human reliability.
 - **F6 (requirement discovery):** 0 for every S variant, and 1–3 for every D variant, as the S/D design intends.
 
@@ -62,7 +62,7 @@
 - In E4 and E6, the mutable file also holds working code that the task does not touch: the validation of other settings, and the other commands. No hidden check protected it, so a solution that broke it would have scored as correct.
 - Regression checks were added. Their source is a new sentence in both prompts asking that the untouched code keep its current behaviour.
 
-**A realistic wrong implementation in E6** passed every check. A check was added for the obligation it broke. This was a mutant, not an alternative design, so it does not count under T7.
+**Realistic wrong implementations in E6 and H6** each passed every check once. A check was added, or extended, for the obligation each one broke. These were mutants, not alternative designs, so they do not count under T7. The H6 fix changed only the hidden test; the reference is unchanged, so the earlier mechanical-mutation result (40 of 40) still holds.
 
 **Session audit:**
 - **What was audited:** every session's transcript (6 builders and 36 role sessions).
@@ -72,9 +72,9 @@
 
 ## 4. Effort
 
-- **Elapsed:** about 2.5 hours, 18:43 to about 21:15 UTC. The six builds ran in parallel.
+- **Elapsed:** about 3 hours, 18:43 to about 21:40 UTC. The six builds ran in parallel.
 - **Builder sessions:** 6 to 35 minutes of model time each, before revisions. The hard task H6 took the longest.
-- **Revision rounds:** 0 for M3; 1 each for E4, M6, H4 and H6; 2 for E6.
+- **Revision rounds:** 0 for M3; 1 each for E4, M6 and H4; 2 each for E6 and H6.
 - **Role sessions:** about 5 to 15 minutes each.
 - **The owner's time so far:** none beyond approval. Spot check 1 takes about 1.5 hours.
 - **A failed first launch:** the six builder sessions were given a shortened commit hash the cloud could not resolve. They stopped at the clone step with 0 tokens used and were archived.

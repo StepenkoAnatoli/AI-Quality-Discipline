@@ -132,5 +132,5 @@ The hidden tests, reference, alternative designs, mutants and source map live in
    - On the toy task, mechanical mutation found a gap its author had not planted: no hidden check covers a split into one part, so a mutant that rejects one part survives. Survivors like this are reported to the builder, never hidden and never gated.
    - It runs in the `Phase 3 validation` workflow.
 4. **The private task repository** (`aqd-private-tasks`, created by the owner) and the task-package layout (H5).
-5. **The G2 pilot batch:** 2 tasks per tier through the protocol, then the G2 decision.
+5. **The G2 pilot batch:** 2 tasks per tier through the protocol, then the G2 decision. **Built 2026-11-25** (`G2-BUILD.md`): 6 of 6 valid, spot check 1 pending. One deviation to fix in this protocol: cloud sessions load account-level plugins, so §2.1's "no plugins" should read "no exposure to the skill under test", which is what the audit checks.
 6. H2, H3 and H4, before the freeze (G3).
