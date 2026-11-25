@@ -2,7 +2,7 @@
 
 **Status:**
 - Planning only. No model call, no secret, no infrastructure.
-- Nothing here is approved. Every decision below is the owner's.
+- Every decision below is the owner's. Decided so far: D0 (a), continue through the gates (2026-11-24); D1 (a), availability (2026-11-25, after G1). Gate G1 passed. Still open: D2 to D5; G0 is complete only when the D5 people are named.
 
 **Inputs:**
 - `DESIGN.md` §4 to §10;
@@ -27,7 +27,7 @@
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
 | **D0** | Pursue Phase 3.3 at all? | (a) yes, through the gates below; (b) stop here and publish the probe and SMOKE records as the result of this phase | Decide after reading §3: the binding cost is **human time**, not model usage |
-| **D1** | Estimand | (a) **availability**: the skill installed as users get it; invocation is recorded and reported. (b) **exposure**: the skill text always in the treatment context (e.g. a treatment-only system-prompt addition), comparable with Phase 3.2. (c) both, as two treatment arms (about 1.5× the runs) | Choose after the invocation pilot (G1). If invocation is common, (a); if rare, (b), stated plainly as "the skill's content when read", not "the skill as deployed" |
+| **D1** | Estimand | (a) **availability**: the skill installed as users get it; invocation is recorded and reported. (b) **exposure**: the skill text always in the treatment context (e.g. a treatment-only system-prompt addition), comparable with Phase 3.2. (c) both, as two treatment arms (about 1.5× the runs) | **Decided by the owner on 2026-11-25: (a) availability**, after G1 (invoked in 3 of 3 treatment runs, `PILOT-G1-RESULT.md`). Invocation is recorded per run and reported with every result |
 | **D2** | Task volume | 6 per tier (18), or 8 per tier (24) if §6 of `DESIGN.md` recommends 6 confirmatory per tier | Start with **2 per tier (6 tasks)** as the G2 pilot batch. Commit to the full set only after measuring real build effort |
 | **D3** | Caching | (a) record only and report tokens with cache split, no cost comparison; (b) `DISABLE_PROMPT_CACHING=1` in both arms (needs the harness change and uses more of the plan); (c) a fixed warm-up per block | **(a) for Stage 1** (correctness is the primary outcome and does not depend on caching). Revisit for any cost claim |
 | **D4** | Plan usage | How to treat a run stopped by usage limits | Pre-register it as **infrastructure-invalid**, with at most one rerun per slot (the Phase 3.2 rule). Spread blocks over days. Stop the stage if more than 10% of runs fail this way (`DESIGN.md` §6 infrastructure rule) |
@@ -82,7 +82,7 @@ This is a security-relevant redesign. It gets its own audit and its own mock reh
 | Gate | When | Go if | Otherwise |
 |---|---|---|---|
 | **G0** | Now | The owner chooses D0 (a) and names the people for D5 | Stop. Phase 3.3's result is: the harness is ready and safe; no effect measured |
-| **G1. Invocation pilot** | Before building tasks | On 3 existing *public* realistic tasks (NEW-02, NEW-03, NEW-04), one pair each (6 runs, unscored), record whether the agent invokes the skill. Pairs, because the native preflight accepts only control+treatment blocks. Owner's choice of 2026-11-24; built in `PILOT-G1.md`; needs a separate written authorisation | Choose D1 (b) or (c), or stop |
+| **G1. Invocation pilot** | Before building tasks | On 3 existing *public* realistic tasks (NEW-02, NEW-03, NEW-04), one pair each (6 runs, unscored), record whether the agent invokes the skill. Pairs, because the native preflight accepts only control+treatment blocks. Owner's choice of 2026-11-24; built in `PILOT-G1.md`. **Passed on 2026-11-25: harness PASS, invoked in 3 of 3** (`PILOT-G1-RESULT.md`); D1 (a) chosen | Choose D1 (b) or (c), or stop |
 | **G2. Pilot batch** | After 2 tasks per tier are built, validated and rated | Build effort within about 2× of §3; rater agreement acceptable; each oracle passes the alternative design | Re-plan the volume (D2) or stop |
 | **G3. Freeze** | Before Stage 1 | All of §4 merged with green CI and mock rehearsals; `DESIGN.md` §9 freeze recorded | Do not run Stage 1 |
 | **G4. Stage 1 stop rules** | After Stage 1 | `DESIGN.md` §6: hard-task control success below 7 of 8; infrastructure-invalid rate at most 10% | Return to Stage 0 |

@@ -1,7 +1,8 @@
 # G1 invocation pilot (2026-11-24)
 
 **Status:**
-- **Built offline, not authorised, not dispatched.** No model call, no secret.
+- **Run once, with the owner's written authorisation of 2026-11-25:** harness PASS; the skill was invoked in 3 of 3 treatment runs. See `PILOT-G1-RESULT.md`. The owner then chose D1 (a), availability.
+- Built offline first (§4); the files are now the record of that run and are not changed.
 - The owner chose this design on 2026-11-24 (`STAGE0-PLAN.md` gate G1): 3 pairs on NEW-02, NEW-03 and NEW-04.
 - **Never scored.** No hidden test runs and nothing is analysed. The records stay in the encrypted evidence and are never pooled with any scientific result.
 
