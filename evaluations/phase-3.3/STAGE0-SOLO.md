@@ -86,7 +86,7 @@ The hidden tests, reference, alternative designs, mutants and source map live in
 ## 5. Order of work (each a reviewed PR; offline; no live run)
 
 1. **This document** (decisions).
-2. **H1 and H6 (per-run results record):** unexpected files with the placeholders excluded, total prompt tokens (D3), invocation, validity, and the evidence bundle's SHA-256. Offline code and tests.
+2. **H1 and H6 (per-run results record):** unexpected files with the placeholders excluded, total prompt tokens (D3), invocation, validity, and the evidence bundle's SHA-256. Offline code and tests. **Built:** `live/results_record.py` with 11 tests. Not yet wired into the live jobs: that is part of the Stage 1 workflow (H4).
 3. **The oracle validator** (§2.2) with its own tests, on a toy task.
 4. **The private task repository** (owner creates it) and the task-package layout (H5).
 5. **The G2 pilot batch:** 2 tasks per tier through the protocol, then the G2 decision.
