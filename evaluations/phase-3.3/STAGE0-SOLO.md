@@ -118,9 +118,9 @@ The hidden tests, reference, alternative designs, mutants and source map live in
 ## 5. Order of work (each a reviewed PR; offline; no live run)
 
 1. **This document** (decisions).
-2. **H1 and part of H6, the per-run results record (built here).** `live/results_record.py`, with 15 tests. It records:
+2. **H1 and part of H6, the per-run results record (built here).** `live/results_record.py`, with 16 tests. It records:
    - validity, with the harness's reasons;
-   - arm and invocation;
+   - arm, and invocation as two fields: the skill was *called*, and its text was *loaded* (`PILOT-G1-AUDIT.md` A1). Load timing (before the first edit) needs the transcript and comes with the Stage 1 instrumentation;
    - tokens, total prompt tokens and why they are missing when they are;
    - unexpected files, with the placeholders excluded;
    - the SHA-256 of the sealed schedule and of the encrypted bundle (computed from the file).

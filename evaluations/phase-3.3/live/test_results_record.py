@@ -47,7 +47,8 @@ class ResultsRecordTests(unittest.TestCase):
                   "tokens": {"input": 10, "output": 500, "cache_read": 100000, "cache_write": 7000},
                   "workspace_findings": {"unexpected": sorted(check_smoke.PLACEHOLDERS) if unexpected is None
                                          else unexpected}}
-        checks = {"group": group, "invoked": treatment, "skill_invocations": [], "tool_counts": {"Bash": 4, "Edit": 3}}
+        checks = {"group": group, "invoked": treatment, "skill_text_loaded": treatment, "skill_invocations": [],
+                  "tool_counts": {"Bash": 4, "Edit": 3}}
         for key, value in over.items():
             target, field = key.split("__")
             {"status": status, "checks": checks}[target][field] = value
@@ -112,6 +113,13 @@ class ResultsRecordTests(unittest.TestCase):
         self.assertEqual((rec["valid"], rec["scope_violation"], rec["invalid_reasons"]),
                          (False, True, ["immutable files changed or missing"]))
         self.assertFalse(self.run_rec("NEW-04", "control")["scope_violation"])
+
+    def test_a_call_that_did_not_load_the_skill_is_told_apart(self):
+        # PILOT-G1-AUDIT.md A1: `invoked` is true for a failed call; `loaded` is the harness's skill_text_loaded.
+        self.make("NEW-03", "treatment", checks__skill_text_loaded=False)
+        rec = self.run_rec("NEW-03", "treatment")
+        self.assertEqual((rec["invoked"], rec["loaded"]), (True, False))
+        self.assertEqual(self.run_rec("NEW-02", "treatment")["loaded"], True)
 
     def test_the_scope_reason_is_the_harness_string(self):
         with open(RUN_STATUS_PY, encoding="utf-8") as h:

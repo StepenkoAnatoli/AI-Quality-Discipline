@@ -2,7 +2,9 @@
 
 **A harness check with one recorded measurement, never scored.** It asks only whether the agent invokes the `code-discipline` skill when it is available on realistic tasks (`PILOT-G1.md`). No hidden test ran and nothing about code quality was measured or compared. These records are never pooled with any scientific result.
 
-**Harness verdict: PASS. Measurement: the skill was invoked in 3 of 3 valid treatment runs.** The public log and the owner's offline review of the encrypted evidence agree.
+**Harness verdict: PASS. Measurement: the agent *called* the skill in 3 of 3 valid treatment runs.** The public log and the owner's offline review of the encrypted evidence agree.
+
+**Correction (2026-11-25, after `PILOT-G1-AUDIT.md`):** "invoked" counts Skill tool *calls*, not successful loads of the skill text, and ignores timing. An earlier version of this record said the agent "loaded" the skill; that was not established. Whether each call loaded the skill, and before the first edit, is settled offline with `live/inspect_invocation.py` on the decrypted evidence (§8).
 
 **Owner decision (2026-11-25), from this result:** `STAGE0-PLAN.md` D1 = **(a) availability**.
 
@@ -66,7 +68,7 @@ The owner authorised in writing (2026-11-25) one dispatch with these values. The
 
 ## 5. Findings
 
-1. **Invocation on realistic tasks.** The agent loaded the skill in every treatment run (3 of 3), against 0 of 1 on the one-line SMOKE task. This is the G1 answer and the basis of the D1 decision (§7).
+1. **Invocation on realistic tasks.** The agent called the skill in every treatment run (3 of 3), against 0 of 1 on the one-line SMOKE task. This is the G1 answer and the basis of the D1 decision (§7). Whether each call loaded the skill text, and when, is open (§8).
 2. **The controls stayed clean.** No control run listed or used the skill.
 3. **Prompt caching is larger on realistic tasks.** Cache reads were about 100 k to 176 k tokens per run, against about 28.7 k in SMOKE. This strengthens finding F2 of `STAGE0-PLAN.md`: token and cost figures depend on cache state and run order (D3).
 4. **Placeholders.** All six runs had the same 17 sandbox placeholders, as before. H1 (exclude them by name and size) is still needed before "unexpected files" becomes an outcome.
@@ -75,12 +77,13 @@ The owner authorised in writing (2026-11-25) one dispatch with these values. The
 ## 6. What this does and does not establish
 
 **Established:**
-- With the skill available, the agent invoked it on each of the three realistic public tasks tried, once each.
+- With the skill available, the agent issued a Skill call naming it on each of the three realistic public tasks tried.
 - The pilot job, its single-use environment and its evidence chain worked end to end, as for the probe and SMOKE.
 
 **Not established:**
 - **an invocation rate.** Three runs, one per task, give a coarse signal, not an estimate. Stage 1 records invocation per run and reports it;
-- whether the agent *followed* the skill after loading it;
+- whether each call actually loaded the skill text, and whether it did so before the first edit (§8);
+- whether the agent *followed* the skill;
 - any effect of the skill on correctness or quality. No hidden test ran; the tool counts, tokens and durations above are recorded, **not compared** between arms;
 - how the agent behaves on the new, private Stage 0 tasks.
 
@@ -92,3 +95,16 @@ Following the decision rule in `PILOT-G1.md` §3 (3 of 3 suggests availability),
 - No exposure arm (D1(b) or (c)), so no treatment-only system-prompt change to the harness is needed.
 
 The next gate is G2 (`STAGE0-PLAN.md` §5). It needs the people of D5 named first.
+
+## 8. Open check from the audit (`PILOT-G1-AUDIT.md`)
+
+D1 (a) was chosen on "called in 3 of 3". The audit showed that a failed or late call counts the same. The owner runs `live/inspect_invocation.py` once on the decrypted pilot evidence (offline, read-only, booleans and counts only) and the result is recorded here:
+
+| Result | Consequence |
+|---|---|
+| loaded 3, loaded before the first edit 3 | D1 (a) stands as stated |
+| loaded 3, fewer before the first edit | D1 (a) stands; the timing is recorded with it |
+| fewer than 3 loaded | "3 of 3" overstated the signal: revisit D1 under `PILOT-G1.md` §3, applied to loaded runs |
+| any `disagrees_with_harness=True` | stop and investigate before relying on either number |
+
+**Result:** not yet run.

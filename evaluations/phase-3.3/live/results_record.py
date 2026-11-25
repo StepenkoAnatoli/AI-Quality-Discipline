@@ -10,7 +10,8 @@ as missing).
 
 Reads only the harness's own per-run records under STORE/captures/<run>/ (run-status.json, export-checks.json) and,
 for the placeholder size check, STORE/captures/<run>/project-final/<name>. Writes one machine-readable record per
-scheduled run: validity with the harness's invalid reasons, arm, invocation, tokens, duration and workspace findings.
+scheduled run: validity with the harness's invalid reasons, arm, invocation (`invoked` = a Skill call was issued;
+`loaded` = the skill text reached the session, PILOT-G1-AUDIT.md A1), tokens, duration and workspace findings.
 Never code, diffs, transcripts or file contents: names, counts, booleans, ids and the harness's reason strings.
 The file holds treatment results: under STAGE0-SOLO.md §2.5 it is produced only at analysis time. The console shows
 counts only.
@@ -129,7 +130,8 @@ def record_run(cap, run_id, task, group):
         timed_out=status.get("timed_out") is True,
         activation=status.get("activation"),
         arm_matches=checks.get("group") == group if checks else None,
-        invoked=checks.get("invoked") is True if checks else None,
+        invoked=checks.get("invoked") is True if checks else None,  # a Skill CALL was issued (PILOT-G1-AUDIT.md A1)
+        loaded=checks.get("skill_text_loaded") is True if checks else None,  # the skill text reached the session
         tool_calls=sum(v for v in (_int(x) for x in tool_counts.values()) if v is not None) if checks else None,
         tool_counts={str(k): v for k, v in tool_counts.items() if _int(v) is not None},
         tokens={k: _int(tokens.get(k)) for k in ("input", "output", "cache_read", "cache_write")},
