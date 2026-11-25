@@ -2,30 +2,41 @@
 """Per-run results record for Phase 3.3 (STAGE0-PLAN.md H1 and H6; STAGE0-SOLO.md D3). Offline, no model, no network.
 
     python3 -I results_record.py --store OPERATOR_STORE --schedule SCHEDULE.json --out results.json \
-        [--bundle-sha256 HEX]
+        [--bundle BUNDLE.tar.gz.gpg]
+
+One record file per store, that is per dispatch: one sealed schedule, one encrypted bundle. --schedule must be
+byte-identical to STORE/sealed/schedule.json, or the tool refuses (a wrong schedule would otherwise record every run
+as missing).
 
 Reads only the harness's own per-run records under STORE/captures/<run>/ (run-status.json, export-checks.json) and,
 for the placeholder size check, STORE/captures/<run>/project-final/<name>. Writes one machine-readable record per
-scheduled run: validity, arm, invocation, tokens, duration and workspace findings. Never code, diffs, transcripts or
-file contents: names, counts, booleans and ids only.
+scheduled run: validity with the harness's invalid reasons, arm, invocation, tokens, duration and workspace findings.
+Never code, diffs, transcripts or file contents: names, counts, booleans, ids and the harness's reason strings.
+The file holds treatment results: under STAGE0-SOLO.md §2.5 it is produced only at analysis time. The console shows
+counts only.
+
+A run aborted before its export was analysed (for example at the auth check) still has run-status.json: its verdict
+and reasons are kept, with export-checks.json listed in `missing_files` and the export fields null. A run with no
+run-status.json is `recorded: false`; nothing is guessed.
 
 H1, unexpected files as an outcome:
   * the 17 known sandbox placeholders (the same names as check_smoke.PLACEHOLDERS) are excluded only when captured
-    and exactly 0 bytes;
-  * a placeholder name that is missing from the capture or not empty stays in `unexpected_files` and is also listed
-    in `placeholders_not_empty`;
+    as regular files of exactly 0 bytes;
+  * a placeholder name that is not such a file stays in `unexpected_files` and is also listed in
+    `placeholders_not_empty` (defensive: manifest.verify reports symlinks and special files separately);
   * every other unexpected file is listed by name.
 
-D3, tokens: `total_prompt_tokens` = input + cache_read + cache_write, the prompt tokens processed whatever the cache
-state. It is null when any part is missing, never a partial sum.
+D3, tokens: `total_prompt_tokens` = input + cache_read + cache_write from the session's final usage record, the prompt
+tokens processed whatever the cache state. It is null when any part is missing, never a partial sum, and
+`tokens_missing_reason` says why (a timed-out session has no final usage record).
 
-H6, retention: `bundle_sha256` records the SHA-256 of the encrypted evidence bundle the record came from, and
-`schedule_sha256` the schedule file's bytes.
+H6, retention (partial): `bundle_sha256` is computed from the encrypted bundle file given, and `schedule_sha256` from
+the schedule's bytes. Scores are added when Stage 1 scoring is wired in.
 
-Scope violation (detection only, H2 scoring is separate): `scope_violation` is true when the run is invalid because
-immutable files changed or were removed.
+Scope violation (detection only; H2 scoring is separate): `scope_violation` is true when the harness's reasons include
+"immutable files changed or missing" (run_status.py).
 
-This is a record, not a verdict: exit 0 when written, 2 on a usage error.
+This is a record, not a verdict: exit 0 when written, 2 when refused.
 """
 import argparse
 import hashlib
@@ -41,7 +52,6 @@ PLACEHOLDERS = frozenset((
     ".env.test", ".env.test.local", ".gitmodules", ".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml",
     "package-lock.json", "package.json", "pnpm-lock.yaml", "yarn.lock"))
 SCOPE_REASON = "immutable files changed or missing"  # run_status.py
-HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _load(path):
@@ -80,35 +90,52 @@ def total_prompt_tokens(tokens):
     return None if any(p is None for p in parts) else sum(parts)
 
 
+def tokens_missing_reason(status, tokens):
+    """None when the D3 total is complete; otherwise why not (a timed-out session has no final usage record)."""
+    if total_prompt_tokens(tokens) is not None:
+        return None
+    if status.get("timed_out") is True:
+        return "timed_out"
+    return "no usage record" if not tokens else "incomplete usage record"
+
+
 def record_run(cap, run_id, task, group):
     rec = {"run_id": run_id, "task": task, "group": group}
+    if not os.path.isdir(cap):
+        rec.update(recorded=False, missing_files=["capture"])
+        return rec
     status = _load(os.path.join(cap, "run-status.json"))
     checks = _load(os.path.join(cap, "export-checks.json"))
-    if not os.path.isdir(cap) or status is None or checks is None:
-        rec.update(recorded=False, missing="capture" if not os.path.isdir(cap) else "run-status or export-checks")
+    missing = [name for name, data in (("run-status.json", status), ("export-checks.json", checks)) if data is None]
+    rec["missing_files"] = missing
+    if status is None:
+        # Without run-status.json there is no verdict at all; nothing is guessed.
+        rec["recorded"] = False
         return rec
+    checks = checks or {}
     reasons = [str(r) for r in (status.get("invalid_reasons") or [])]
     findings = status.get("workspace_findings") or {}
     raw_unexpected = [str(n) for n in (findings.get("unexpected") or [])]
     unexpected, excluded, bad = split_unexpected(cap, raw_unexpected)
     tokens = status.get("tokens") if isinstance(status.get("tokens"), dict) else {}
     tool_counts = checks.get("tool_counts") if isinstance(checks.get("tool_counts"), dict) else {}
+    duration = status.get("duration_seconds")
     rec.update(
         recorded=True,
         valid=status.get("valid") is True,
-        invalid_reason_count=len(reasons),
+        invalid_reasons=reasons,
         scope_violation=SCOPE_REASON in reasons,
         model_ok=status.get("model_ok") is True,
         timed_out=status.get("timed_out") is True,
         activation=status.get("activation"),
-        arm_matches=checks.get("group") == group,
-        invoked=checks.get("invoked") is True,
-        tool_calls=sum(v for v in (_int(x) for x in tool_counts.values()) if v is not None),
+        arm_matches=checks.get("group") == group if checks else None,
+        invoked=checks.get("invoked") is True if checks else None,
+        tool_calls=sum(v for v in (_int(x) for x in tool_counts.values()) if v is not None) if checks else None,
         tool_counts={str(k): v for k, v in tool_counts.items() if _int(v) is not None},
         tokens={k: _int(tokens.get(k)) for k in ("input", "output", "cache_read", "cache_write")},
         total_prompt_tokens=total_prompt_tokens(tokens),
-        duration_seconds=status.get("duration_seconds") if isinstance(status.get("duration_seconds"), (int, float))
-        and not isinstance(status.get("duration_seconds"), bool) else None,
+        tokens_missing_reason=tokens_missing_reason(status, tokens),
+        duration_seconds=duration if isinstance(duration, (int, float)) and not isinstance(duration, bool) else None,
         unexpected_files=unexpected,
         unexpected_file_count=len(unexpected),
         placeholders_excluded=len(excluded),
@@ -118,11 +145,26 @@ def record_run(cap, run_id, task, group):
     return rec
 
 
-def build(store, schedule_path, bundle_sha256=None):
-    if bundle_sha256 is not None and not HEX64.match(bundle_sha256):
-        raise ValueError("--bundle-sha256 must be 64 lowercase hex characters")
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def build(store, schedule_path, bundle_path=None):
+    """One record file per store: one dispatch, one sealed schedule, one encrypted bundle."""
     with open(schedule_path, "rb") as h:
         raw = h.read()
+    sealed = os.path.join(store, "sealed", "schedule.json")
+    try:
+        with open(sealed, "rb") as h:
+            sealed_raw = h.read()
+    except OSError:
+        raise ValueError("the store has no sealed/schedule.json")
+    if hashlib.sha256(sealed_raw).digest() != hashlib.sha256(raw).digest():
+        raise ValueError("--schedule is not the schedule sealed in this store")
     schedule = json.loads(raw.decode("utf-8"))
     runs = schedule.get("runs") if isinstance(schedule, dict) else None
     if not isinstance(runs, list) or not runs:
@@ -133,7 +175,8 @@ def build(store, schedule_path, bundle_sha256=None):
         if not isinstance(run_id, str) or not re.match(r"^r-[0-9a-f]{10}$", run_id):
             raise ValueError("a scheduled run has a malformed run_id")
         records.append(record_run(os.path.join(store, "captures", run_id), run_id, r.get("task"), r.get("group")))
-    return {"schema": SCHEMA, "schedule_sha256": hashlib.sha256(raw).hexdigest(), "bundle_sha256": bundle_sha256,
+    return {"schema": SCHEMA, "schedule_sha256": hashlib.sha256(raw).hexdigest(),
+            "bundle_sha256": _sha256_file(bundle_path) if bundle_path else None,
             "stop_file": os.path.exists(os.path.join(store, "sealed", "STOP")), "runs": records}
 
 
@@ -142,24 +185,19 @@ def main(argv=None):
     p.add_argument("--store", required=True)
     p.add_argument("--schedule", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--bundle-sha256")
+    p.add_argument("--bundle", help="the encrypted evidence bundle (.gpg) of this dispatch; its SHA-256 is recorded")
     args = p.parse_args(argv)
     try:
-        result = build(args.store, args.schedule, args.bundle_sha256)
+        result = build(args.store, args.schedule, args.bundle)
     except (OSError, ValueError) as exc:
         print(f"[results] refused: {exc}", file=sys.stderr)
         return 2
     with open(args.out, "w", encoding="utf-8") as h:
         json.dump(result, h, indent=2, sort_keys=True)
         h.write("\n")
-    for rec in result["runs"]:
-        if not rec.get("recorded"):
-            print(f"[results] {rec['run_id']} {rec.get('task')} {rec.get('group')}: not recorded ({rec['missing']})")
-            continue
-        print("[results] %s %s %s: valid=%s invoked=%s unexpected_files=%d placeholders_excluded=%d "
-              "total_prompt_tokens=%s" % (rec["run_id"], rec.get("task"), rec["group"], rec["valid"], rec["invoked"],
-                                          rec["unexpected_file_count"], rec["placeholders_excluded"],
-                                          rec["total_prompt_tokens"]))
+    # Counts only: per-run rows (which include treatment results) stay in the file (STAGE0-SOLO.md §2.5).
+    recorded = sum(1 for rec in result["runs"] if rec.get("recorded"))
+    print(f"[results] {recorded} of {len(result['runs'])} scheduled runs recorded; written to {args.out}")
     return 0
 
 

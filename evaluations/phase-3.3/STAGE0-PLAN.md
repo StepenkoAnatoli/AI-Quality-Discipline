@@ -2,7 +2,7 @@
 
 **Status:**
 - Planning only. No model call, no secret, no infrastructure.
-- Every decision below is the owner's. Decided so far: D0 (a), continue through the gates (2026-11-24); D1 (a), availability (2026-11-25, after G1). Gate G1 passed. D2 to D5 are proposed in `STAGE0-SOLO.md` (owner's instruction of 2026-11-25: the most accurate option; one person, Claude does most of the work); merging it records them and passes G0.
+- Every decision below is the owner's. Decided so far: D0 (a), continue through the gates (2026-11-24); D1 (a), availability (2026-11-25, after G1). Gate G1 passed. D2 to D5 are set in `STAGE0-SOLO.md` (owner's instruction of 2026-11-25: the most accurate option; one person, Claude does most of the work). Merging it records them and passes G0. Where this plan says "human" below, `STAGE0-SOLO.md` §2 gives the solo substitute and §3 its limits.
 
 **Inputs:**
 - `DESIGN.md` §4 to §10;
@@ -28,10 +28,10 @@
 |---|---|---|---|
 | **D0** | Pursue Phase 3.3 at all? | (a) yes, through the gates below; (b) stop here and publish the probe and SMOKE records as the result of this phase | Decide after reading §3: the binding cost is **human time**, not model usage |
 | **D1** | Estimand | (a) **availability**: the skill installed as users get it; invocation is recorded and reported. (b) **exposure**: the skill text always in the treatment context (e.g. a treatment-only system-prompt addition), comparable with Phase 3.2. (c) both, as two treatment arms (about 1.5× the runs) | **Decided by the owner on 2026-11-25: (a) availability**, after G1 (invoked in 3 of 3 treatment runs, `PILOT-G1-RESULT.md`). Invocation is recorded per run and reported with every result |
-| **D2** | Task volume | 6 per tier (18), or 8 per tier (24) if §6 of `DESIGN.md` recommends 6 confirmatory per tier | Start with **2 per tier (6 tasks)** as the G2 pilot batch. Commit to the full set only after measuring real build effort. **Proposed (`STAGE0-SOLO.md`): 8 per tier (24), pilot batch first** |
-| **D3** | Caching | (a) record only and report tokens with cache split, no cost comparison; (b) `DISABLE_PROMPT_CACHING=1` in both arms (needs the harness change and uses more of the plan); (c) a fixed warm-up per block | **(a) for Stage 1** (correctness is the primary outcome and does not depend on caching). Revisit for any cost claim. **Proposed (`STAGE0-SOLO.md`): (a), with total prompt tokens (input + cache read + cache write) as the cache-invariant token outcome, and no cost claim** |
-| **D4** | Plan usage | How to treat a run stopped by usage limits | Pre-register it as **infrastructure-invalid**, with at most one rerun per slot (the Phase 3.2 rule). Spread blocks over days. Stop the stage if more than 10% of runs fail this way (`DESIGN.md` §6 infrastructure rule). **Proposed as stated (`STAGE0-SOLO.md`)** |
-| **D5** | People | Who rates difficulty (2 blind raters), who reviews the oracles (1 human), who does the engineer feasibility runs | Name them before G2. **Without them, Stage 0 cannot finish as designed.** The owner is one person (2026-11-25): **proposed the solo protocol (`STAGE0-SOLO.md` §2)**, with its limits stated (§3 there) |
+| **D2** | Task volume | 6 per tier (18), or 8 per tier (24) if §6 of `DESIGN.md` recommends 6 confirmatory per tier | Start with **2 per tier (6 tasks)** as the G2 pilot batch. Commit to the full set only after measuring real build effort. **`STAGE0-SOLO.md`: 8 per tier (24), pilot batch first** |
+| **D3** | Caching | (a) record only and report tokens with cache split, no cost comparison; (b) `DISABLE_PROMPT_CACHING=1` in both arms (needs the harness change and uses more of the plan); (c) a fixed warm-up per block | **(a) for Stage 1** (correctness is the primary outcome and does not depend on caching). Revisit for any cost claim. **`STAGE0-SOLO.md`: (a). Token volume = total prompt tokens (input + cache read + cache write) plus output; no money figure; the overhead ratio uses total tokens** |
+| **D4** | Plan usage | How to treat a run stopped by usage limits | Pre-register it as **infrastructure-invalid**, with at most one rerun per slot (the Phase 3.2 rule). Spread blocks over days. Stop the stage if more than 10% of runs fail this way (`DESIGN.md` §6 infrastructure rule). **`STAGE0-SOLO.md`: a usage-limit stop ends the block, and the block is rerun once, so exclusions stay arm-neutral** |
+| **D5** | People | Who rates difficulty (2 blind raters), who reviews the oracles (1 human), who does the engineer feasibility runs | Name them before G2. **Without them, Stage 0 cannot finish as designed.** The owner is one person (2026-11-25): **the solo protocol (`STAGE0-SOLO.md` §2)**, with its limits stated (§3 there) |
 
 ## 3. Stage 0 work and rough effort
 
@@ -81,14 +81,14 @@ This is a security-relevant redesign. It gets its own audit and its own mock reh
 
 | Gate | When | Go if | Otherwise |
 |---|---|---|---|
-| **G0** | Now | The owner chooses D0 (a) and names the people for D5 | Stop. Phase 3.3's result is: the harness is ready and safe; no effect measured |
+| **G0** | Now | The owner chooses D0 (a) and names the people for D5, or adopts the solo protocol (`STAGE0-SOLO.md`) | Stop. Phase 3.3's result is: the harness is ready and safe; no effect measured |
 | **G1. Invocation pilot** | Before building tasks | On 3 existing *public* realistic tasks (NEW-02, NEW-03, NEW-04), one pair each (6 runs, unscored), record whether the agent invokes the skill. Pairs, because the native preflight accepts only control+treatment blocks. Owner's choice of 2026-11-24; built in `PILOT-G1.md`. **Passed on 2026-11-25: harness PASS, invoked in 3 of 3** (`PILOT-G1-RESULT.md`); D1 (a) chosen | Choose D1 (b) or (c), or stop |
-| **G2. Pilot batch** | After 2 tasks per tier are built, validated and rated | Build effort within about 2× of §3; rater agreement acceptable; each oracle passes the alternative design | Re-plan the volume (D2) or stop |
+| **G2. Pilot batch** | After 2 tasks per tier are built, validated and rated | Build effort within about 2× of §3; rater agreement acceptable; each oracle passes the alternative design. Under the solo protocol, the criteria in `STAGE0-SOLO.md` §4 | Re-plan the volume (D2) or stop |
 | **G3. Freeze** | Before Stage 1 | All of §4 merged with green CI and mock rehearsals; `DESIGN.md` §9 freeze recorded | Do not run Stage 1 |
 | **G4. Stage 1 stop rules** | After Stage 1 | `DESIGN.md` §6: hard-task control success below 7 of 8; infrastructure-invalid rate at most 10% | Return to Stage 0 |
 
 ## 6. Recommendation
 
-1. **Decide D0 first.** It is mostly a question of whether two raters, one oracle reviewer and one feasibility engineer are available. Without them, Stage 0 cannot be done as designed, and the honest result of Phase 3.3 is: "the native harness is ready and safe; the skill's effect is not yet measured".
+1. **Decide D0 first.** It is mostly a question of whether two raters, one oracle reviewer and one feasibility engineer are available. Without them, Stage 0 cannot be done as designed, and the honest result of Phase 3.3 is: "the native harness is ready and safe; the skill's effect is not yet measured". (2026-11-25: D0 (a) chosen; with one person, `STAGE0-SOLO.md` replaces these roles and states the limits.)
 2. **If D0 is yes,** do **G1 (the invocation pilot) next.** It is the cheapest step that can change the whole design (F1). It needs only existing public tasks, a small extension of the SMOKE job, and one authorisation.
 3. **Keep unscored and scientific evidence separate**, as so far. Probe, SMOKE and the G1 pilot are harness checks. Only Stage 1 and later, after the freeze, produce analysed data.

@@ -1,4 +1,5 @@
 """Tests for results_record.py (H1, H6, D3). Synthetic stores only: no network, no credential, no model."""
+import hashlib
 import json
 import os
 import shutil
@@ -12,9 +13,10 @@ import check_smoke  # noqa: E402
 import results_record as rr  # noqa: E402
 
 SCHEDULE_PATH = os.path.join(LIVE, "pilot-schedule.json")
-SCHEDULE = json.load(open(SCHEDULE_PATH, encoding="utf-8"))
+with open(SCHEDULE_PATH, encoding="utf-8") as _h:
+    SCHEDULE = json.load(_h)
+RUN_STATUS_PY = os.path.join(LIVE, "..", "..", "phase-3.2", "harness", "run_status.py")
 RUNS = {(r["task"], r["group"]): r["run_id"] for r in SCHEDULE["runs"]}
-SHA = "a" * 64
 
 
 def write(path, text):
@@ -26,6 +28,8 @@ def write(path, text):
 class ResultsRecordTests(unittest.TestCase):
     def setUp(self):
         self.store = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.store, "sealed"))
+        shutil.copyfile(SCHEDULE_PATH, os.path.join(self.store, "sealed", "schedule.json"))
         for task, group in RUNS:
             self.make(task, group)
 
@@ -105,23 +109,65 @@ class ResultsRecordTests(unittest.TestCase):
         self.make("NEW-04", "treatment", status__valid=False,
                   status__invalid_reasons=["immutable files changed or missing"])
         rec = self.run_rec("NEW-04", "treatment")
-        self.assertEqual((rec["valid"], rec["scope_violation"], rec["invalid_reason_count"]), (False, True, 1))
+        self.assertEqual((rec["valid"], rec["scope_violation"], rec["invalid_reasons"]),
+                         (False, True, ["immutable files changed or missing"]))
         self.assertFalse(self.run_rec("NEW-04", "control")["scope_violation"])
+
+    def test_the_scope_reason_is_the_harness_string(self):
+        with open(RUN_STATUS_PY, encoding="utf-8") as h:
+            self.assertIn('reasons.append("%s")' % rr.SCOPE_REASON, h.read())
 
     def test_missing_capture_is_recorded_not_guessed(self):
         shutil.rmtree(self.cap("NEW-03", "treatment"))
         rec = self.run_rec("NEW-03", "treatment")
-        self.assertEqual((rec["recorded"], rec["missing"]), (False, "capture"))
+        self.assertEqual((rec["recorded"], rec["missing_files"]), (False, ["capture"]))
         self.assertNotIn("valid", rec)
+        os.makedirs(self.cap("NEW-03", "treatment"))
+        rec = self.run_rec("NEW-03", "treatment")
+        self.assertEqual((rec["recorded"], rec["missing_files"]), (False, ["run-status.json", "export-checks.json"]))
+
+    def test_a_run_aborted_before_its_export_keeps_its_verdict(self):
+        # launch-run-cc.sh finish() writes run-status.json even when it stops at the auth check, before any export.
+        self.make("NEW-02", "control", status__valid=False, status__tokens=None,
+                  status__invalid_reasons=["api_checks exit 1", "launcher stopped at step 'auth-check'"])
+        os.remove(os.path.join(self.cap("NEW-02", "control"), "export-checks.json"))
+        rec = self.run_rec("NEW-02", "control")
+        self.assertTrue(rec["recorded"])
+        self.assertEqual(rec["missing_files"], ["export-checks.json"])
+        self.assertEqual((rec["valid"], len(rec["invalid_reasons"])), (False, 2))
+        self.assertIsNone(rec["invoked"])
+        self.assertIsNone(rec["tool_calls"])
+
+    def test_a_timed_out_run_says_why_its_tokens_are_missing(self):
+        self.make("NEW-04", "treatment", status__timed_out=True, status__tokens=None)
+        rec = self.run_rec("NEW-04", "treatment")
+        self.assertEqual((rec["total_prompt_tokens"], rec["tokens_missing_reason"]), (None, "timed_out"))
+        self.make("NEW-04", "treatment", status__tokens=None)
+        self.assertEqual(self.run_rec("NEW-04", "treatment")["tokens_missing_reason"], "no usage record")
+        self.make("NEW-04", "treatment", status__tokens={"input": 1, "output": 1, "cache_read": 1})
+        self.assertEqual(self.run_rec("NEW-04", "treatment")["tokens_missing_reason"], "incomplete usage record")
+        self.make("NEW-04", "treatment")
+        self.assertIsNone(self.run_rec("NEW-04", "treatment")["tokens_missing_reason"])
+
+    def test_a_schedule_other_than_the_sealed_one_is_refused(self):
+        with self.assertRaises(ValueError):
+            rr.build(self.store, os.path.join(LIVE, "smoke-schedule.json"))
+        os.remove(os.path.join(self.store, "sealed", "schedule.json"))
+        with self.assertRaises(ValueError):
+            self.build()
 
     def test_retention_hashes(self):
-        result = self.build(bundle_sha256=SHA)
-        self.assertEqual(result["bundle_sha256"], SHA)
+        bundle = os.path.join(self.store, "aqd-cc-live-pilot.tar.gz.gpg")
+        with open(bundle, "wb") as h:
+            h.write(b"encrypted bytes")
+        result = self.build(bundle_path=bundle)
+        self.assertEqual(result["bundle_sha256"],
+                         hashlib.sha256(b"encrypted bytes").hexdigest())
         self.assertEqual(result["schedule_sha256"],
                          "bad87ea676f335e605bf39afcab82c9b0f9f44cc4482ee883d1b079dd0425f16")
-        with self.assertRaises(ValueError):
-            self.build(bundle_sha256="A" * 64)
         self.assertIsNone(self.build()["bundle_sha256"])
+        with self.assertRaises(OSError):
+            self.build(bundle_path=os.path.join(self.store, "absent.gpg"))
 
     def test_the_record_holds_no_contents(self):
         write(os.path.join(self.cap("NEW-02", "treatment"), "project-final", "secret.py"), "TOKEN=sk-ant-oat01-x")
@@ -132,14 +178,15 @@ class ResultsRecordTests(unittest.TestCase):
 
     def test_cli(self):
         out = os.path.join(self.store, "results.json")
-        self.assertEqual(rr.main(["--store", self.store, "--schedule", SCHEDULE_PATH, "--out", out,
-                                  "--bundle-sha256", SHA]), 0)
+        self.assertEqual(rr.main(["--store", self.store, "--schedule", SCHEDULE_PATH, "--out", out]), 0)
         with open(out, encoding="utf-8") as h:
             data = json.load(h)
         self.assertEqual(data["schema"], rr.SCHEMA)
         self.assertEqual([r["run_id"] for r in data["runs"]], [r["run_id"] for r in SCHEDULE["runs"]])
+        self.assertEqual(rr.main(["--store", self.store, "--schedule", os.path.join(LIVE, "smoke-schedule.json"),
+                                  "--out", out]), 2)
         self.assertEqual(rr.main(["--store", self.store, "--schedule", SCHEDULE_PATH, "--out", out,
-                                  "--bundle-sha256", "nothex"]), 2)
+                                  "--bundle", os.path.join(self.store, "absent.gpg")]), 2)
 
 
 if __name__ == "__main__":
