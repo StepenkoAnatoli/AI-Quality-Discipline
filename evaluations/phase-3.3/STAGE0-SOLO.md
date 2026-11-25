@@ -126,7 +126,11 @@ The hidden tests, reference, alternative designs, mutants and source map live in
    - the SHA-256 of the sealed schedule and of the encrypted bundle (computed from the file).
 
    It refuses a schedule other than the store's sealed one. Not done yet: scores, which come when Stage 1 scoring is wired in, and use in the live jobs (Stage 1 workflow, H4).
-3. **The oracle validator** (§2.2) with its own tests, on a toy task.
+3. **The oracle validator** (§2.2), **built:** `oracle/validate_task.py`, with 11 tests on the TOY package `oracle/toy-package/` (a practice task, never used in the experiment).
+   - It scores every candidate with the harness's own fail-closed scorer (`score_run.py`), so the checks it validates are the ones Stage 1 scores.
+   - Each guard was mutation-checked.
+   - On the toy task, mechanical mutation found a gap its author had not planted: no hidden check covers a split into one part, so a mutant that rejects one part survives. Survivors like this are reported to the builder, never hidden and never gated.
+   - It runs in the `Phase 3 validation` workflow.
 4. **The private task repository** (`aqd-private-tasks`, created by the owner) and the task-package layout (H5).
 5. **The G2 pilot batch:** 2 tasks per tier through the protocol, then the G2 decision.
 6. H2, H3 and H4, before the freeze (G3).

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "description": "TOY package for testing validate_task.py only.",
+  "additive_dirs": ["tests/additive"],
+  "protected_dirs": ["tests/baseline"],
+  "tolerated_artifacts": ["__pycache__"],
+  "common_files": {},
+  "tasks": {"TOY-SPLIT": {"title": "toy: split an amount into shares", "source_dir": "tasks/TOY-SPLIT/project", "files": {
+    "ledger/__init__.py": "immutable",
+    "ledger/split.py": "mutable",
+    "ledger/report.py": "immutable",
+    "tests/__init__.py": "immutable",
+    "tests/baseline/__init__.py": "immutable",
+    "tests/baseline/test_split_baseline.py": "immutable",
+    "tests/additive/__init__.py": "additive"
+  }}}
+}

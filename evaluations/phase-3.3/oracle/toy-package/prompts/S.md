@@ -1,0 +1,1 @@
+Fix `split_amount` in `ledger/split.py`. The shares must add up exactly to the total. Remainder cents go to the earliest shares, one each. A non-positive number of parts raises ValueError. A zero total gives a list of zero shares. For example, 100 cents in 3 parts is [34, 33, 33]. Do not modify any other file.
