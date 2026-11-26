@@ -84,6 +84,19 @@ class ValidateTaskTests(unittest.TestCase):
                         "D": {"kind": "repo", "path": "ledger/report.py", "line": 3,
                               "quote": "Shares always add up to the invoice total."}}}}))
 
+    def test_every_mutation_site_runs_by_default_and_a_cap_is_reported_as_a_sample(self):
+        pkg = vt.Package(self.pkg)
+        sites = vt.mutation_sites(pkg)
+        self.assertGreater(sites, 3)
+        self.assertEqual(len(vt.mechanical_mutants(pkg)), sites)
+        full = vt.validate(self.pkg)["mechanical_mutation"]
+        self.assertEqual((full["generated"], full["sites"], full["sampled"]), (sites, sites, False))
+        import inspect
+        for fn in (vt.validate, vt.mechanical_mutants):  # a fixed default cap silently sampled H4 and H6
+            self.assertIsNone(inspect.signature(fn).parameters["max_mutations"].default)
+        capped = self.run_validate(max_mutations=2)["mechanical_mutation"]
+        self.assertEqual((capped["generated"], capped["sites"], capped["sampled"]), (2, sites, True))
+
     def test_mechanical_mutants_are_scored_on_the_whole_reference(self):
         # Regression (review 2026-11-26, finding 1): a mutant of one mutable file was laid over the PRISTINE
         # project, so the other unsolved mutable file made every mutant look killed.
