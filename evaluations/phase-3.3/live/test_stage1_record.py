@@ -34,9 +34,15 @@ def ok(fully=True, timed_out=False, scope=False, tokens=1000, invoked=False, loa
                         "scope_violation": scope, "arm_matches": True, "invoked": invoked, "loaded": loaded,
                         "total_tokens": None if timed_out else tokens,
                         "tokens_missing_reason": "timed_out" if timed_out else None, "duration_seconds": 100},
-            "score": {"evaluation_status": "valid", "fully_correct": fully,
-                      "hidden_pass_fraction": 1.0 if fully else 0.5},
-            "tamper_review": None, "invocation": {"before_first_edit": before}}
+            "score": {"evaluation_status": "valid", "fully_correct": fully, "requires_review": False,
+                      "review_subject_sha256": "c0de" * 16, "hidden_pass_fraction": 1.0 if fully else 0.5},
+            "review": None, "invocation": {"before_first_edit": before}}
+
+
+def reviewed(entry, verdict, subject="c0de" * 16, scorer="scorer-1", flagged=False):
+    entry["score"]["requires_review"] = flagged
+    entry["review"] = {"tamper_review": verdict, "tamper_review_subject": subject, "scorer_id": scorer}
+    return entry
 
 
 def invalid(*reasons):
@@ -49,7 +55,15 @@ def done():
 
 
 class Stage1RecordTests(unittest.TestCase):
-    def resolve(self, runs, attempts, blocks):
+    def resolve(self, runs, attempts, blocks, stamp=True):
+        # results_record.py writes run_id, task and group into each entry; stamp them as it would.
+        if stamp:
+            by_id = {r["run_id"]: r for r in runs}
+            for run_id, entry in attempts.items():
+                res = entry.get("results") if isinstance(entry, dict) else None
+                if isinstance(res, dict) and run_id in by_id:
+                    for k in ("run_id", "task", "group"):
+                        res.setdefault(k, by_id[run_id][k])
         return s1.resolve({"runs": runs}, attempts, blocks)
 
     def slot(self, result, name):
@@ -72,7 +86,7 @@ class Stage1RecordTests(unittest.TestCase):
             self.assertFalse(self.slot(r, f"b1:{g}")["counted"])
         c = next(a for a in r["attempts"] if a["run_id"] == "b1-c")
         self.assertEqual(c["outcome_before_block_rule"]["fully_correct"], True)
-        self.assertEqual(c["failure_cause"], "usage_limit")
+        self.assertEqual(c["cause"], "usage_limit")
         self.assertEqual(r["blocks"]["b1"], "infrastructure_invalid")
         self.assertEqual(r["summary"]["infrastructure_invalid_rate"], 1.0)
 
@@ -128,7 +142,7 @@ class Stage1RecordTests(unittest.TestCase):
         arm = r["summary"]["per_arm"]["treatment"]
         self.assertEqual((arm["timeouts"], arm["token_records_missing"]), (1, 1))
         a = next(x for x in r["attempts"] if x["run_id"] == "b1-t")
-        self.assertEqual(a["tokens_missing_reason"], "timed_out")
+        self.assertEqual((a["tokens_missing_reason"], a["cause"]), ("timed_out", "timeout"))
 
     def test_scope_violation_is_an_agent_failure_in_both_harness_forms(self):
         # Before H2 the harness marks the run invalid; after H2 it is valid and scored on its mutable files.
@@ -147,8 +161,7 @@ class Stage1RecordTests(unittest.TestCase):
         self.assertTrue(self.slot(r, "b1:treatment")["counted"])
 
     def test_tamper_and_evaluation_states(self):
-        conf, susp, bad = ok(True), ok(True), ok(True)
-        conf["tamper_review"], susp["tamper_review"] = "confirmed", "suspected"
+        conf, susp, bad = reviewed(ok(True), "confirmed"), reviewed(ok(True), "suspected"), ok(True)
         bad["score"] = {"evaluation_status": "invalid"}
         runs = pair("b1") + pair("b2", rep=2)
         r = self.resolve(runs, {"b1-c": conf, "b1-t": susp, "b2-c": bad, "b2-t": ok(True)},
@@ -186,7 +199,8 @@ class Stage1RecordTests(unittest.TestCase):
             blocks[b] = done()
             attempts[f"{b}-c"] = ok(i < 6)
         rule = self.resolve(runs, attempts, blocks)["summary"]["hard_control_stop_rule"]
-        self.assertEqual((rule["successes"], rule["decided"], rule["stop_if_all_open_fail"]), (6, True, False))
+        self.assertEqual((rule["successes"], rule["decided"], rule["stop_if_all_open_fail"],
+                          rule["stop_if_all_open_succeed"]), (6, True, False, False))
         attempts["k7-c"] = invalid("launcher stopped at step 'x'")
         attempts["k6-c"] = ok(True)
         rule = self.resolve(runs, attempts, blocks)["summary"]["hard_control_stop_rule"]
@@ -195,6 +209,13 @@ class Stage1RecordTests(unittest.TestCase):
         attempts["k6-c"] = invalid("launcher stopped at step 'x'")
         rule = self.resolve(runs, attempts, blocks)["summary"]["hard_control_stop_rule"]
         self.assertEqual((rule["successes"], rule["not_counted"], rule["decided"]), (6, 2, False))
+        self.assertEqual((rule["stop_if_all_open_fail"], rule["stop_if_all_open_succeed"]), (False, True))
+        # Fewer than 8 hard control slots never decide the rule, even at 7 of 7.
+        for i in range(7):
+            attempts[f"k{i}-c"] = ok(True)
+        rule = self.resolve(runs[:7], {k: v for k, v in attempts.items() if k != "k7-c"},
+                            {k: v for k, v in blocks.items() if k != "k7"})["summary"]["hard_control_stop_rule"]
+        self.assertEqual((rule["slots"], rule["successes"], rule["decided"]), (7, 7, False))
 
     def test_contract_violations_are_refused(self):
         with self.assertRaisesRegex(s1.ContractError, "lacks tier"):
@@ -229,6 +250,104 @@ class Stage1RecordTests(unittest.TestCase):
             proc = subprocess.run(cmd, capture_output=True, text=True)
             self.assertEqual(proc.returncode, 2)
             self.assertFalse(os.path.exists(out))
+
+    # ------------------------------------------------ cases added after the adversarial review (2026-11-26)
+
+    def test_a_flagged_run_counts_only_with_a_verdict_that_names_the_scored_code(self):
+        cases = [(None, {}, "review_pending"), ("none", {"subject": "beef" * 16}, "review_subject_mismatch"),
+                 ("none", {"scorer": " "}, "review_no_scorer"), ("none", {}, None)]
+        for verdict, kw, cause in cases:
+            entry = ok(True)
+            if verdict is None:
+                entry["score"]["requires_review"] = True
+            else:
+                reviewed(entry, verdict, flagged=True, **kw)
+            r = self.resolve(pair("b1"), {"b1-c": entry, "b1-t": ok(True)}, {"b1": done()})
+            c = self.slot(r, "b1:control")
+            self.assertEqual((c["counted"], c["cause"]), (cause is None, cause), verdict)
+
+    def test_an_unverified_confirmed_verdict_is_not_the_agents_failure(self):
+        for kw in ({"subject": None}, {"scorer": None}):
+            r = self.resolve(pair("b1"), {"b1-c": reviewed(ok(True), "confirmed", **kw), "b1-t": ok(True)},
+                             {"b1": done()})
+            self.assertEqual(self.slot(r, "b1:control")["disposition"], "unattributed")
+        r = self.resolve(pair("b1"), {"b1-c": reviewed(ok(True), "maybe"), "b1-t": ok(True)}, {"b1": done()})
+        self.assertEqual(self.slot(r, "b1:control")["cause"], "tamper_review_unknown")
+
+    def test_a_slot_in_two_original_blocks_is_refused(self):
+        with self.assertRaisesRegex(s1.ContractError, "two original blocks"):
+            self.resolve(pair("b1") + pair("b2"), {}, {"b1": done(), "b2": done()})
+
+    def test_a_record_filed_under_the_wrong_run_is_an_arm_failure(self):
+        swapped = ok(True)
+        swapped["results"].update(run_id="b1-c", task="H4", group="control")
+        r = self.resolve(pair("b1"), {"b1-c": ok(True), "b1-t": swapped}, {"b1": done()})
+        self.assertEqual(self.slot(r, "b1:treatment")["cause"], "arm_mismatch")
+        bad = ok(True)
+        bad["results"]["arm_matches"] = False
+        r = self.resolve(pair("b1"), {"b1-c": ok(True), "b1-t": bad}, {"b1": done()})
+        self.assertEqual(self.slot(r, "b1:treatment")["cause"], "arm_mismatch")
+
+    def test_process_measures_describe_the_attempt_that_counts(self):
+        runs = pair("b1") + pair("b1r", replaces="b1")
+        r = self.resolve(runs, {"b1-c": ok(True), "b1-t": ok(True, timed_out=True, invoked=True, loaded=True,
+                                                             before=True),
+                                "b1r-c": ok(True), "b1r-t": ok(True)},
+                         {"b1": {"state": "cancelled", "cause": "usage_limit"}, "b1r": done()})
+        arm = r["summary"]["per_arm"]["treatment"]
+        self.assertEqual((arm["invocation_denominator"], arm["invoked"], arm["loaded"]), (1, 0, 0))
+        self.assertEqual((arm["token_records_complete"], arm["token_records_missing"]), (1, 0))
+        self.assertEqual(arm["attempts"], 2)
+
+    def test_scope_and_timeout_counts_come_from_the_run_not_its_cause(self):
+        r = self.resolve(pair("b1") + pair("b2", rep=2),
+                         {"b1-c": ok(False, scope=True), "b1-t": ok(True, timed_out=True),
+                          "b2-c": ok(False, scope=True, timed_out=True), "b2-t": ok(True)},
+                         {"b1": done(), "b2": done()})
+        arm = r["summary"]["per_arm"]
+        self.assertEqual((arm["control"]["scope_violations"], arm["control"]["timeouts"]), (2, 1))
+        self.assertEqual(arm["treatment"]["timeouts"], 1)
+        self.assertIs(self.slot(r, "b1:control")["scope_violation"], True)
+
+    def test_a_block_cut_by_stop_is_kept_out_of_the_rate_and_may_be_replaced(self):
+        runs = pair("b1") + pair("b1r", replaces="b1")
+        r = self.resolve(runs, {"b1-c": ok(True), "b1r-c": ok(False), "b1r-t": ok(True)},
+                         {"b1": {"state": "cancelled", "cause": "stop"}, "b1r": done()})
+        self.assertEqual(r["blocks"]["b1"], "stopped")
+        s = r["summary"]
+        self.assertEqual((s["cut_by_stop"], s["attempts_started_or_cancelled"], s["infrastructure_invalid_rate"]),
+                         (2, 2, 0.0))
+        self.assertEqual(self.slot(r, "b1:control")["attempts"], ["b1-c", "b1r-c"])
+
+    def test_a_block_marked_not_started_cannot_hide_recorded_runs(self):
+        with self.assertRaisesRegex(s1.ContractError, "not started"):
+            self.resolve(pair("b1"), {"b1-c": ok(True)}, {"b1": {"state": "not_started", "cause": "stop"}})
+
+    def test_a_block_that_never_started_for_infrastructure_counts_in_the_rate(self):
+        r = self.resolve(pair("b1") + pair("b2", rep=2), {"b1-c": ok(True), "b1-t": ok(True)},
+                         {"b1": done(), "b2": {"state": "not_started", "cause": "service_outage"}})
+        self.assertEqual(r["blocks"]["b2"], "infrastructure_invalid")
+        self.assertEqual(r["summary"]["infrastructure_invalid_rate"], 0.5)
+
+    def test_malformed_scores_and_reasons_are_never_counted(self):
+        bad = ok(True)
+        bad["score"]["fully_correct"] = "yes"
+        odd = invalid({"reason": "x"})
+        r = self.resolve(pair("b1"), {"b1-c": bad, "b1-t": odd}, {"b1": done()})
+        self.assertEqual(self.slot(r, "b1:control")["cause"], "score_malformed")
+        self.assertEqual(self.slot(r, "b1:treatment")["cause"], "record_malformed")
+        unflagged = ok(True)
+        del unflagged["score"]["requires_review"]
+        r = self.resolve(pair("b1"), {"b1-c": unflagged, "b1-t": ok(True)}, {"b1": done()})
+        self.assertEqual(self.slot(r, "b1:control")["cause"], "score_malformed")
+
+    def test_unknown_blocks_and_replacement_targets_are_refused(self):
+        with self.assertRaisesRegex(s1.ContractError, "replaces unknown block"):
+            self.resolve(pair("b1r", replaces="b9"), {}, {"b1r": done()})
+        with self.assertRaisesRegex(s1.ContractError, "not in the schedule"):
+            self.resolve(pair("b1"), {}, {"b1": done(), "b9": done()})
+        with self.assertRaisesRegex(s1.ContractError, "must be strings"):
+            self.resolve([dict(x, block=["b1"]) for x in pair("b1")], {}, {})
 
 
 if __name__ == "__main__":
