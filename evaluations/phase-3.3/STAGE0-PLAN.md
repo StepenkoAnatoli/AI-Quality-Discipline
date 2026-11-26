@@ -74,9 +74,9 @@ Stage 1 needs:
 This is a security-relevant redesign. It gets its own audit and its own mock rehearsal before any authorisation.
 
 **Also required before any Stage 1 authorisation** (review 2026-11-26, `REVIEW-2026-11-26.md`):
-- a versioned Stage 1 per-run record and slot-resolution contract: typed failure causes; block, attempt and replacement disposition; scores and `strictly_correct`; load timing; token completeness. Rehearsed end to end for block cancellation, replacement, timeout and scope violation (finding 3);
-- the Stage 1 stop rule re-derived by simulating the actual 2 tasks × 4 repetitions design under task heterogeneity, not the binomial table (finding 15);
-- the accepted solutions of every frozen task run in the pinned scoring container, not only the local runner (finding 4).
+- a versioned Stage 1 per-run record and slot-resolution contract: typed failure causes; block, attempt and replacement disposition; scores and `strictly_correct`; load timing; token completeness. Rehearsed end to end for block cancellation, replacement, timeout and scope violation (finding 3). **Contract v1 drafted and unit-rehearsed** (`STAGE1-RECORD.md`, 2026-11-26); the end-to-end rehearsal is part of H4's mock rehearsal;
+- the Stage 1 stop rule re-derived by simulating the actual 2 tasks × 4 repetitions design under task heterogeneity, not the binomial table (finding 15). **Done** (`REVIEW-2026-11-26.md` §4): the owner chooses between keeping 2 × 4 with the clustered table and 4 hard calibration tasks × 2;
+- the accepted solutions of every frozen task run in the pinned scoring container, not only the local runner (finding 4). **Done for the six pilot packages** (2026-11-26, identical results); repeated for every task before the freeze.
 
 **H5. Private task delivery** (`INTEGRATION-DRYRUN.md` §7), so that hidden tests never enter the public repository.
 

@@ -993,6 +993,16 @@ class PowerSimulationTests(unittest.TestCase):
         self.assertAlmostEqual(oc(8, 7, 0.9), 0.8131, places=4)
         self.assertAlmostEqual(oc(8, 7, 0.5), 0.0352, places=4)
 
+    def test_stop_rule_with_task_heterogeneity(self):
+        # Review 2026-11-26, finding 15: 8 runs are 2 tasks x 4, not 8 independent runs.
+        clustered, two_point = self.ps.stop_probability_clustered, self.ps.stop_probability_two_point
+        self.assertAlmostEqual(two_point(2, 4, 7, 0.6), 0.36, places=6)   # both tasks solvable
+        self.assertAlmostEqual(clustered(8, 1, 7, 0.6, kappa=2.0), self.ps.stop_probability(8, 7, 0.6), places=9)
+        self.assertAlmostEqual(clustered(2, 4, 7, 0.6, kappa=1e7), self.ps.stop_probability(8, 7, 0.6), places=4)
+        self.assertGreater(clustered(2, 4, 7, 0.6, kappa=2.0), self.ps.stop_probability(8, 7, 0.6) + 0.05)
+        self.assertLess(clustered(2, 4, 7, 0.9, kappa=2.0), self.ps.stop_probability(8, 7, 0.9) - 0.02)
+        self.assertAlmostEqual(sum(self.ps._betabinom_pmf(4, 1.2, 0.8)), 1.0, places=12)
+
     def test_simulation_uses_the_real_guards_and_controls_false_positives(self):
         res = self.ps.run_design(self.ps.Scenario("t", (1.5, 1.5), (1.5, 1.5), 0.0, 0.0, 0.0), tasks=6, reps=2,
                                  sims=150, seed=1)

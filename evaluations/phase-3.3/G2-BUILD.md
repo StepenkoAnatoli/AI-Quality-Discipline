@@ -40,6 +40,7 @@
 
 **Validator:**
 - Every package: the reference passes every check; the pristine project and the shortcut each fail at least one; the source map is clean.
+- **In the pinned scoring container (2026-11-26):** all 76 candidates of the six packages give the same per-check results as with the local runner (`REVIEW-2026-11-26.md` §4, finding 4).
 - **Checks loosened after an alternative design failed: 0.** No alternative failed a check, so the T7 count is 0 for the whole batch. This covers only that one pathway. Revisions triggered by reviewers, mechanical survivors and realistic mutants (§3) are also adaptations to Claude-generated behaviour, and are listed in the private revision ledger.
 
 **Ratings:**
@@ -90,6 +91,7 @@ This is far below the human-effort estimate in `STAGE0-PLAN.md` §3 (0.5–4 day
 1. **The medium tier is under-filled.**
    - The ratings put M3 in hard and M6 on the medium/hard boundary. Under `DESIGN.md` §3 the rated composite, not the brief, sets the tier, so this batch is 2 easy, 0–1 medium and 3–4 hard.
    - Medium tasks need to be briefed or built smaller. This is the main G2 finding for D2.
+   - M6's tier also depends on how the consensus rule rounds a half (11 to 14), which `REVIEW-2026-11-26.md` §3 does not fix. `D2-REBRIEF.md` proposes a fix and the re-brief of the remaining 18 tasks.
 2. **The projects are small:** 228–570 lines of Python each.
    - Their difficulty comes from interacting requirements, concurrency and state, not from size, as the rubric intends.
    - Whether 45 minutes is enough for the hard tasks is not known until Stage 1 (T4).

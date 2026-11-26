@@ -208,6 +208,15 @@ class ValidateTaskTests(unittest.TestCase):
         with self.assertRaises(vt.UsageError):
             vt.Package(self.pkg)
 
+    def test_an_unpinned_image_is_refused(self):
+        with self.assertRaises(vt.UsageError):
+            vt.validate(self.pkg, max_mutations=0, image="python:3.12-slim")
+
+    @unittest.skipUnless(os.environ.get("AQD_SANDBOX_IMAGE"), "needs Docker and AQD_SANDBOX_IMAGE (name@sha256:...)")
+    def test_the_toy_package_is_valid_in_the_scoring_container(self):
+        report = vt.validate(self.pkg, max_mutations=0, image=os.environ["AQD_SANDBOX_IMAGE"])
+        self.assertTrue(report["valid"], report["reasons"])
+
     def test_cli_exit_codes(self):
         out = os.path.join(self.tmp, "report.json")
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):

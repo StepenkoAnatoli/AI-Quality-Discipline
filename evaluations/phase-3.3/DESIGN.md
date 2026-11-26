@@ -188,6 +188,8 @@ Stop rules after Stage 1, written before it runs:
   | ≥ 0.9 of 4 = 4/4 (the `1912c0b` rule as the runs actually were) | 0.81 | 0.66 | 0.41 | 0.24 | 0.13 | 0.06 |
   | ≥ 0.9 of 8 = 8/8 | 0.66 | 0.43 | 0.17 | 0.06 | 0.02 | 0.00 |
 
+  **These rows assume 8 independent runs.** Stage 1 has 2 hard tasks × 4 control runs, which are clustered by task. Under task heterogeneity the rule stops a hard-on-average portfolio (p = 0.6) about twice as often (0.22 at κ = 2), and the reviewer's limiting case gives 0.36 (`power_sim.py stop-rule`; `REVIEW-2026-11-26.md` §4, finding 15). The clustered table is the one to cite.
+
   The `1912c0b` text said "≥ 0.9 (8 control runs on hard tasks)", but Stage 1 had 2 × 2 = 4 hard control runs. With 4 runs, "≥ 0.9" only fires at 4/4, so a task that is really 90% solvable went on to Stage 2 34% of the time. A false stop costs a rebuild of tasks. A false continue spends Stage 2 (cap $140) on tasks that will hit the ceiling. "≥ 7 of 8" goes on with a 90%-solvable task 19% of the time and stops a 60%-solvable one 11% of the time.
 - Any oracle rejects an agent solution that an independent reviewer judges correct: fix the oracle in a new version, re-score separately (both scores kept, as for NEW-04), and re-validate that task family. The reviewer sees the code under its `blind_id`, never its arm.
 - Any invalid-run rate above 10% from infrastructure: fix the harness before Stage 2.

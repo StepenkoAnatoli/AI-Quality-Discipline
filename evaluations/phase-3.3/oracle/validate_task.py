@@ -2,6 +2,7 @@
 """Mechanical oracle validation of one Phase 3.3 task package (STAGE0-SOLO.md §2.2). Offline, no model, no network.
 
     python3 -I validate_task.py --package DIR --out report.json [--max-mutations N] [--timeout S]
+        [--image NAME@sha256:DIGEST]   (score in the scorer's Docker sandbox instead of the local runner)
 
 Every candidate solution is scored with the harness's own fail-closed scorer (`phase-3.2/harness/score_run.py`), so the
 checks validated here are exactly the checks Stage 1 scores. Candidate code here is written by the protocol's own
@@ -47,7 +48,8 @@ but fails a baseline check is counted as killed by the baseline (it cannot be fu
 
 Limits (review 2026-11-26): VALID means mechanical acceptance by these rules. It does not establish that each
 assertion follows from its quoted source (semantic review), that the task is solvable from public material within the
-time budget, or that it behaves the same in the pinned scoring container (this tool uses the local runner).
+time budget, or that it behaves the same in the pinned scoring container unless --image is given (then every candidate is scored
+in the scorer's Docker sandbox, as for real scoring).
 
 Exit 0 = valid, 1 = invalid, 2 = usage error (unreadable package).
 """
@@ -153,9 +155,11 @@ class Package:
 
 
 class Validator:
-    def __init__(self, pkg, timeout):
+    def __init__(self, pkg, timeout, image=None):
         self.pkg = pkg
-        self.runner = score_run.LocalRunner(timeout)
+        # The local runner by default; with an image pinned by digest, the scorer's own Docker sandbox (no network,
+        # read-only code, non-root), as used for real scoring (review 2026-11-26, finding 4).
+        self.runner = score_run.DockerRunner(timeout, image) if image else score_run.LocalRunner(timeout)
         self.scratch = tempfile.mkdtemp(prefix="aqd-validate-")
         self.inventory = score_run.build_inventory(pkg.root, pkg.task, pkg.pristine, pkg.hidden, timeout)
         self.check_ids = sorted(score_run.CHECK_ID.search(i).group(1) for i in self.inventory["hidden_ids"])
@@ -329,9 +333,11 @@ def mechanical_mutants(pkg, max_mutations):
 
 # ------------------------------------------------------------------ the validation
 
-def validate(package_root, max_mutations=25, timeout=60):
+def validate(package_root, max_mutations=25, timeout=60, image=None):
+    if image is not None and (not isinstance(image, str) or "@sha256:" not in image):
+        raise UsageError("--image must be pinned by digest (name@sha256:...)")
     pkg = Package(package_root)
-    v = Validator(pkg, timeout)
+    v = Validator(pkg, timeout, image)
     reasons, report = [], {"task": pkg.task, "checks": v.check_ids}
     try:
         ref_dir = os.path.join(pkg.root, "oracle", "reference")
@@ -438,9 +444,10 @@ def main(argv=None):
     p.add_argument("--out", required=True)
     p.add_argument("--max-mutations", type=int, default=25)
     p.add_argument("--timeout", type=int, default=60)
+    p.add_argument("--image", help="score in the scorer's Docker sandbox with this image, pinned by digest")
     args = p.parse_args(argv)
     try:
-        report = validate(args.package, args.max_mutations, args.timeout)
+        report = validate(args.package, args.max_mutations, args.timeout, args.image)
     except (UsageError, score_run.Invalid) as exc:
         print(f"[validate] refused: {exc}", file=sys.stderr)
         return 2
