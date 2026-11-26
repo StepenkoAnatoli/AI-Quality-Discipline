@@ -33,10 +33,10 @@
 |---|---|---|---|---|---|---|---|---|
 | E4 | Config: environment override for one typed setting | 1 | 14 | 6 of 6 | passes all | 42 of 42 | 4 / 6 | easy |
 | E6 | CLI `--dry-run` for an existing command | 1 | 13 | 7 of 7 | passes all | 37 of 37 | 6 / 6 | easy |
-| M3 | Add a column with backfill to a migration runner; re-runnable | 2 | 15 | 8 of 8 | passes all | 43 of 51 (was reported 51 of 51; §3) | 13 / 15 | **hard** |
-| M6 | Bulk import with per-row errors and a resumable checkpoint | 2 | 16 | 8 of 8 | passes all | 43 of 49 (was reported 49 of 49; §3) | 12 / 13 | medium / hard (on the boundary) |
-| H4 | Recurring scheduler: exactly-once across workers and DST changes | 2 | 15 | 10 of 10 | passes all | 46 of 60 (was reported 60 of 60; §3) | 13 / 15 | hard |
-| H6 | Cross-process token-bucket rate limiter in SQLite, fair under contention | 2 | 15 | 13 of 13 | passes all | 30 of 40 (was reported 40 of 40; §3) | 16 / 16 | hard |
+| M3 | Add a column with backfill to a migration runner; re-runnable | 2 | 15 | 8 of 8 | passes all | 44 of 51 after revision (reported 51 of 51 before the fix; §3) | 13 / 15 | **hard** |
+| M6 | Bulk import with per-row errors and a resumable checkpoint | 2 | 16 | 8 of 8 | passes all | 47 of 49 after revision (reported 49 of 49 before the fix; §3) | 12 / 13 | medium / hard (on the boundary) |
+| H4 | Recurring scheduler: exactly-once across workers and DST changes | 2 | 15 | 10 of 10 | passes all | 56 of 60 after revision (reported 60 of 60 before the fix; §3) | 13 / 15 | hard |
+| H6 | Cross-process token-bucket rate limiter in SQLite, fair under contention | 2 | 18 | 13 of 13 | passes all | 36 of 40 after revision (reported 40 of 40 before the fix; §3) | 16 / 16 | hard |
 
 **Validator:**
 - Every package: the reference passes every check; the pristine project and the shortcut each fail at least one; the source map is clean.
@@ -66,7 +66,7 @@
 
 **Realistic wrong implementations in E6 and H6** each passed every check once. A check was added, or extended, for the obligation each one broke. These were mutants, not alternative designs, so they do not count under T7. The H6 fix changed only the hidden test; the reference is unchanged, so the earlier mechanical-mutation result (40 of 40) still holds.
 
-**Corrected mechanical-mutation results (2026-11-26).** The earlier figures for the four two-file tasks came from the validator bug (`REVIEW-2026-11-26.md`, finding 1). Re-measured, they have 8, 6, 14 and 10 real survivors, several of them true gaps. These are routed to the builders under `STAGE0-SOLO.md` §2.6, and the packages will be re-validated and hash-bound afterwards.
+**Corrected mechanical-mutation results (2026-11-26).** The earlier figures for the four two-file tasks came from the validator bug (`REVIEW-2026-11-26.md`, finding 1). Re-measured, they have 8, 6, 14 and 10 real survivors, several of them true gaps. They were routed to the builders under `STAGE0-SOLO.md` §2.6: 10 checks were added or extended, and the rest were explained as equivalent or escalated. The packages were then re-validated and hash-bound (`REVIEW-2026-11-26.md` §2). The hidden-check counts in the table are now M6 16, H4 15 (3 extended) and H6 18.
 
 **Session audit:**
 - **What was audited:** every session's transcript (6 builders and 36 role sessions).
