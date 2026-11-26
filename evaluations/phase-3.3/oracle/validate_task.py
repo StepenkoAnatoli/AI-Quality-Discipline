@@ -42,7 +42,8 @@ The task is VALID only if all of these hold (STAGE0-SOLO.md §2.2):
 Mechanical mutation of the reference (seeded; operator, comparison, boolean, constant and statement-removal
 mutations) is measured, never gated: the hidden kill rate and the surviving mutations are reported. Each mutant
 changes one file of the COMPLETE reference (the other mutable files stay the reference's), and runs only after the
-unmutated reference control passes, so a kill is attributable to the mutation.
+unmutated reference control passes, so a kill is attributable to the mutation. A mutant that passes every hidden check
+but fails a baseline check is counted as killed by the baseline (it cannot be fully correct either), separately.
 
 Limits (review 2026-11-26): VALID means mechanical acceptance by these rules. It does not establish that each
 assertion follows from its quoted source (semantic review), that the task is solvable from public material within the
@@ -404,7 +405,8 @@ def validate(package_root, max_mutations=25, timeout=60):
 
         # Each mechanical mutant changes ONE file of the reference; the other mutable files are the reference's, so a
         # kill is attributable to the mutation (review 2026-11-26, finding 1). The unmutated control must pass.
-        mech = {"generated": 0, "scored": 0, "killed_by_hidden": 0, "survivors": [], "unscorable": 0,
+        mech = {"generated": 0, "scored": 0, "killed_by_hidden": 0, "killed_by_baseline_only": 0, "survivors": [],
+                "unscorable": 0,
                 "reference_control_passes": bool(ref.get("valid") and not ref.get("failed_hidden")
                                                  and ref.get("baseline_all_pass"))}
         for label, files in (mechanical_mutants(pkg, max_mutations) if mech["reference_control_passes"] else []):
@@ -416,6 +418,9 @@ def validate(package_root, max_mutations=25, timeout=60):
             mech["scored"] += 1
             if res["failed_hidden"]:
                 mech["killed_by_hidden"] += 1
+            elif not res["baseline_all_pass"]:
+                # fully_correct needs every baseline check too, so a visible test also kills it
+                mech["killed_by_baseline_only"] += 1
             else:
                 mech["survivors"].append(label)
         mech["hidden_kill_rate"] = round(mech["killed_by_hidden"] / mech["scored"], 4) if mech["scored"] else None

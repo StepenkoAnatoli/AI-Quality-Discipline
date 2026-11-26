@@ -94,6 +94,14 @@ class ValidateTaskTests(unittest.TestCase):
         self.assertTrue(mech["reference_control_passes"])
         self.assertIn("ledger/split.py#const4", mech["survivors"])  # the toy's real gap is still found
 
+    def test_a_mutant_caught_only_by_a_baseline_test_is_not_a_survivor(self):
+        # The toy's const4 survivor ("parts <= 1" raises) is killed once a VISIBLE test covers one part.
+        base = "tasks/TOY-SPLIT/project/tests/baseline/test_split_baseline.py"
+        self.write(base, self.read(base) + "\n    def test_one_part(self):\n        self.assertEqual(split_amount(5, 1), [5])\n")
+        mech = self.run_validate(max_mutations=25)["mechanical_mutation"]
+        self.assertNotIn("ledger/split.py#const4", mech["survivors"])
+        self.assertGreaterEqual(mech["killed_by_baseline_only"], 1)
+
     def test_a_docstring_removal_is_never_generated(self):
         labels = [label for label, files in vt.mechanical_mutants(vt.Package(self.pkg), 100)]
         sources = [files[SPLIT] for _label, files in vt.mechanical_mutants(vt.Package(self.pkg), 100)]
