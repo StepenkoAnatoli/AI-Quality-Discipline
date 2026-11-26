@@ -91,9 +91,16 @@ def total_prompt_tokens(tokens):
     return None if any(p is None for p in parts) else sum(parts)
 
 
+def total_tokens(tokens):
+    """total prompt tokens + output tokens (the D3 token-volume measure); null when any part is missing."""
+    prompt, output = total_prompt_tokens(tokens), _int((tokens or {}).get("output"))
+    return None if prompt is None or output is None else prompt + output
+
+
 def tokens_missing_reason(status, tokens):
-    """None when the D3 total is complete; otherwise why not (a timed-out session has no final usage record)."""
-    if total_prompt_tokens(tokens) is not None:
+    """None when the D3 total (prompt and output) is complete; otherwise why not. A timed-out session has no final
+    usage record. Review 2026-11-26, finding 3: output tokens missing used to leave this null."""
+    if total_tokens(tokens) is not None:
         return None
     if status.get("timed_out") is True:
         return "timed_out"
@@ -136,6 +143,7 @@ def record_run(cap, run_id, task, group):
         tool_counts={str(k): v for k, v in tool_counts.items() if _int(v) is not None},
         tokens={k: _int(tokens.get(k)) for k in ("input", "output", "cache_read", "cache_write")},
         total_prompt_tokens=total_prompt_tokens(tokens),
+        total_tokens=total_tokens(tokens),
         tokens_missing_reason=tokens_missing_reason(status, tokens),
         duration_seconds=duration if isinstance(duration, (int, float)) and not isinstance(duration, bool) else None,
         unexpected_files=unexpected,

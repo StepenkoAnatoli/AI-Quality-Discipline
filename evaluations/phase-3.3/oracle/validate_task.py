@@ -31,20 +31,28 @@ Package layout (one task):
 The task is VALID only if all of these hold (STAGE0-SOLO.md §2.2):
   1. reference: every hidden and every baseline check passes;
   2. pristine: at least one hidden check fails;
-  3. alternatives (at least one): every baseline check passes, and every hidden check an alternative fails has a
-     review finding "demands_only_its_source" made without seeing the candidate code. The report lists those checks
-     (T7: such reviews are counted and reported);
-  4. mutants (at least 3): each fails at least one hidden check;
+  3. alternatives: AT LEAST ONE passes every hidden and every baseline check. Any other alternative passes every
+     baseline check, and every hidden check it fails has a review finding "demands_only_its_source" made without
+     seeing the candidate code; the report lists those checks (T7). A review never replaces a passing alternative;
+  4. mutants: at least 3 DISTINCT ones (identical file sets count once), each failing at least one hidden check and
+     passing every baseline check (a realistic wrong implementation passes the project's own tests);
   5. source map: exactly the inventoried checks; S sources are prompt sentences found in prompts/S.md; D sources are
      found in prompts/D.md or at the cited line of the pristine project (whitespace-normalised);
   6. shortcut: fails at least one hidden check.
 Mechanical mutation of the reference (seeded; operator, comparison, boolean, constant and statement-removal
-mutations) is measured, never gated: the hidden kill rate and the surviving mutations are reported.
+mutations) is measured, never gated: the hidden kill rate and the surviving mutations are reported. Each mutant
+changes one file of the COMPLETE reference (the other mutable files stay the reference's), and runs only after the
+unmutated reference control passes, so a kill is attributable to the mutation.
+
+Limits (review 2026-11-26): VALID means mechanical acceptance by these rules. It does not establish that each
+assertion follows from its quoted source (semantic review), that the task is solvable from public material within the
+time budget, or that it behaves the same in the pinned scoring container (this tool uses the local runner).
 
 Exit 0 = valid, 1 = invalid, 2 = usage error (unreadable package).
 """
 import argparse
 import ast
+import hashlib
 import json
 import os
 import random
@@ -183,6 +191,14 @@ class Validator:
             return {"valid": False, "reasons": report["invalid_reasons"]}
         return {"valid": True, "hidden": report["hidden_checks"], "baseline_all_pass": report["baseline_all_pass"],
                 "failed_hidden": sorted(c for c, o in report["hidden_checks"].items() if o != "pass")}
+
+
+def _tree_digest(root):
+    h = hashlib.sha256()
+    for rel in _files_below(root):
+        with open(os.path.join(root, *rel.split("/")), "rb") as f:
+            h.update(rel.encode("utf-8") + b"\0" + hashlib.sha256(f.read()).digest())
+    return h.hexdigest()
 
 
 def check_source_map(pkg, check_ids):
@@ -348,16 +364,33 @@ def validate(package_root, max_mutations=25, timeout=60):
                 reasons.append(f"alternative {name}: fails {unreviewed} with no source-only review finding")
             if res["failed_hidden"]:
                 report["alt_reviewed_checks"][name] = sorted(set(res["failed_hidden"]) & reviewed)
+        passing = sorted(n for n, r in report["alternatives"].items()
+                         if r.get("valid") and not r.get("failed_hidden") and r.get("baseline_all_pass"))
+        report["passing_alternatives"] = passing
+        if alts and not passing:
+            # A source-only review can explain why an alternative fails a check, but it is no substitute for an
+            # independently written solution that passes everything (review 2026-11-26, finding 2).
+            reasons.append("alternatives: none passes every hidden and baseline check")
 
         mutants = pkg.solutions("mutants")
-        report["mutants"] = {}
-        if len(mutants) < MIN_MUTANTS:
-            reasons.append(f"mutants: {len(mutants)}, need at least {MIN_MUTANTS}")
+        report["mutants"], seen, duplicates = {}, {}, []
         for name, path in mutants.items():
+            digest = _tree_digest(path)
+            if digest in seen:
+                duplicates.append(f"{name} = {seen[digest]}")
+                continue
+            seen[digest] = name
             res = v.score(path)
             report["mutants"][name] = res
             if not res["valid"] or not res["failed_hidden"]:
                 reasons.append(f"mutant {name}: not caught by any hidden check")
+            elif not res["baseline_all_pass"]:
+                # A realistic wrong implementation passes the project's own tests (MUTANTS.md); one that breaks
+                # them, or does not import, is caught by the visible tests already and says nothing about the oracle.
+                reasons.append(f"mutant {name}: fails a baseline check, so it is not a realistic wrong implementation")
+        report["duplicate_mutants"] = duplicates
+        if len(seen) < MIN_MUTANTS:
+            reasons.append(f"mutants: {len(seen)} distinct, need at least {MIN_MUTANTS}")
 
         short_dir = os.path.join(pkg.root, "oracle", "shortcut")
         short = v.score(short_dir) if os.path.isdir(short_dir) else {"valid": False, "reasons": ["no shortcut"]}
@@ -369,10 +402,14 @@ def validate(package_root, max_mutations=25, timeout=60):
         report["source_map_problems"] = map_reasons
         reasons += map_reasons
 
-        mech = {"generated": 0, "scored": 0, "killed_by_hidden": 0, "survivors": [], "unscorable": 0}
-        for label, files in mechanical_mutants(pkg, max_mutations):
+        # Each mechanical mutant changes ONE file of the reference; the other mutable files are the reference's, so a
+        # kill is attributable to the mutation (review 2026-11-26, finding 1). The unmutated control must pass.
+        mech = {"generated": 0, "scored": 0, "killed_by_hidden": 0, "survivors": [], "unscorable": 0,
+                "reference_control_passes": bool(ref.get("valid") and not ref.get("failed_hidden")
+                                                 and ref.get("baseline_all_pass"))}
+        for label, files in (mechanical_mutants(pkg, max_mutations) if mech["reference_control_passes"] else []):
             mech["generated"] += 1
-            res = v.score(files=files)
+            res = v.score(ref_dir, files=files)
             if not res["valid"]:
                 mech["unscorable"] += 1
                 continue

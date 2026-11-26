@@ -65,6 +65,35 @@ class ValidateTaskTests(unittest.TestCase):
         self.assertEqual(vt.mechanical_mutants(vt.Package(self.pkg), 25),
                          vt.mechanical_mutants(vt.Package(self.pkg), 25))  # seeded and deterministic
 
+    def make_two_file_variant(self):
+        """report.py becomes mutable and must change too: the reference adds share_total()."""
+        self.edit_json("allowlist.json", lambda d: d["tasks"]["TOY-SPLIT"]["files"].update({"ledger/report.py": "mutable"}))
+        report = self.read("tasks/TOY-SPLIT/project/ledger/report.py")
+        solved = report + "\n\ndef share_total(total_cents, names):\n    return sum(split_amount(total_cents, len(names)))\n"
+        for d in ("oracle/reference", "oracle/alternatives/loop-ceil", "oracle/shortcut"):
+            self.write(d + "/ledger/report.py", solved)
+        for m in ("remainder-last", "no-validation", "rounded"):
+            self.write(f"oracle/mutants/{m}/ledger/report.py", solved)
+        self.write("oracle/hidden/hidden_tests/test_toy_report_hidden.py",
+                   "import unittest\n\n\nclass ReportHidden(unittest.TestCase):\n"
+                   "    def test_H05_share_total_is_the_total(self):\n        from ledger.report import share_total\n"
+                   "        self.assertEqual(share_total(1000, ['a', 'b', 'c']), 1000)\n")
+        self.edit_json("oracle/source-map.json", lambda d: d["checks"].update({"H05": {
+            "obligation": "the report can total the shares",
+            "sources": {"S": {"kind": "prompt", "quote": "The shares must add up exactly to the total."},
+                        "D": {"kind": "repo", "path": "ledger/report.py", "line": 3,
+                              "quote": "Shares always add up to the invoice total."}}}}))
+
+    def test_mechanical_mutants_are_scored_on_the_whole_reference(self):
+        # Regression (review 2026-11-26, finding 1): a mutant of one mutable file was laid over the PRISTINE
+        # project, so the other unsolved mutable file made every mutant look killed.
+        self.make_two_file_variant()
+        report = self.run_validate(max_mutations=100)
+        self.assertTrue(report["valid"], report["reasons"])
+        mech = report["mechanical_mutation"]
+        self.assertTrue(mech["reference_control_passes"])
+        self.assertIn("ledger/split.py#const4", mech["survivors"])  # the toy's real gap is still found
+
     def test_a_docstring_removal_is_never_generated(self):
         labels = [label for label, files in vt.mechanical_mutants(vt.Package(self.pkg), 100)]
         sources = [files[SPLIT] for _label, files in vt.mechanical_mutants(vt.Package(self.pkg), 100)]
@@ -90,9 +119,27 @@ class ValidateTaskTests(unittest.TestCase):
         review["saw_candidate_code"] = False
         self.write("oracle/alt-reviews.json", json.dumps({"kind": "aqd-phase-3.3-alt-reviews", "schema_version": 1,
                                                          "reviews": [review]}))
+        # A review explains a failing alternative but never replaces a passing one (review 2026-11-26, finding 2).
+        self.assertInvalid("alternatives: none passes every hidden and baseline check")
+        self.write("oracle/alternatives/second/" + SPLIT,
+                   "def split_amount(total_cents, parts):\n    if parts < 1:\n        raise ValueError('parts')\n"
+                   "    q, r = divmod(total_cents, parts)\n    return [q + (1 if i < r else 0) for i in range(parts)]\n")
         report = self.run_validate()
         self.assertTrue(report["valid"], report["reasons"])
+        self.assertEqual(report["passing_alternatives"], ["second"])
         self.assertEqual(report["alt_reviewed_checks"], {"loop-ceil": ["H02"]})  # counted and reported (T7)
+
+    def test_duplicate_mutants_count_once(self):
+        shutil.copytree(self.path("oracle", "mutants", "rounded"), self.path("oracle", "mutants", "rounded-copy"))
+        shutil.rmtree(self.path("oracle", "mutants", "no-validation"))
+        report = self.assertInvalid("mutants: 2 distinct, need at least 3")
+        self.assertEqual(report["duplicate_mutants"], ["rounded-copy = rounded"])
+
+    def test_a_mutant_that_breaks_the_baseline_is_not_realistic(self):
+        self.write("oracle/mutants/rounded/" + SPLIT, "def split_amount(total_cents, parts):\n    return []\n")
+        self.assertInvalid("mutant rounded: fails a baseline check")
+        self.write("oracle/mutants/rounded/" + SPLIT, "import nonexistent_module\n")
+        self.assertInvalid("mutant rounded: fails a baseline check")
 
     def test_an_alternative_failing_a_baseline_check_or_none_at_all_is_invalid(self):
         self.write("oracle/alternatives/loop-ceil/" + SPLIT, "def split_amount(total_cents, parts):\n    return []\n")
@@ -104,7 +151,7 @@ class ValidateTaskTests(unittest.TestCase):
         self.write("oracle/mutants/rounded/" + SPLIT, self.read("oracle/reference", SPLIT))
         self.assertInvalid("mutant rounded: not caught")
         shutil.rmtree(self.path("oracle", "mutants", "rounded"))
-        self.assertInvalid("mutants: 2, need at least 3")
+        self.assertInvalid("mutants: 2 distinct, need at least 3")
 
     def test_a_shortcut_that_passes_is_invalid(self):
         self.write("oracle/shortcut/" + SPLIT, self.read("oracle/reference", SPLIT))

@@ -1,7 +1,8 @@
 # G2 pilot batch: build record (2026-11-25)
 
 **Status:**
-- **Six task packages were built offline under the solo protocol** (`STAGE0-SOLO.md` §2). Every package passes the oracle validator.
+- **Six task packages were built offline under the solo protocol** (`STAGE0-SOLO.md` §2). Every package passes the oracle validator. That is **mechanical acceptance** under its rules, not proof that each package is a valid research task (review 2026-11-26, finding 4).
+- **Corrected 2026-11-26** after an external review (`REVIEW-2026-11-26.md`). The mechanical-mutation numbers in §2 were wrong for the four two-file tasks and have been re-measured with the fixed validator.
 - **No model ran on any task.** No live run, no scoring and no Stage 1 dispatch took place.
 - **Gate G2 is not yet decided.** It waits on the owner's spot check 1 (§6).
 
@@ -10,7 +11,7 @@
 ## 1. The batch
 
 - **Seeded draw:** the label `aqd-phase-3.3-g2-pilot-batch-v1`. Seed = the first 16 hex digits of its SHA-256; two IDs per tier are drawn with `random.Random(seed).sample`.
-- **Result:** easy E4 and E6; medium M3 and M6; hard H4 and H6. Nobody chose these tasks.
+- **Result:** easy E4 and E6; medium M3 and M6; hard H4 and H6. The draw chose which briefs were built. It does not make the constructed tasks representative: the briefs, the implementations and every accepted revision were still chosen (review 2026-11-26, finding 8). Inference concerns this constructed portfolio.
 - **Owner's approval:** "Ok build the tasks", 2026-11-25. Everything ran on the owner's Claude subscription, with usage credits off and no API billing.
 
 | Role (`STAGE0-SOLO.md` §2.1) | Sessions | Model |
@@ -32,20 +33,21 @@
 |---|---|---|---|---|---|---|---|---|
 | E4 | Config: environment override for one typed setting | 1 | 14 | 6 of 6 | passes all | 42 of 42 | 4 / 6 | easy |
 | E6 | CLI `--dry-run` for an existing command | 1 | 13 | 7 of 7 | passes all | 37 of 37 | 6 / 6 | easy |
-| M3 | Add a column with backfill to a migration runner; re-runnable | 2 | 15 | 8 of 8 | passes all | 51 of 51 | 13 / 15 | **hard** |
-| M6 | Bulk import with per-row errors and a resumable checkpoint | 2 | 16 | 8 of 8 | passes all | 49 of 49 | 12 / 13 | medium / hard (on the boundary) |
+| M3 | Add a column with backfill to a migration runner; re-runnable | 2 | 15 | 8 of 8 | passes all | 43 of 51 (was reported 51 of 51; §3) | 13 / 15 | **hard** |
+| M6 | Bulk import with per-row errors and a resumable checkpoint | 2 | 16 | 8 of 8 | passes all | 43 of 49 (was reported 49 of 49; §3) | 12 / 13 | medium / hard (on the boundary) |
 | H4 | Recurring scheduler: exactly-once across workers and DST changes | 2 | 15 | 10 of 10 | passes all | 60 of 60 | 13 / 15 | hard |
 | H6 | Cross-process token-bucket rate limiter in SQLite, fair under contention | 2 | 15 | 13 of 13 | passes all | 40 of 40 | 16 / 16 | hard |
 
 **Validator:**
 - Every package: the reference passes every check; the pristine project and the shortcut each fail at least one; the source map is clean.
-- **Checks loosened after an alternative design failed: 0.** No alternative failed a check, so the T7 count is 0 for the whole batch.
+- **Checks loosened after an alternative design failed: 0.** No alternative failed a check, so the T7 count is 0 for the whole batch. This covers only that one pathway. Revisions triggered by reviewers, mechanical survivors and realistic mutants (§3) are also adaptations to Claude-generated behaviour, and are listed in the private revision ledger.
 
 **Ratings:**
-- **Within one point on every factor:** 12 of 12 rating pairs (6 tasks × S and D) for each of the 8 factors. The `DESIGN.md` §3 threshold is 0.6.
-- **Exact agreement:** from 8 of 12 to 12 of 12, depending on the factor.
+- **At task level** (6 tasks; the S variant for the intrinsic factors, the D variant for F6): within one point on every factor for 6 of 6 tasks, which meets the `DESIGN.md` §3 threshold of 0.6. Exact agreement is 4 to 6 of 6 per factor.
+- **Why task level:** both raters gave every task identical intrinsic scores for S and D, so counting S and D separately, as an earlier version of this record did (12 of 12), double-counts the same judgements (review 2026-11-26, finding 9).
+- **Tier agreement:** 5 of 6. The raters' composites put M6 on different sides of the medium/hard boundary. Consensus and boundary adjudication follow the rule fixed in `REVIEW-2026-11-26.md` §3, applied before any tier is used.
 - **What this agreement means:** it is model-rater agreement (T2), not inter-human reliability.
-- **F6 (requirement discovery):** 0 for every S variant, and 1–3 for every D variant, as the S/D design intends.
+- **F6 (requirement discovery):** 0 for every S variant, and 1–3 for every D variant. The rubric counts F6 0–1 as "specified", so a D variant rated 1 (one rater, E6) is not yet "discovered". Each D variant's classification is resolved by consensus before the draw. One that does not reach F6 ≥ 2 is rebuilt or relabelled (review 2026-11-26, finding 10).
 
 ## 3. What the process caught
 
@@ -104,8 +106,8 @@ This is far below the human-effort estimate in `STAGE0-PLAN.md` §3 (0.5–4 day
 
 | Criterion | Status |
 |---|---|
-| Validator passes each task, with every alternative-triggered revision logged | **met**: 6 of 6, with 0 such revisions |
-| Model-rater agreement within one point ≥ 0.6 per factor | **met**: 1.0 on every factor |
+| Validator passes each task, with every alternative-triggered revision logged | **met, re-measured 2026-11-26** with the fixed validator (§2): 6 of 6, with 0 such revisions. Mechanical survivors are routed to the builders |
+| Model-rater agreement within one point ≥ 0.6 per factor | **met**: 6 of 6 tasks on every factor (task level). Tier agreement 5 of 6 |
 | Spot check 1 finds no unreasonable obligation | **pending**: the owner checks E6, M3 and H6 (seeded draw `aqd-phase-3.3-g2-spot-check-1-v1`); the sheet is `spot-check/SPOT-CHECK-1.md` in the private repository |
 | Build effort within about 2× of `STAGE0-PLAN.md` §3 | **met** (§4) |
 

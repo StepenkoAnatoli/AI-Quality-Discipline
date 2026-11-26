@@ -10,8 +10,14 @@ uses only that flag. This script separates, per treatment run, from the run's ow
   call_error          that call's tool_result is marked is_error;
   loaded              the skill text reached the session (all three sentinels after init; the harness's
                       `skill_text_loaded`, recomputed here);
-  before_first_edit   the first successful load came before the first Edit/Write/MultiEdit/NotebookEdit call
-                      (None when the run made no edit).
+  before_first_named_edit
+                      the first successful load came before the first Edit/Write/MultiEdit/NotebookEdit call
+                      (None when the run made no such call);
+  shell_before_load   a Bash call came before the first successful load (or the skill never loaded). A shell command
+                      can write files, and this script cannot see whether it did;
+  before_first_edit   the conservative answer: before_first_named_edit, except that it is None (unknown) when a Bash
+                      call preceded the load. Review 2026-11-26, finding 17: a Bash overwrite followed by a load and
+                      then an Edit used to read as True.
 `disagrees_with_harness` flags a recomputed value that differs from export-checks.json. Output: run ids, task
 names, booleans and counts only, never transcript content. Exit 0 always (a measurement, not a gate); 2 = usage.
 """
@@ -25,6 +31,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "phase-3.2", "harness"))
 import aqd_common as c  # noqa: E402
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+SHELL_TOOLS = {"Bash"}
 
 
 def _events(path):
@@ -57,7 +64,7 @@ def inspect_run(cap):
     if events is None:
         return {"missing": True}
     init = next((i for i, e in enumerate(events) if e.get("type") == "system" and e.get("subtype") == "init"), -1)
-    skill_ids, first_edit, first_load = {}, None, None
+    skill_ids, first_edit, first_load, first_shell = {}, None, None, None
     called = call_error = False
     for i, e in enumerate(events):
         for b in _blocks(e):
@@ -67,6 +74,8 @@ def inspect_run(cap):
                     skill_ids[b.get("id")] = i
                 elif b.get("name") in EDIT_TOOLS and first_edit is None:
                     first_edit = i
+                elif b.get("name") in SHELL_TOOLS and first_shell is None:
+                    first_shell = i
             elif b.get("type") == "tool_result" and b.get("tool_use_id") in skill_ids:
                 if b.get("is_error") is True:
                     call_error = True
@@ -79,8 +88,11 @@ def inspect_run(cap):
         # after init that carries all sentinels
         first_load = next((k for k, e in enumerate(events) if k > init
                            and c.contains_all_sentinels(json.dumps(e, ensure_ascii=False))), None)
-    before = None if first_edit is None else (first_load is not None and first_load < first_edit)
-    return {"called": called, "call_error": call_error, "loaded": loaded, "before_first_edit": before}
+    named = None if first_edit is None else (first_load is not None and first_load < first_edit)
+    shell_before = first_shell is not None and (first_load is None or first_shell < first_load)
+    before = None if (named is True and shell_before) else named
+    return {"called": called, "call_error": call_error, "loaded": loaded, "before_first_named_edit": named,
+            "shell_before_load": shell_before, "before_first_edit": before}
 
 
 def inspect(store, schedule):
@@ -120,11 +132,14 @@ def main(argv=None):
             print(f"{r['run_id']} {r['task']}: transcript missing")
             continue
         print(f"{r['run_id']} {r['task']}: called={r['called']} call_error={r['call_error']} loaded={r['loaded']} "
+              f"before_first_named_edit={r['before_first_named_edit']} shell_before_load={r['shell_before_load']} "
               f"before_first_edit={r['before_first_edit']} disagrees_with_harness={r['disagrees_with_harness']}")
     ok = [r for r in rows if not r.get("missing")]
-    print("invocation: called %d, loaded %d, loaded before the first edit %d, of %d treatment runs" % (
-        sum(r["called"] for r in ok), sum(r["loaded"] for r in ok),
-        sum(r["before_first_edit"] is True for r in ok), len(rows)))
+    print("invocation: called %d, loaded %d, loaded before the first named edit %d, loaded before the first edit %d "
+          "(timing unknown in %d: a shell call came first), of %d treatment runs" % (
+              sum(r["called"] for r in ok), sum(r["loaded"] for r in ok),
+              sum(r["before_first_named_edit"] is True for r in ok), sum(r["before_first_edit"] is True for r in ok),
+              sum(r["before_first_named_edit"] is True and r["before_first_edit"] is None for r in ok), len(rows)))
     return 0
 
 

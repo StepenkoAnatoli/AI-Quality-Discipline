@@ -2,7 +2,7 @@
 
 **A harness check with one recorded measurement, never scored.** It asks only whether the agent invokes the `code-discipline` skill when it is available on realistic tasks (`PILOT-G1.md`). No hidden test ran and nothing about code quality was measured or compared. These records are never pooled with any scientific result.
 
-**Harness verdict: PASS. Measurement: the agent *called* the skill in 3 of 3 valid treatment runs, and the offline check (§8) shows it *loaded* before the first edit in 3 of 3.** The public log and the owner's offline review of the encrypted evidence agree.
+**Harness verdict: PASS. Measurement: the agent *called* the skill in 3 of 3 valid treatment runs, and the offline check (§8) shows it *loaded* in 3 of 3, before the first named edit tool (§8 qualification).** The public log and the owner's offline review of the encrypted evidence agree.
 
 **Correction (2026-11-25, after `PILOT-G1-AUDIT.md`):** "invoked" counts Skill tool *calls*, not successful loads of the skill text, and ignores timing. An earlier version of this record said the agent "loaded" the skill; that was not established. Whether each call loaded the skill, and before the first edit, is settled offline with `live/inspect_invocation.py` on the decrypted evidence (§8).
 
@@ -68,7 +68,7 @@ The owner authorised in writing (2026-11-25) one dispatch with these values. The
 
 ## 5. Findings
 
-1. **Invocation on realistic tasks.** The agent called the skill in every treatment run (3 of 3), against 0 of 1 on the one-line SMOKE task. This is the G1 answer and the basis of the D1 decision (§7). The offline check (§8) shows that each call loaded the skill text before the first edit.
+1. **Invocation on realistic tasks.** The agent called the skill in every treatment run (3 of 3), against 0 of 1 on the one-line SMOKE task. This is the G1 answer and the basis of the D1 decision (§7). The offline check (§8) shows that each call loaded the skill text, before the first named edit tool.
 2. **The controls stayed clean.** No control run listed or used the skill.
 3. **Prompt caching is larger on realistic tasks.** Cache reads were about 100 k to 176 k tokens per run, against about 28.7 k in SMOKE. This strengthens finding F2 of `STAGE0-PLAN.md`: token and cost figures depend on cache state and run order (D3).
 4. **Placeholders.** All six runs had the same 17 sandbox placeholders, as before. H1 (exclude them by name and size) is still needed before "unexpected files" becomes an outcome.
@@ -114,4 +114,6 @@ D1 (a) was chosen on "called in 3 of 3". The audit showed that a failed or late 
 | `r-3dbe15e184` | NEW-02 | True | False | True | True | False |
 | `r-bc23637fc1` | NEW-03 | True | False | True | True | False |
 
-`invocation: called 3, loaded 3, loaded before the first edit 3, of 3 treatment runs`. **D1 (a) stands as stated:** in every treatment run the skill text reached the session before the agent's first edit.
+`invocation: called 3, loaded 3, loaded before the first edit 3, of 3 treatment runs`. **D1 (a) stands:** in every treatment run the Skill call succeeded and the skill text reached the session.
+
+**Qualification (review 2026-11-26, finding 17):** the script version used here counted only the Edit, Write, MultiEdit and NotebookEdit tools as edits. A Bash command run before the load could also have changed files. So "before the first edit" means **before the first named edit tool**; a shell write before the load is not excluded. The updated script (`shell_before_load`, and a conservative `before_first_edit`) settles this when the owner re-runs it on the decrypted evidence. D1 does not depend on the timing, which only qualifies the availability estimand.

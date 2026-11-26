@@ -154,8 +154,14 @@ class ResultsRecordTests(unittest.TestCase):
         self.assertEqual(self.run_rec("NEW-04", "treatment")["tokens_missing_reason"], "no usage record")
         self.make("NEW-04", "treatment", status__tokens={"input": 1, "output": 1, "cache_read": 1})
         self.assertEqual(self.run_rec("NEW-04", "treatment")["tokens_missing_reason"], "incomplete usage record")
+        self.make("NEW-04", "treatment", status__tokens={"input": 1, "output": None, "cache_read": 1, "cache_write": 1})
+        rec = self.run_rec("NEW-04", "treatment")
+        self.assertEqual((rec["total_prompt_tokens"], rec["total_tokens"], rec["tokens_missing_reason"]),
+                         (3, None, "incomplete usage record"))  # review 2026-11-26, finding 3
         self.make("NEW-04", "treatment")
-        self.assertIsNone(self.run_rec("NEW-04", "treatment")["tokens_missing_reason"])
+        rec = self.run_rec("NEW-04", "treatment")
+        self.assertIsNone(rec["tokens_missing_reason"])
+        self.assertEqual(rec["total_tokens"], 107510)
 
     def test_a_schedule_other_than_the_sealed_one_is_refused(self):
         with self.assertRaises(ValueError):

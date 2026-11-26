@@ -56,6 +56,22 @@ class InspectTests(unittest.TestCase):
         (row,) = ii.inspect(self.store, self.schedule)
         self.assertEqual((row["called"], row["loaded"], row["call_error"], row["before_first_edit"]), (True, True, False, True))
 
+    def test_a_shell_call_before_the_load_makes_the_timing_unknown(self):
+        # Review 2026-11-26, finding 17: Bash can overwrite files before the skill loads.
+        bash = ("Bash", {"command": "printf x > source.py"})
+        self.add("r-1", "treatment", [use(*bash, "b"), res("b", ""), use(*SKILL, "s"), res("s", SKILL_TEXT),
+                                      use(*EDIT, "e"), res("e", "ok")], True, True)
+        (row,) = ii.inspect(self.store, self.schedule)
+        self.assertEqual((row["before_first_named_edit"], row["shell_before_load"], row["before_first_edit"]),
+                         (True, True, None))
+
+    def test_a_shell_call_after_the_load_keeps_the_timing(self):
+        bash = ("Bash", {"command": "ls"})
+        self.add("r-1", "treatment", [use(*SKILL, "s"), res("s", SKILL_TEXT), use(*bash, "b"), res("b", ""),
+                                      use(*EDIT, "e"), res("e", "ok")], True, True)
+        (row,) = ii.inspect(self.store, self.schedule)
+        self.assertEqual((row["shell_before_load"], row["before_first_edit"]), (False, True))
+
     def test_failed_call_is_called_but_not_loaded(self):
         self.add("r-1", "treatment", [use(*SKILL, "s"), res("s", "<tool_use_error>no</tool_use_error>", True),
                                       use(*EDIT, "e"), res("e", "ok")], True, False)
@@ -94,7 +110,8 @@ class InspectTests(unittest.TestCase):
             code = ii.main(["--store", self.store, "--schedule", sched])
         text = out.getvalue()
         self.assertEqual(code, 0)
-        self.assertIn("called 2, loaded 1, loaded before the first edit 1, of 2 treatment runs", text)
+        self.assertIn("called 2, loaded 1, loaded before the first named edit 1, loaded before the first edit 1 "
+                      "(timing unknown in 0: a shell call came first), of 2 treatment runs", text)
         self.assertNotIn(c.SKILL_SENTINELS[0], text)
 
 
