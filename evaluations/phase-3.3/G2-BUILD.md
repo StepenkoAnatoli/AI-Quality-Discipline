@@ -4,7 +4,7 @@
 - **Six task packages were built offline under the solo protocol** (`STAGE0-SOLO.md` §2). Every package passes the oracle validator. That is **mechanical acceptance** under its rules, not proof that each package is a valid research task (review 2026-11-26, finding 4).
 - **Corrected 2026-11-26** after an external review (`REVIEW-2026-11-26.md`). The mechanical-mutation numbers in §2 were wrong for the four two-file tasks and have been re-measured with the fixed validator.
 - **No model ran on any task.** No live run, no scoring and no Stage 1 dispatch took place.
-- **Gate G2 is not yet decided.** It waits on the owner's spot check 1 (§6).
+- **Gate G2: go** (owner, 2026-11-26; §6).
 
 **This is a public record.** It holds only task IDs, the public briefs (`DESIGN.md` §4) and counts. The prompts, hidden tests, obligation lists, solutions and ratings stay in the private repository `aqd-private-tasks` until the runs that use them are complete (`DESIGN.md` §6).
 
@@ -120,4 +120,4 @@ This is far below the human-effort estimate in `STAGE0-PLAN.md` §3 (0.5–4 day
 | Spot check 1 finds no unreasonable obligation | **met (2026-11-26):** 46 of 46 obligations of E6, M3 and H6 accepted, 0 rejected (seeded draw `aqd-phase-3.3-g2-spot-check-1-v1`). The review was done by another provider's model (GPT) at the owner's request and adopted by the owner as their own decision, so it is a cross-provider model check, not an independent human reading (§5 item 9) |
 | Build effort within about 2× of `STAGE0-PLAN.md` §3 | **met** (§4) |
 
-**Status:** all four criteria are met. The go decision is the owner's. Whatever the spot check finds, the tier finding (§5 item 1) means the remaining 18 tasks should be briefed with the medium tier in mind before they are built.
+**Decision (owner, 2026-11-26): G2 go.** All four criteria are met. The remaining 18 tasks are briefed per `D2-REBRIEF.md` once its proposals are ratified. Whatever the spot check finds, the tier finding (§5 item 1) means the remaining 18 tasks should be briefed with the medium tier in mind before they are built.

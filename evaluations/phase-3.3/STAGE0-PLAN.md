@@ -2,7 +2,7 @@
 
 **Status:**
 - Planning only. No model call, no secret, no infrastructure.
-- Every decision below is the owner's. Decided so far: D0 (a), continue through the gates (2026-11-24); D1 (a), availability (2026-11-25, after G1). Gate G1 passed. D2 to D5 are set in `STAGE0-SOLO.md` (owner's instruction of 2026-11-25: the most accurate option; one person, Claude does most of the work). Merging it records them and passes G0. **G2 pilot batch built 2026-11-25** (`G2-BUILD.md`): 6 of 6 tasks valid. **Spot check 1 passed on 2026-11-26** (46 of 46, a GPT review the owner adopted); all G2 criteria are met, and the go decision is the owner's. Where this plan says "human" below, `STAGE0-SOLO.md` §2 gives the solo substitute and §3 its limits.
+- Every decision below is the owner's. Decided so far: D0 (a), continue through the gates (2026-11-24); D1 (a), availability (2026-11-25, after G1). Gate G1 passed. D2 to D5 are set in `STAGE0-SOLO.md` (owner's instruction of 2026-11-25: the most accurate option; one person, Claude does most of the work). Merging it records them and passes G0. **G2 pilot batch built 2026-11-25** (`G2-BUILD.md`): 6 of 6 tasks valid. **Spot check 1 passed on 2026-11-26** (46 of 46, a GPT review the owner adopted); all G2 criteria are met. **G2: go** (owner, 2026-11-26). Where this plan says "human" below, `STAGE0-SOLO.md` §2 gives the solo substitute and §3 its limits.
 
 **Inputs:**
 - `DESIGN.md` §4 to §10;
