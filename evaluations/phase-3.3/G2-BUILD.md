@@ -2,6 +2,7 @@
 
 **Status:**
 - **Updated 2026-11-26, later:** the final figures after the cross-provider (GPT) roles, the coverage audit and full mechanical runs are in `REVIEW-2026-11-26.md` §5. They supersede the check and mutant counts in §2 below.
+- **Re-rated 2026-11-26** with blind labels (`REVIEW-2026-11-26.md` §6). The final tiers are E4 and E6 easy, and M3, M6, H4 and H6 hard. They supersede the rating columns in §2.
 - **Six task packages were built offline under the solo protocol** (`STAGE0-SOLO.md` §2). Every package passes the oracle validator. That is **mechanical acceptance** under its rules, not proof that each package is a valid research task (review 2026-11-26, finding 4).
 - **Corrected 2026-11-26** after an external review (`REVIEW-2026-11-26.md`). The mechanical-mutation numbers in §2 were wrong for the four two-file tasks and have been re-measured with the fixed validator.
 - **No model ran on any task.** No live run, no scoring and no Stage 1 dispatch took place.
