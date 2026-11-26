@@ -131,6 +131,8 @@ Public briefs only. The defect classes each oracle targets, the hidden checks an
 | H5 | hard | Online schema change: dual-write and backfill while readers and writers run | data layer + migration |
 | H6 | hard | Cross-process token-bucket rate limiter in SQLite with fairness under contention | limiter + callers |
 
+**Remaining build (ratified 2026-11-26):** the 18 tasks still to build follow `D2-REBRIEF.md`: its re-scoped medium briefs, new briefs E7, E8, M7–M10 and H7, factor budget, overshoot rule and blind rater labels.
+
 Construction rules for every task:
 
 - Python standard library. The public project is a small realistic repository with callers, docs and existing tests, not a single file with a numbered contract.

@@ -1,7 +1,7 @@
 # Re-brief of the remaining 18 tasks, with the medium tier first (proposal, 2026-11-26)
 
 **Status:**
-- **A proposal for the owner.** Nothing is built and no model call is made by this document.
+- **Ratified by the owner on 2026-11-26** ("ratify the D2 rebrief proposals"): every item in §6. Nothing is built by this document itself.
 - **It answers two things:**
   - the main G2 finding, that the medium tier is under-filled (`G2-BUILD.md` §5 item 1);
   - review finding 11, that difficulty is confounded with task content.
@@ -25,7 +25,7 @@
 | H4 | 13 / 15 | 15 / 13 / 13 | hard in every case |
 | E6, H6 | equal | equal | easy, hard |
 
-**Proposed amendment to §3 rule 1 (owner to ratify):**
+**Amendment to §3 rule 1 (ratified 2026-11-26):**
 - **The consensus composite** is the sum of the per-factor means, without rounding them.
 - **The tier** follows from that sum by the rubric's cut points.
 - **A sum that falls strictly between two tiers** (6.5, or 12.5) is a boundary case. A third, fresh rater session rates the task, and the tier follows from the median of the three composites.
@@ -52,7 +52,7 @@ The task IDs stay as they are: an ID is a label, and the rated tier is what coun
 
 **The total is 18 either way.** M10 or H7 is built depending on M6's third rating.
 
-**Overshoot rule (proposed):**
+**Overshoot rule (ratified 2026-11-26):**
 - **A task that rates into a different tier** keeps that tier. It is never re-labelled to fill a quota, and never discarded.
 - **Continuing:** building continues until every tier has at least 8 rated tasks, up to 4 tasks beyond the 24.
 - **Logging:** every built task, and its rating, is logged.
