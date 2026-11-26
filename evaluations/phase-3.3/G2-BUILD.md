@@ -35,8 +35,8 @@
 | E6 | CLI `--dry-run` for an existing command | 1 | 13 | 7 of 7 | passes all | 37 of 37 | 6 / 6 | easy |
 | M3 | Add a column with backfill to a migration runner; re-runnable | 2 | 15 | 8 of 8 | passes all | 43 of 51 (was reported 51 of 51; §3) | 13 / 15 | **hard** |
 | M6 | Bulk import with per-row errors and a resumable checkpoint | 2 | 16 | 8 of 8 | passes all | 43 of 49 (was reported 49 of 49; §3) | 12 / 13 | medium / hard (on the boundary) |
-| H4 | Recurring scheduler: exactly-once across workers and DST changes | 2 | 15 | 10 of 10 | passes all | 60 of 60 | 13 / 15 | hard |
-| H6 | Cross-process token-bucket rate limiter in SQLite, fair under contention | 2 | 15 | 13 of 13 | passes all | 40 of 40 | 16 / 16 | hard |
+| H4 | Recurring scheduler: exactly-once across workers and DST changes | 2 | 15 | 10 of 10 | passes all | 46 of 60 (was reported 60 of 60; §3) | 13 / 15 | hard |
+| H6 | Cross-process token-bucket rate limiter in SQLite, fair under contention | 2 | 15 | 13 of 13 | passes all | 30 of 40 (was reported 40 of 40; §3) | 16 / 16 | hard |
 
 **Validator:**
 - Every package: the reference passes every check; the pristine project and the shortcut each fail at least one; the source map is clean.
@@ -65,6 +65,8 @@
 - Regression checks were added. Their source is a new sentence in both prompts asking that the untouched code keep its current behaviour.
 
 **Realistic wrong implementations in E6 and H6** each passed every check once. A check was added, or extended, for the obligation each one broke. These were mutants, not alternative designs, so they do not count under T7. The H6 fix changed only the hidden test; the reference is unchanged, so the earlier mechanical-mutation result (40 of 40) still holds.
+
+**Corrected mechanical-mutation results (2026-11-26).** The earlier figures for the four two-file tasks came from the validator bug (`REVIEW-2026-11-26.md`, finding 1). Re-measured, they have 8, 6, 14 and 10 real survivors, several of them true gaps. These are routed to the builders under `STAGE0-SOLO.md` §2.6, and the packages will be re-validated and hash-bound afterwards.
 
 **Session audit:**
 - **What was audited:** every session's transcript (6 builders and 36 role sessions).
