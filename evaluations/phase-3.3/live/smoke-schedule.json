@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "kind": "aqd-phase-3.2-sealed-schedule",
+  "seed": "77f202a8eb78da8cde0cef43110a3e48",
+  "created_utc": "2026-11-24T00:00:00Z",
+  "design": {
+    "models": [
+      "anthropic/claude-opus-5-5#medium"
+    ],
+    "tasks": [
+      "SMOKE"
+    ],
+    "repetitions": 1,
+    "groups": [
+      "control",
+      "treatment"
+    ]
+  },
+  "env_for_group": {
+    "control": "env-b",
+    "treatment": "env-a"
+  },
+  "runs": [
+    {
+      "order": 1,
+      "block": 1,
+      "model": "anthropic/claude-opus-5-5#medium",
+      "task": "SMOKE",
+      "repetition": 1,
+      "group": "treatment",
+      "env": "env-a",
+      "run_id": "r-709f207e78",
+      "blind_id": "b-792207dd"
+    },
+    {
+      "order": 2,
+      "block": 1,
+      "model": "anthropic/claude-opus-5-5#medium",
+      "task": "SMOKE",
+      "repetition": 1,
+      "group": "control",
+      "env": "env-b",
+      "run_id": "r-2cffa4db9c",
+      "blind_id": "b-7843b610"
+    }
+  ]
+}

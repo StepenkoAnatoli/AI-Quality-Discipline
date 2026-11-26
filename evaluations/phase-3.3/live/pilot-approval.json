@@ -1,0 +1,62 @@
+{
+  "approved_runs": [
+    {
+      "run_id": "r-49a8ed9516",
+      "task": "NEW-04",
+      "group": "treatment",
+      "model": "anthropic/claude-opus-5-5#medium",
+      "prompt_sha256": "a50a09d169767c51111c1dbd7729c2ee401791541ba21b9ce5237e6240594b93",
+      "cli_sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+      "workspace_sha256": "b8ee898b84df9754e2b6b991e347835889e864550470599e68c699155589ceb2"
+    },
+    {
+      "run_id": "r-b77ae663bf",
+      "task": "NEW-04",
+      "group": "control",
+      "model": "anthropic/claude-opus-5-5#medium",
+      "prompt_sha256": "a50a09d169767c51111c1dbd7729c2ee401791541ba21b9ce5237e6240594b93",
+      "cli_sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+      "workspace_sha256": "b8ee898b84df9754e2b6b991e347835889e864550470599e68c699155589ceb2"
+    },
+    {
+      "run_id": "r-2467089ae3",
+      "task": "NEW-02",
+      "group": "control",
+      "model": "anthropic/claude-opus-5-5#medium",
+      "prompt_sha256": "9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f",
+      "cli_sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+      "workspace_sha256": "ae420d1d9c621e4ad259dd1e2837245cd7f720a55bce08b74e1e21163eb96d58"
+    },
+    {
+      "run_id": "r-3dbe15e184",
+      "task": "NEW-02",
+      "group": "treatment",
+      "model": "anthropic/claude-opus-5-5#medium",
+      "prompt_sha256": "9c4bde140efbacabf564f3307aa16955efb869d0dc6a3b354bb8322a727a543f",
+      "cli_sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+      "workspace_sha256": "ae420d1d9c621e4ad259dd1e2837245cd7f720a55bce08b74e1e21163eb96d58"
+    },
+    {
+      "run_id": "r-bc23637fc1",
+      "task": "NEW-03",
+      "group": "treatment",
+      "model": "anthropic/claude-opus-5-5#medium",
+      "prompt_sha256": "a5764db416e9848f7b6d51f06948b5110a6785013903260892942d3a042f649b",
+      "cli_sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+      "workspace_sha256": "cd61f2a29fd90040dc048b44fa424dd6fe8368f6cd7dac491b8ccdf917b4cf04"
+    },
+    {
+      "run_id": "r-6568760496",
+      "task": "NEW-03",
+      "group": "control",
+      "model": "anthropic/claude-opus-5-5#medium",
+      "prompt_sha256": "a5764db416e9848f7b6d51f06948b5110a6785013903260892942d3a042f649b",
+      "cli_sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+      "workspace_sha256": "cd61f2a29fd90040dc048b44fa424dd6fe8368f6cd7dac491b8ccdf917b4cf04"
+    }
+  ],
+  "approved_by": "",
+  "approved_utc": "",
+  "reviewed_commit": "",
+  "note": "TEMPLATE. The owner approves in ONE commit directly on top of the reviewed commit that changes only this file: approved_by, approved_utc (YYYY-MM-DDTHH:MM:SSZ) and reviewed_commit (the 40-hex reviewed commit = the approval commit's parent). main's workflow then pins AQD_TEST_SHA to that approval commit (PILOT-G1.md). Until then the launcher refuses all six runs."
+}

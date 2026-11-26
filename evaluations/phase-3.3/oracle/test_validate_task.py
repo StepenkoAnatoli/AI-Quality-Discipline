@@ -1,0 +1,224 @@
+"""Tests for validate_task.py on copies of the TOY package. Offline: no network, no credential, no model."""
+import io
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import validate_task as vt  # noqa: E402
+
+TOY = os.path.join(HERE, "toy-package")
+SPLIT = "ledger/split.py"
+
+
+class ValidateTaskTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="aqd-vt-")
+        self.pkg = os.path.join(self.tmp, "pkg")
+        shutil.copytree(TOY, self.pkg, ignore=shutil.ignore_patterns("__pycache__"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def path(self, *parts):
+        return os.path.join(self.pkg, *parts)
+
+    def read(self, *parts):
+        with open(self.path(*parts), encoding="utf-8") as h:
+            return h.read()
+
+    def write(self, rel, text):
+        os.makedirs(os.path.dirname(self.path(rel)), exist_ok=True)
+        with open(self.path(rel), "w", encoding="utf-8") as h:
+            h.write(text)
+
+    def edit_json(self, rel, change):
+        data = json.loads(self.read(rel))
+        change(data)
+        self.write(rel, json.dumps(data))
+
+    def run_validate(self, max_mutations=0):
+        return vt.validate(self.pkg, max_mutations=max_mutations)
+
+    def assertInvalid(self, needle, report=None):
+        report = report or self.run_validate()
+        self.assertFalse(report["valid"])
+        self.assertTrue(any(needle in r for r in report["reasons"]), report["reasons"])
+        return report
+
+    def test_the_toy_package_is_valid_and_mechanical_mutation_finds_its_boundary_gap(self):
+        report = self.run_validate(max_mutations=25)
+        self.assertTrue(report["valid"], report["reasons"])
+        self.assertEqual(report["checks"], ["H01", "H02", "H03", "H04"])
+        self.assertEqual(report["pristine"]["failed_hidden"], ["H01", "H02", "H03"])
+        self.assertEqual({k: v["failed_hidden"] for k, v in report["mutants"].items()},
+                         {"no-validation": ["H03"], "remainder-last": ["H02"], "rounded": ["H01", "H02"]})
+        mech = report["mechanical_mutation"]
+        # No hidden check uses parts == 1, so "parts <= 1" survives: reported, never hidden, never gated.
+        self.assertEqual(mech["survivors"], ["ledger/split.py#const4"])
+        self.assertEqual((mech["scored"], mech["killed_by_hidden"]), (8, 7))
+        self.assertEqual(vt.mechanical_mutants(vt.Package(self.pkg), 25),
+                         vt.mechanical_mutants(vt.Package(self.pkg), 25))  # seeded and deterministic
+
+    def make_two_file_variant(self):
+        """report.py becomes mutable and must change too: the reference adds share_total()."""
+        self.edit_json("allowlist.json", lambda d: d["tasks"]["TOY-SPLIT"]["files"].update({"ledger/report.py": "mutable"}))
+        report = self.read("tasks/TOY-SPLIT/project/ledger/report.py")
+        solved = report + "\n\ndef share_total(total_cents, names):\n    return sum(split_amount(total_cents, len(names)))\n"
+        for d in ("oracle/reference", "oracle/alternatives/loop-ceil", "oracle/shortcut"):
+            self.write(d + "/ledger/report.py", solved)
+        for m in ("remainder-last", "no-validation", "rounded"):
+            self.write(f"oracle/mutants/{m}/ledger/report.py", solved)
+        self.write("oracle/hidden/hidden_tests/test_toy_report_hidden.py",
+                   "import unittest\n\n\nclass ReportHidden(unittest.TestCase):\n"
+                   "    def test_H05_share_total_is_the_total(self):\n        from ledger.report import share_total\n"
+                   "        self.assertEqual(share_total(1000, ['a', 'b', 'c']), 1000)\n")
+        self.edit_json("oracle/source-map.json", lambda d: d["checks"].update({"H05": {
+            "obligation": "the report can total the shares",
+            "sources": {"S": {"kind": "prompt", "quote": "The shares must add up exactly to the total."},
+                        "D": {"kind": "repo", "path": "ledger/report.py", "line": 3,
+                              "quote": "Shares always add up to the invoice total."}}}}))
+
+    def test_mechanical_mutants_are_scored_on_the_whole_reference(self):
+        # Regression (review 2026-11-26, finding 1): a mutant of one mutable file was laid over the PRISTINE
+        # project, so the other unsolved mutable file made every mutant look killed.
+        self.make_two_file_variant()
+        report = self.run_validate(max_mutations=100)
+        self.assertTrue(report["valid"], report["reasons"])
+        mech = report["mechanical_mutation"]
+        self.assertTrue(mech["reference_control_passes"])
+        self.assertIn("ledger/split.py#const4", mech["survivors"])  # the toy's real gap is still found
+
+    def test_a_mutant_caught_only_by_a_baseline_test_is_not_a_survivor(self):
+        # The toy's const4 survivor ("parts <= 1" raises) is killed once a VISIBLE test covers one part.
+        base = "tasks/TOY-SPLIT/project/tests/baseline/test_split_baseline.py"
+        self.write(base, self.read(base) + "\n    def test_one_part(self):\n        self.assertEqual(split_amount(5, 1), [5])\n")
+        mech = self.run_validate(max_mutations=25)["mechanical_mutation"]
+        self.assertNotIn("ledger/split.py#const4", mech["survivors"])
+        self.assertGreaterEqual(mech["killed_by_baseline_only"], 1)
+
+    def test_a_docstring_removal_is_never_generated(self):
+        labels = [label for label, files in vt.mechanical_mutants(vt.Package(self.pkg), 100)]
+        sources = [files[SPLIT] for _label, files in vt.mechanical_mutants(vt.Package(self.pkg), 100)]
+        self.assertTrue(labels)
+        self.assertTrue(all('"""Split' in s or "'Split" in s for s in sources))
+
+    def test_a_wrong_reference_or_an_already_solved_pristine_is_invalid(self):
+        self.write("oracle/reference/" + SPLIT, self.read("oracle/mutants/rounded", SPLIT))
+        self.assertInvalid("reference")
+        shutil.rmtree(self.pkg)
+        shutil.copytree(TOY, self.pkg)
+        self.write(f"tasks/TOY-SPLIT/project/{SPLIT}", self.read("oracle/reference", SPLIT))
+        self.assertInvalid("pristine")
+
+    def test_an_alternative_failing_a_check_needs_a_source_only_review(self):
+        self.write("oracle/alternatives/loop-ceil/" + SPLIT, self.read("oracle/mutants/remainder-last", SPLIT))
+        self.assertInvalid("alternative loop-ceil: fails ['H02'] with no source-only review finding")
+        review = {"alternative": "loop-ceil", "check": "H02", "finding": "demands_only_its_source",
+                  "reviewer_session": "session-x", "saw_candidate_code": True}
+        self.write("oracle/alt-reviews.json", json.dumps({"kind": "aqd-phase-3.3-alt-reviews", "schema_version": 1,
+                                                         "reviews": [review]}))
+        self.assertInvalid("no source-only review finding")  # the reviewer saw the failing code
+        review["saw_candidate_code"] = False
+        self.write("oracle/alt-reviews.json", json.dumps({"kind": "aqd-phase-3.3-alt-reviews", "schema_version": 1,
+                                                         "reviews": [review]}))
+        # A review explains a failing alternative but never replaces a passing one (review 2026-11-26, finding 2).
+        self.assertInvalid("alternatives: none passes every hidden and baseline check")
+        self.write("oracle/alternatives/second/" + SPLIT,
+                   "def split_amount(total_cents, parts):\n    if parts < 1:\n        raise ValueError('parts')\n"
+                   "    q, r = divmod(total_cents, parts)\n    return [q + (1 if i < r else 0) for i in range(parts)]\n")
+        report = self.run_validate()
+        self.assertTrue(report["valid"], report["reasons"])
+        self.assertEqual(report["passing_alternatives"], ["second"])
+        self.assertEqual(report["alt_reviewed_checks"], {"loop-ceil": ["H02"]})  # counted and reported (T7)
+
+    def test_duplicate_mutants_count_once(self):
+        shutil.copytree(self.path("oracle", "mutants", "rounded"), self.path("oracle", "mutants", "rounded-copy"))
+        shutil.rmtree(self.path("oracle", "mutants", "no-validation"))
+        report = self.assertInvalid("mutants: 2 distinct, need at least 3")
+        self.assertEqual(report["duplicate_mutants"], ["rounded-copy = rounded"])
+
+    def test_a_mutant_that_breaks_the_baseline_is_not_realistic(self):
+        self.write("oracle/mutants/rounded/" + SPLIT, "def split_amount(total_cents, parts):\n    return []\n")
+        self.assertInvalid("mutant rounded: fails a baseline check")
+        self.write("oracle/mutants/rounded/" + SPLIT, "import nonexistent_module\n")
+        self.assertInvalid("mutant rounded: fails a baseline check")
+
+    def test_an_alternative_failing_a_baseline_check_or_none_at_all_is_invalid(self):
+        self.write("oracle/alternatives/loop-ceil/" + SPLIT, "def split_amount(total_cents, parts):\n    return []\n")
+        self.assertInvalid("fails a baseline check")
+        shutil.rmtree(self.path("oracle", "alternatives"))
+        self.assertInvalid("alternatives: none")
+
+    def test_mutants_must_be_caught_and_number_at_least_three(self):
+        self.write("oracle/mutants/rounded/" + SPLIT, self.read("oracle/reference", SPLIT))
+        self.assertInvalid("mutant rounded: not caught")
+        shutil.rmtree(self.path("oracle", "mutants", "rounded"))
+        self.assertInvalid("mutants: 2 distinct, need at least 3")
+
+    def test_a_shortcut_that_passes_is_invalid(self):
+        self.write("oracle/shortcut/" + SPLIT, self.read("oracle/reference", SPLIT))
+        self.assertInvalid("shortcut: not caught")
+
+    def test_a_solution_touching_an_immutable_file_cannot_be_scored(self):
+        self.write("oracle/mutants/rounded/ledger/report.py", "x = 1\n")
+        self.assertInvalid("mutant rounded: not caught")
+        self.assertIn("not mutable", self.run_validate()["mutants"]["rounded"]["reasons"][0])
+
+    def test_source_map_problems_are_invalid(self):
+        def wrong_quote(d):
+            d["checks"]["H01"]["sources"]["S"]["quote"] = "Shares may differ from the total."
+
+        def s_from_repo(d):
+            d["checks"]["H02"]["sources"]["S"] = dict(d["checks"]["H02"]["sources"]["D"])
+
+        def wrong_line(d):
+            d["checks"]["H03"]["sources"]["D"]["line"] = 2
+
+        def missing_check(d):
+            del d["checks"]["H04"]
+
+        def unsafe_path(d):
+            d["checks"]["H01"]["sources"]["D"]["path"] = "../allowlist.json"
+
+        for change, needle in ((wrong_quote, "H01/S: quote not found"), (s_from_repo, "H02/S: an S-variant source"),
+                               (wrong_line, "H03/D: quote not found at ledger/report.py:2"),
+                               (missing_check, "differ from the inventoried checks"),
+                               (unsafe_path, "H01/D: unsafe path")):
+            with self.subTest(needle=needle):
+                original = self.read("oracle/source-map.json")
+                self.edit_json("oracle/source-map.json", change)
+                pkg = vt.Package(self.pkg)
+                problems = vt.check_source_map(pkg, ["H01", "H02", "H03", "H04"])
+                self.assertTrue(any(needle in p for p in problems), problems)
+                self.write("oracle/source-map.json", original)
+        self.assertEqual(vt.check_source_map(vt.Package(self.pkg), ["H01", "H02", "H03", "H04"]), [])
+
+    def test_unreadable_packages_are_refused(self):
+        os.remove(self.path("prompts", "D.md"))
+        with self.assertRaises(vt.UsageError):
+            vt.Package(self.pkg)
+        shutil.copyfile(os.path.join(TOY, "prompts", "D.md"), self.path("prompts", "D.md"))
+        self.edit_json("task.json", lambda d: d.update(task="OTHER"))
+        with self.assertRaises(vt.UsageError):
+            vt.Package(self.pkg)
+
+    def test_cli_exit_codes(self):
+        out = os.path.join(self.tmp, "report.json")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(vt.main(["--package", self.pkg, "--out", out, "--max-mutations", "0"]), 0)
+            self.write("oracle/shortcut/" + SPLIT, self.read("oracle/reference", SPLIT))
+            self.assertEqual(vt.main(["--package", self.pkg, "--out", out, "--max-mutations", "0"]), 1)
+            os.remove(self.path("task.json"))
+            self.assertEqual(vt.main(["--package", self.pkg, "--out", out]), 2)
+        with open(out, encoding="utf-8") as h:
+            self.assertFalse(json.load(h)["valid"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -143,6 +143,8 @@ Results are in `boundary/results-2026-11-23/` and `dryrun/results-2026-11-23/`.
 
 ## 5. Workflow registration and dispatch plan
 
+> **Superseded for the live probe by LIVE-PROBE.md §6** (2026-11-23 pre-live audit). The bootstrap pins `AQD_TEST_SHA` to the owner's one-file **approval commit** on top of the reviewed commit, not to the reviewed commit itself. An approval filled only on `main` never reaches the pinned checkout. Token revocation: LIVE-PROBE.md §5.
+
 **Constraint:** `workflow_dispatch` fires only for a file on the default branch (`main`), and the run uses the file at the dispatched ref.
 
 **Smallest safe bootstrap, without merging PR #2 or PR #3.** This is the pattern `phase3-ab-run.yml` already uses on `main`:
@@ -228,6 +230,8 @@ Only after a pass would a two-arm SMOKE comparison be proposed, separately.
 8. The CLI writes nothing token-bearing outside the per-run tree on a real run, for example during an OAuth refresh.
 
 ## 8. Verdict for requesting the first live security probe
+
+> Historical verdict of 9710239. The current verdict and blockers are in `PRE-LIVE-AUDIT.md`.
 
 **READY to request authorisation**, once this commit's CI is green. A green CI means:
 - the mock workflow job: dry run and real-CLI boundary on a GitHub runner;

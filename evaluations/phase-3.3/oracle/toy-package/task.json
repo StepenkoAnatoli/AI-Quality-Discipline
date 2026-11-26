@@ -1,0 +1,2 @@
+{"kind": "aqd-phase-3.3-task-package", "schema_version": 1, "task": "TOY-SPLIT", "mutation_seed": 20261125,
+ "note": "TOY package for testing validate_task.py only. Never used in any experiment."}

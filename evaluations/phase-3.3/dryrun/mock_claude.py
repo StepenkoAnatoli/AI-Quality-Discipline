@@ -120,7 +120,10 @@ def main():
     real_skills = sorted(n for n in (os.listdir(skills_dir) if os.path.isdir(skills_dir) else [])
                          if os.path.isfile(os.path.join(skills_dir, n, "SKILL.md")))
     listed = sorted([f"aqd-arm:{n}" for n in real_skills] + ["doctor"])
-    emit({"type": "system", "subtype": "mock_probe", "probe": probe()})
+    if not s.get("skip_isolation_probe"):
+        emit({"type": "system", "subtype": "mock_probe", "probe": probe()})
+    else:  # the SMOKE rehearsal (live/rehearse-smoke.sh): no dry-run probe keys; the received prompt's hash only
+        emit({"type": "system", "subtype": "mock_probe", "probe": {"prompt_sha256": hashlib.sha256(PROMPT).hexdigest()}})
     init = {"type": "system", "subtype": "init", "session_id": "mock-session", "uuid": "u0", "apiKeySource": "none",
             "claude_code_version": "2.1.330", "cwd": os.getcwd(), "model": s.get("init_model", model),
             "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Skill"], "mcp_servers": [],
@@ -145,10 +148,14 @@ def main():
     if s.get("sandbox_fail"):  # the real 2.1.330 answer to every Bash call when namespaces are refused
         blocks.append({"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "python3 -m pytest"}})
     emit({"type": "assistant", "message": {"model": s.get("turn_model", model), "role": "assistant", "content": blocks}})
-    with open("notes.txt", "a", encoding="utf-8") as handle:
-        handle.write("mock edit\n")
+    # default: append (the dry run); "notes_text": replace the file as the SMOKE task asks (the SMOKE rehearsal)
+    with open("notes.txt", "w" if "notes_text" in s else "a", encoding="utf-8") as handle:
+        handle.write(s["notes_text"] if "notes_text" in s else "mock edit\n")
         if s.get("leak_token"):
             handle.write(TOKEN + "\n")  # a deliberate leak into a captured file
+    for name in s.get("extra_files") or []:  # files an agent might leave behind (workspace findings)
+        with open(name, "w", encoding="utf-8") as handle:
+            handle.write(s.get("extra_file_text", ""))
     emit({"type": "user", "message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}})
     if s.get("sandbox_fail"):

@@ -55,5 +55,20 @@ class CheckEnvironmentTests(unittest.TestCase):
         self.assertTrue(ce.check(ENV, None, OWNER))
 
 
+class EnvironmentNameTests(unittest.TestCase):
+    def test_the_smoke_environment_is_checked_by_its_own_name(self):
+        smoke = dict(ENV, name="aqd-cc-live-smoke")
+        self.assertEqual(ce.check(smoke, POLICIES, OWNER, "aqd-cc-live-smoke"), [])
+        self.assertTrue(ce.check(smoke, POLICIES, OWNER))  # default name: the probe's
+        self.assertTrue(ce.check(ENV, POLICIES, OWNER, "aqd-cc-live-smoke"))
+        self.assertTrue(ce.check(dict(ENV, name="x"), POLICIES, OWNER, "x"))
+
+
+class PilotEnvironmentTests(unittest.TestCase):
+    def test_the_pilot_environment_is_checked_by_its_own_name(self):
+        self.assertEqual(ce.check(dict(ENV, name="aqd-cc-live-pilot"), POLICIES, OWNER, "aqd-cc-live-pilot"), [])
+        self.assertTrue(ce.check(ENV, POLICIES, OWNER, "aqd-cc-live-pilot"))
+
+
 if __name__ == "__main__":
     unittest.main()

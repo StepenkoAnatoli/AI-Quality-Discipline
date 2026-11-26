@@ -1,0 +1,17 @@
+{
+  "kind": "aqd-phase-3.3-source-map", "schema_version": 1,
+  "checks": {
+    "H01": {"obligation": "the shares add up to the total",
+            "sources": {"S": {"kind": "prompt", "quote": "The shares must add up exactly to the total."},
+                        "D": {"kind": "repo", "path": "ledger/report.py", "line": 3, "quote": "Shares always add up to the invoice total."}}},
+    "H02": {"obligation": "remainder cents go to the earliest shares, one each",
+            "sources": {"S": {"kind": "prompt", "quote": "Remainder cents go to the earliest shares, one each."},
+                        "D": {"kind": "repo", "path": "ledger/report.py", "line": 4, "quote": "Remainder cents go to the earliest shares, one each."}}},
+    "H03": {"obligation": "a non-positive number of parts raises ValueError",
+            "sources": {"S": {"kind": "prompt", "quote": "A non-positive number of parts raises ValueError."},
+                        "D": {"kind": "repo", "path": "ledger/report.py", "line": 5, "quote": "split_amount raises ValueError for a non-positive number of parts."}}},
+    "H04": {"obligation": "a zero total gives zero shares",
+            "sources": {"S": {"kind": "prompt", "quote": "A zero total gives a list of zero shares."},
+                        "D": {"kind": "repo", "path": "ledger/report.py", "line": 6, "quote": "A zero total gives a list of zero shares."}}}
+  }
+}

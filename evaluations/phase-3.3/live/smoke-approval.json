@@ -1,0 +1,26 @@
+{
+  "approved_runs": [
+    {
+      "run_id": "r-709f207e78",
+      "task": "SMOKE",
+      "group": "treatment",
+      "model": "anthropic/claude-opus-5-5#medium",
+      "prompt_sha256": "21de334c06fd4ee31e30a6283202a8c353c4d266b042c36ab56175e9cd73f86d",
+      "cli_sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+      "workspace_sha256": "4791a7c5f212ac2900b9b1f761f1779e8a90ab377db7209810fb544cb926b300"
+    },
+    {
+      "run_id": "r-2cffa4db9c",
+      "task": "SMOKE",
+      "group": "control",
+      "model": "anthropic/claude-opus-5-5#medium",
+      "prompt_sha256": "21de334c06fd4ee31e30a6283202a8c353c4d266b042c36ab56175e9cd73f86d",
+      "cli_sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+      "workspace_sha256": "4791a7c5f212ac2900b9b1f761f1779e8a90ab377db7209810fb544cb926b300"
+    }
+  ],
+  "approved_by": "",
+  "approved_utc": "",
+  "reviewed_commit": "",
+  "note": "TEMPLATE. The owner approves in ONE commit directly on top of the reviewed commit that changes only this file: approved_by, approved_utc (YYYY-MM-DDTHH:MM:SSZ) and reviewed_commit (the 40-hex reviewed commit = the approval commit's parent). main's workflow then pins AQD_TEST_SHA to that approval commit (SMOKE-PROPOSAL.md). Until then the launcher refuses both runs."
+}
