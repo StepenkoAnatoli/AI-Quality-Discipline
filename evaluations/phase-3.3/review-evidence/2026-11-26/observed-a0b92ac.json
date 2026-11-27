@@ -1,0 +1,86 @@
+{
+  "multi_file_mutation": {
+    "full_reference": {
+      "valid": true,
+      "hidden": {
+        "H01": "pass",
+        "H02": "pass",
+        "H03": "pass",
+        "H04": "pass",
+        "H05": "pass"
+      },
+      "baseline_all_pass": true,
+      "failed_hidden": []
+    },
+    "unmutated_split_on_pristine": {
+      "valid": true,
+      "hidden": {
+        "H01": "pass",
+        "H02": "pass",
+        "H03": "pass",
+        "H04": "pass",
+        "H05": "fail"
+      },
+      "baseline_all_pass": true,
+      "failed_hidden": [
+        "H05"
+      ]
+    },
+    "current_mutation_path": {
+      "valid": true,
+      "hidden": {
+        "H01": "pass",
+        "H02": "pass",
+        "H03": "pass",
+        "H04": "pass",
+        "H05": "fail"
+      },
+      "baseline_all_pass": true,
+      "failed_hidden": [
+        "H05"
+      ]
+    },
+    "correct_full_reference_overlay": {
+      "valid": true,
+      "hidden": {
+        "H01": "pass",
+        "H02": "pass",
+        "H03": "pass",
+        "H04": "pass",
+        "H05": "pass"
+      },
+      "baseline_all_pass": true,
+      "failed_hidden": []
+    }
+  },
+  "multi_file_validation": {
+    "valid": true,
+    "reasons": [],
+    "mechanical_mutation": {
+      "generated": 9,
+      "scored": 9,
+      "killed_by_hidden": 9,
+      "survivors": [],
+      "unscorable": 0,
+      "hidden_kill_rate": 1.0
+    }
+  },
+  "missing_fields_record": {
+    "tokens": {
+      "input": 1,
+      "output": null,
+      "cache_read": 2,
+      "cache_write": 3
+    },
+    "total_prompt_tokens": 6,
+    "tokens_missing_reason": null,
+    "invoked": false,
+    "loaded": false
+  },
+  "bash_before_load": {
+    "called": true,
+    "call_error": false,
+    "loaded": true,
+    "before_first_edit": true
+  }
+}
