@@ -21,8 +21,9 @@ independently certify those resolutions or change any gate or authorization.
   machine-specific checkout path replaced by a required `--repo` argument.
   A commit and tracked-file check prevents accidental use against a different
   source version. It uses only synthetic copies of the public toy package.
-- [observed-a0b92ac.json](observed-a0b92ac.json): unchanged output retained
-  from the original review run. Its historical `current_mutation_path` key
+- [observed-a0b92ac.json](observed-a0b92ac.json): output retained from the
+  original review run, with unchanged JSON values and line endings normalized
+  to LF for the repository. Its historical `current_mutation_path` key
   means the implementation at `a0b92ac`, not today's implementation.
 
 The private task packages, raw ratings, role transcripts and encrypted G1
