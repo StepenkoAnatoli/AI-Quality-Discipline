@@ -1,0 +1,351 @@
+name: Phase 3.3 native Claude Code smoke (mock; live security probe gated)
+
+# pull_request        -> the "mock" job only, on the PR head. No secret, no model request.
+# workflow_dispatch   -> mode "mock": the same job on the commit pinned below (AQD_TEST_SHA). No secret.
+#                        mode "live-security-probe": ONE approved, unscored PROBE-CC run on the owner's subscription,
+#                        only when ALL of these hold (each is checked; any failure stops before the secret is used):
+#                          * dispatched by hand from main, first attempt (github.run_attempt == 1), never on a PR;
+#                          * AQD_TEST_SHA pinned to a reviewed commit, CLI tarball and binary SHA-256 pinned;
+#                          * inputs run_id == AQD_PROBE_RUN_ID and confirm == "RUN-LIVE-PROBE <run id>";
+#                          * the mock job (dry run, real-CLI boundary, rehearsal) green in the same run;
+#                          * the environment aqd-cc-live-probe verified: main only, required reviewer, no admin bypass;
+#                          * the owner approves the environment deployment; its secrets exist only in that job.
+#
+# GitHub registers workflow_dispatch only for a workflow file on the DEFAULT branch, and a run uses the file at the
+# dispatched ref. On this PR branch AQD_TEST_SHA is the all-zero placeholder, so both dispatch modes refuse here.
+# Secrets (environment aqd-cc-live-probe only; never repository secrets):
+#   AQD_CC_OAUTH_TOKEN      dedicated `claude setup-token` token. Referenced in ONE step ("Write the credentials file").
+#   AQD_RESULTS_PASSPHRASE  >= 32 characters. Referenced in ONE step ("Encrypt the capture").
+# What leaves the runner: fixed status lines and counts in the log; one GPG-encrypted capture, 1-day retention.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "mock = no secret, no model request. live-security-probe = ONE approved unscored run."
+        type: choice
+        options: [mock, live-security-probe]
+        default: mock
+      run_id:
+        description: "live only: the approved run id (must equal AQD_PROBE_RUN_ID)"
+        type: string
+        default: ""
+      confirm:
+        description: "live only: type RUN-LIVE-PROBE <run id>"
+        type: string
+        default: ""
+  pull_request:
+    paths:
+      - "evaluations/phase-3.2/harness/**"
+      - "evaluations/phase-3.3/**"
+      - "skills/**"
+      - ".github/workflows/phase3-cc-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase3-cc-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Immutable references, reviewed with this file. Placeholder here: a dispatch of this copy refuses.
+  AQD_TEST_SHA: "0000000000000000000000000000000000000000"
+  AQD_CLI_VERSION: "2.1.330"
+  AQD_CLI_TARBALL: "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.330.tgz"
+  AQD_CLI_TARBALL_SHA256: "40ff30c5768723958032132065e6fcdd1e2dc3a2b3ff9a0bf36c6620ef1c40ef"
+  AQD_CLI_SHA256: "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb"
+  AQD_CANONICAL_SKILL_SHA256: "d050d00fa8564b08cac71ca221368568420c731c830ef19667a760d5f7ebc842"
+  AQD_PROBE_RUN_ID: "r-e8e1d02634"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  mock:
+    # Runs on pull requests and on EVERY dispatch (mock and live): in live mode it is the same-run gate.
+    if: github.repository == 'StepenkoAnatoli/AI-Quality-Discipline'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve the one commit this run may use
+        id: ref
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == pull_request ]]; then sha="$PR_SHA"; else sha="$AQD_TEST_SHA"; fi
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ || "$sha" == 0000000000000000000000000000000000000000 ]]; then
+            echo "STOP: no pinned commit (AQD_TEST_SHA is the placeholder)"; exit 1
+          fi
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+      - name: Check out exactly that commit (no credentials persisted)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.ref.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify the commit and the canonical skill
+        env:
+          SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$SHA" ]] || { echo "STOP: checkout is not the pinned commit"; exit 1; }
+          echo "$AQD_CANONICAL_SKILL_SHA256  skills/code-discipline/SKILL.md" | sha256sum -c --quiet \
+            || { echo "STOP: the canonical skill changed"; exit 1; }
+          echo "commit and canonical skill verified"
+
+      - name: Fetch the pinned CLI and verify the tarball and binary SHA-256 before any use
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/aqd-cli"; mkdir -p "$d"
+          curl -fsSL --proto '=https' --tlsv1.2 "$AQD_CLI_TARBALL" -o "$d/cli.tgz"
+          echo "$AQD_CLI_TARBALL_SHA256  $d/cli.tgz" | sha256sum -c --quiet || { echo "STOP: tarball hash"; exit 1; }
+          tar -xzf "$d/cli.tgz" -C "$d" package/claude
+          echo "$AQD_CLI_SHA256  $d/package/claude" | sha256sum -c --quiet || { echo "STOP: binary hash"; exit 1; }
+          sudo install -d -o root -g root -m 0755 /opt/aqd-cc
+          sudo install -o root -g root -m 0755 "$d/package/claude" /opt/aqd-cc/claude
+          rm -rf "$d"
+          echo "Claude Code $AQD_CLI_VERSION verified ($AQD_CLI_SHA256)"
+
+      - name: Host user namespaces as found, then the temporary AppArmor change (restored at the end)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap socat >/dev/null
+          sudo useradd -M -s /usr/sbin/nologin aqd-probe
+          sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true
+          if sudo -u aqd-probe env -i PATH=/usr/bin:/bin bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true; then
+            echo "as found: unprivileged bubblewrap namespaces WORK"
+          else
+            echo "as found: unprivileged bubblewrap namespaces REFUSED"
+          fi
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          sudo -u aqd-probe env -i PATH=/usr/bin:/bin bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true \
+            && echo "after the change: unprivileged bubblewrap namespaces WORK"
+
+      - name: Build the disposable image
+        run: docker build -q -t aqd-dryrun -f evaluations/phase-3.3/dryrun/Dockerfile evaluations/phase-3.3/dryrun
+
+      - name: Gate unit tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s evaluations/phase-3.3/dryrun -p "test_check_results.py"
+          python3 -m unittest discover -s evaluations/phase-3.3/boundary -p "test_check_boundary.py"
+
+      - name: Launcher dry run (mock CLI, synthetic token, no network, non-root operator)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aqd-out/dryrun"; mkdir -p "$out"
+          docker run --rm --network none --privileged --hostname aqd --add-host aqd:127.0.0.1 \
+            -v "$PWD:/src:ro" -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/dryrun/dryrun-cc.sh
+          docker run --rm --network none --hostname aqd --add-host aqd:127.0.0.1 -e DRYRUN_MODE=preflight-only \
+            -v "$PWD:/src:ro" -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/dryrun/dryrun-cc.sh
+          python3 evaluations/phase-3.3/dryrun/check_results.py "$out"/dryrun-results-*.ndjson
+
+      - name: Credential boundary of the REAL CLI (local mock API, fake canary token, no network)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aqd-out/boundary"; mkdir -p "$out"
+          for mode in privileged unprivileged; do
+            flag=""; [[ "$mode" == privileged ]] && flag="--privileged"
+            # shellcheck disable=SC2086
+            docker run --rm --network none $flag --hostname aqd --add-host aqd:127.0.0.1 -v "$PWD:/src:ro" \
+              -v /opt/aqd-cc:/opt/cc:ro -v "$out:/out" aqd-dryrun bash /src/evaluations/phase-3.3/boundary/run-boundary.sh "$mode"
+          done
+          python3 evaluations/phase-3.3/boundary/check_boundary.py "$out"
+
+      - name: Live-probe checkers (unit tests)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s evaluations/phase-3.3/live -p "test_check_*.py"
+
+      - name: Rehearsal of the live probe ON THIS HOST (mock CLI, synthetic token; same script as the live job)
+        run: bash evaluations/phase-3.3/live/rehearse.sh "$RUNNER_TEMP/aqd-out/rehearsal"
+
+      - name: Keep only redacted summaries
+        if: always()
+        run: |
+          set -euo pipefail
+          up="$RUNNER_TEMP/aqd-upload"; mkdir -p "$up"
+          if [[ -d "$RUNNER_TEMP/aqd-out" ]]; then
+            (cd "$RUNNER_TEMP/aqd-out" && find . \( -name 'summary.json' -o -name 'dryrun-results-*.ndjson' \
+              -o -name 'rehearsal-results.ndjson' \) \
+              -exec cp --parents {} "$up" \;)
+          fi
+          if grep -rqE 'sk-ant-(oat|api)[0-9]{2}-[A-Za-z0-9_-]{20,}' "$up"; then
+            # only synthetic tokens exist in this job; a token-shaped string in an upload is still refused
+            grep -rlE 'sk-ant-(oat|api)[0-9]{2}-[A-Za-z0-9_-]{20,}' "$up" | xargs -r rm -f
+            echo "STOP: a token-shaped string was found in the summaries; they were not uploaded"; exit 1
+          fi
+
+      - name: Upload the redacted summaries (3-day retention)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aqd-cc-mock-summaries
+          path: ${{ runner.temp }}/aqd-upload
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Restore the AppArmor user-namespace restriction
+        if: always()
+        run: |
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+          fi
+
+  verify-environment:
+    # Public settings only (no token, no secret): the environment must be main-only, reviewed, without admin bypass.
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'live-security-probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the pinned commit (no credentials persisted)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.AQD_TEST_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify the environment protection settings
+        env:
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/aqd-env"; mkdir -p "$d"
+          api="https://api.github.com/repos/$REPO/environments/aqd-cc-live-probe"
+          curl -fsS -H 'Accept: application/vnd.github+json' "$api" -o "$d/env.json" || echo '{}' >"$d/env.json"
+          curl -fsS -H 'Accept: application/vnd.github+json' "$api/deployment-branch-policies" -o "$d/policies.json" \
+            || echo '{}' >"$d/policies.json"
+          python3 -I evaluations/phase-3.3/live/check_environment.py --environment "$d/env.json" \
+            --branch-policies "$d/policies.json" --actor "$ACTOR"
+
+  live-security-probe:
+    # The secrets of environment aqd-cc-live-probe reach this job only after the owner approves the deployment.
+    needs: [mock, verify-environment]
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'live-security-probe' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    environment: aqd-cc-live-probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      AQD_OPERATOR: /home/runner/aqd-operator
+    steps:
+      - name: Guard (no secret in this step)
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          ATTEMPT: ${{ github.run_attempt }}
+          RUN_INPUT: ${{ inputs.run_id }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          [[ "$EVENT" == workflow_dispatch && "$REF" == refs/heads/main && "$ATTEMPT" == 1 ]] \
+            || { echo "STOP: manual dispatch from main, first attempt only"; exit 1; }
+          [[ "$AQD_TEST_SHA" =~ ^[0-9a-f]{40}$ && "$AQD_TEST_SHA" != 0000000000000000000000000000000000000000 ]] \
+            || { echo "STOP: no reviewed commit pinned"; exit 1; }
+          [[ "$RUN_INPUT" == "$AQD_PROBE_RUN_ID" && "$CONFIRM" == "RUN-LIVE-PROBE $AQD_PROBE_RUN_ID" ]] \
+            || { echo "STOP: run id or confirmation does not match the approved run"; exit 1; }
+          echo "guard passed for run $AQD_PROBE_RUN_ID at $AQD_TEST_SHA"
+
+      - name: Check out exactly the pinned commit (no credentials persisted)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.AQD_TEST_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify the commit, the canonical skill and the CLI (tarball and binary SHA-256)
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$AQD_TEST_SHA" ]] || { echo "STOP: checkout is not the pinned commit"; exit 1; }
+          echo "$AQD_CANONICAL_SKILL_SHA256  skills/code-discipline/SKILL.md" | sha256sum -c --quiet
+          d="$RUNNER_TEMP/aqd-cli"; mkdir -p "$d"
+          curl -fsSL --proto '=https' --tlsv1.2 "$AQD_CLI_TARBALL" -o "$d/cli.tgz"
+          echo "$AQD_CLI_TARBALL_SHA256  $d/cli.tgz" | sha256sum -c --quiet
+          tar -xzf "$d/cli.tgz" -C "$d" package/claude
+          echo "$AQD_CLI_SHA256  $d/package/claude" | sha256sum -c --quiet
+          sudo install -d -o root -g root -m 0755 /opt/aqd-cc
+          sudo install -o root -g root -m 0755 "$d/package/claude" /opt/aqd-cc/claude
+          rm -rf "$d"
+          echo "commit, skill and CLI $AQD_CLI_VERSION verified"
+
+      - name: Host dependencies and the temporary AppArmor change (restored at the end)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap socat >/dev/null
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Write the credentials file (the ONLY step that references the token)
+        env:
+          AQD_TOKEN: ${{ secrets.AQD_CC_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          d="$RUNNER_TEMP/aqd-secret"; mkdir -p "$d"
+          python3 -I - "$d/credentials.env" <<'PY'
+          import os, sys
+          token = os.environ.get("AQD_TOKEN", "")
+          if not token.startswith("sk-ant-oat") or any(c.isspace() for c in token):
+              sys.exit("STOP: the environment secret is missing or is not a subscription OAuth token")
+          with open(sys.argv[1], "w", encoding="utf-8") as h:
+              h.write("CLAUDE_CODE_OAUTH_TOKEN=" + token + "\n")
+          PY
+          chmod 0600 "$d/credentials.env"
+          echo "credentials file written (0600)"
+
+      - name: Run the one approved probe (fixed status lines and counts only)
+        run: |
+          set -euo pipefail
+          AQD_CLAUDE_BIN=/opt/aqd-cc/claude AQD_CREDENTIALS="$RUNNER_TEMP/aqd-secret/credentials.env" \
+            bash evaluations/phase-3.3/live/run-live-probe.sh live "$AQD_PROBE_RUN_ID"
+
+      - name: Remove the credentials file
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/aqd-secret/credentials.env" ]]; then shred -u "$RUNNER_TEMP/aqd-secret/credentials.env"; fi
+
+      - name: Encrypt the capture (the ONLY step that references the passphrase)
+        if: always()
+        env:
+          AQD_PASS: ${{ secrets.AQD_RESULTS_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "${#AQD_PASS}" -ge 32 ]] || { echo "STOP: AQD_RESULTS_PASSPHRASE missing or short; nothing uploaded"; exit 1; }
+          p="$RUNNER_TEMP/aqd-pack"; mkdir -p "$p/up" "$p/gnupg"; chmod 0700 "$p/gnupg"
+          printf '%s' "$AQD_PASS" >"$p/pf"
+          sudo tar -C "$AQD_OPERATOR" -czf "$p/capture.tar.gz" captures sealed preflight.log launcher.log 2>/dev/null || true
+          sudo chown "$(id -u):$(id -g)" "$p/capture.tar.gz"
+          gpg --homedir "$p/gnupg" --batch --yes --quiet --no-symkey-cache --pinentry-mode loopback --passphrase-file "$p/pf" \
+            --symmetric --cipher-algo AES256 -o "$p/up/aqd-cc-live-probe.tar.gz.gpg" "$p/capture.tar.gz"
+          gpg --homedir "$p/gnupg" --batch --quiet --no-symkey-cache --pinentry-mode loopback --passphrase-file "$p/pf" \
+            -d "$p/up/aqd-cc-live-probe.tar.gz.gpg" | cmp -s - "$p/capture.tar.gz" || { echo "STOP: encryption check"; exit 1; }
+          shred -u "$p/pf" "$p/capture.tar.gz"
+          echo "capture encrypted"
+
+      - name: Upload the encrypted capture only (1-day retention)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aqd-cc-live-probe-encrypted
+          path: ${{ runner.temp }}/aqd-pack/up/aqd-cc-live-probe.tar.gz.gpg
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Restore the AppArmor user-namespace restriction
+        if: always()
+        run: |
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+          fi

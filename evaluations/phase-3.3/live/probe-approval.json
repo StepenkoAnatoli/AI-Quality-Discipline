@@ -1,0 +1,16 @@
+{
+  "approved_runs": [
+    {
+      "run_id": "r-e8e1d02634",
+      "task": "PROBE-CC",
+      "group": "control",
+      "model": "anthropic/claude-opus-5-5#medium",
+      "prompt_sha256": "8197c2f409d2e190fdbce4d4644899c975510bc81c069e11c762a4d28045893c",
+      "cli_sha256": "f390eaa0814e6a1bff74cbb47acb74cb9c89d30ced809fe0af5af00c7bfe8ebb",
+      "workspace_sha256": "17130aa73f08ce35aaf10e68c98c89416dae0d890fbc6b1e692c02003ae1fc6f"
+    }
+  ],
+  "approved_by": "",
+  "approved_utc": "",
+  "note": "TEMPLATE. The owner approves by filling approved_by and approved_utc in the reviewed bootstrap commit on main. Until then the launcher refuses this run."
+}

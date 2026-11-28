@@ -92,6 +92,14 @@
         "tests/baseline/test_jobs_baseline.py": "immutable",
         "tests/additive/__init__.py": "additive"
       }
+    },
+    "PROBE-CC": {
+      "title": "Native Claude Code credential-boundary probe (unscored; never evidence)",
+      "source_dir": "tasks/PROBE-CC/project",
+      "files": {
+        "TASK.md": "immutable",
+        "probe.sh": "immutable"
+      }
     }
   }
 }

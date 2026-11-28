@@ -231,6 +231,8 @@ def check_run_records(records):
     shared = {}
     for run, record in records:
         where = f"{run['run_id']}: run-record.json"
+        if run.get("task") in ("SMOKE", "PROBE-CC"):
+            raise AnalysisError(f"{where} task {run.get('task')} is a harness check and never evidence")
         for key in ("run_id", "task", "group", "model"):
             if record.get(key) != run.get(key):
                 raise AnalysisError(f"{where} {key} {record.get(key)!r} differs from the schedule's {run.get(key)!r}")
@@ -243,6 +245,20 @@ def check_run_records(records):
                                "opencode_install_tree_sha256"),
             ("model", run["model"]): ("interface",),
         }
+        # Execution environments are never pooled (absent = the Phase 3.2 OpenCode harness). Native Claude Code
+        # records must also agree on the CLI binary and the turn limit.
+        environment = record.get("execution_environment", "opencode")
+        values = shared.setdefault(("execution environment", ""), {})
+        if values.setdefault("execution_environment", environment) != environment:
+            raise AnalysisError(f"{where} execution environment {environment!r} differs from other runs: "
+                                "results from different execution environments are never pooled")
+        if environment == "native-claude-code":
+            keys[("all runs", "")] = keys[("all runs", "")] + ("claude_cli_sha256", "max_turns")
+            if not isinstance(record.get("claude_cli_sha256"), str):
+                raise AnalysisError(f"{where} lacks claude_cli_sha256")
+            if record.get("timeout_seconds") != 2700:
+                raise AnalysisError(f"{where} timeout {record.get('timeout_seconds')!r} s is not the pre-registered "
+                                    "2700 s (dry-run records are never evidence)")
         if run["group"] == "treatment":
             values = shared.setdefault(("treatment skill", ""), {})
             if values.setdefault("sha256", skill["sha256"]) != skill["sha256"]:

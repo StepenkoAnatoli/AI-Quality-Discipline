@@ -26,6 +26,12 @@ Pre-registered validity rules (SPECIFICATION.md section 6.2). A run is VALID onl
     treatment or null for control, consistent with the run.
 Anything else is INVALID with reasons; the operator decides about a rerun
 under the rerun rules, never silently.
+
+--interface claude-code (Phase 3.3, native Claude Code; default opencode keeps
+Phase 3.2 unchanged): the interface string is "claude-code X.Y.Z", the run
+record must name execution_environment "native-claude-code", the listing is of
+the run's CLAUDE_CONFIG_DIR/skills (exactly the canonical skill for treatment,
+empty for control), and export-checks.json comes from cc_adapter.py.
 """
 import argparse
 import json
@@ -38,7 +44,9 @@ sys.path.insert(0, HERE)
 import aqd_common as c  # noqa: E402
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-INTERFACE = re.compile(r"^opencode [0-9]+\.[0-9]+\.[0-9]+$")
+INTERFACES = {"opencode": re.compile(r"^opencode [0-9]+\.[0-9]+\.[0-9]+$"),
+              "claude-code": re.compile(r"^claude-code [0-9]+\.[0-9]+\.[0-9]+$")}
+INTERFACE = INTERFACES["opencode"]
 
 
 def _load(path):
@@ -53,14 +61,19 @@ def _load(path):
     return data if isinstance(data, dict) else None
 
 
-def expected_home_listing(group):
+def expected_home_listing(group, interface="opencode"):
+    if interface == "claude-code":  # the arm plugin (--plugin-dir); CLAUDE_CONFIG_DIR/skills must stay empty
+        listing = ["arm-plugin/.claude-plugin", "arm-plugin/.claude-plugin/plugin.json", "arm-plugin/skills"]
+        if group == "treatment":
+            listing += ["arm-plugin/skills/code-discipline", "arm-plugin/skills/code-discipline/SKILL.md"]
+        return sorted(listing)
     listing = ["opencode", "opencode/opencode.jsonc"]
     if group == "treatment":
         listing += ["opencode/skills", "opencode/skills/code-discipline", "opencode/skills/code-discipline/SKILL.md"]
     return sorted(listing)
 
 
-def check_run_record(record, group, export_model_ref):
+def check_run_record(record, group, export_model_ref, interface="opencode"):
     """Reasons the run record is incomplete or contradicts the run (empty when sound)."""
     if record is None:
         return ["no run-record.json"]
@@ -70,8 +83,10 @@ def check_run_record(record, group, export_model_ref):
             reasons.append(f"run record lacks {key}")
     if record.get("group") != group:
         reasons.append("run record names a different group")
-    if not INTERFACE.match(str(record.get("interface", ""))):
+    if not INTERFACES[interface].match(str(record.get("interface", ""))):
         reasons.append("run record lacks the interface version")
+    if interface == "claude-code" and record.get("execution_environment") != "native-claude-code":
+        reasons.append("run record does not name the native-claude-code execution environment")
     try:
         provider, model_id, variant = c.parse_model(record.get("model"))
         if (record.get("model_provider"), record.get("model_id"), record.get("model_variant")) != (provider, model_id, variant):
@@ -89,7 +104,7 @@ def check_run_record(record, group, export_model_ref):
     return reasons
 
 
-def build_status(capture, group, started, ended, api_exit, driver_exit, step):
+def build_status(capture, group, started, ended, api_exit, driver_exit, step, interface="opencode"):
     reasons = []
     driver = _load(os.path.join(capture, "driver", "driver-result.json")) or {}
     export_checks = _load(os.path.join(capture, "export-checks.json"))
@@ -128,12 +143,13 @@ def build_status(capture, group, started, ended, api_exit, driver_exit, step):
         reasons.append("post-run manifest verification failed without naming the changed files")
     if listing is None:
         reasons.append("no HOME configuration listing")
-    elif listing != expected_home_listing(group):
-        reasons.append(f"unexpected HOME configuration entries: {sorted(set(listing) ^ set(expected_home_listing(group)))}")
+    elif listing != expected_home_listing(group, interface):
+        reasons.append("unexpected HOME configuration entries: "
+                       f"{sorted(set(listing) ^ set(expected_home_listing(group, interface)))}")
     if step != "done":
         reasons.append(f"launcher stopped at step {step!r}")
     reasons.extend(check_run_record(_load(os.path.join(capture, "run-record.json")), group,
-                                    (export_checks or {}).get("model_ref")))
+                                    (export_checks or {}).get("model_ref"), interface))
 
     tools = (export_checks or {}).get("tool_counts") or {}
     return {
@@ -167,8 +183,10 @@ def main(argv=None):
     p.add_argument("--api-exit", type=int, required=True)
     p.add_argument("--driver-exit", type=int, required=True)
     p.add_argument("--step", required=True)
+    p.add_argument("--interface", choices=sorted(INTERFACES), default="opencode")
     args = p.parse_args(argv)
-    status = build_status(args.capture, args.group, args.started, args.ended, args.api_exit, args.driver_exit, args.step)
+    status = build_status(args.capture, args.group, args.started, args.ended, args.api_exit, args.driver_exit, args.step,
+                          args.interface)
     with open(os.path.join(args.capture, "run-status.json"), "w", encoding="utf-8") as handle:
         json.dump(status, handle, indent=2)
         handle.write("\n")
