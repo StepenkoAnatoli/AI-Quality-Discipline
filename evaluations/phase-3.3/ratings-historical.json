@@ -1,0 +1,136 @@
+{
+  "kind": "aqd-difficulty-ratings",
+  "schema_version": 1,
+  "rubric_sha256": "2d1f960dc364086a9958e7b3e1245415de5c8b749840c97768e8a285da1d2412",
+  "note": "POST HOC AND EXPLORATORY. Rated on 2026-11-22 by one rater (the audit session) after the A/B outcomes were known (all four tasks at the ceiling in both arms); re-scored on the same day against rubric v1.1-draft (two axes) without changing any factor score. These ratings describe history only: the validator refuses them in any set other than 'historical', they are never confirmatory, and they must never select, calibrate or tune confirmatory tasks. A second, independent rating is outstanding.",
+  "tasks": {
+    "NEW-01": {
+      "provenance": "post_hoc",
+      "set": "historical",
+      "raters": [
+        {
+          "rater_id": "post-hoc-audit-2026-11-22",
+          "scores": {
+            "F1_interacting_requirements": 2,
+            "F2_state_space": 1,
+            "F3_cross_module": 0,
+            "F4_concurrency_failure": 3,
+            "F5_compatibility": 0,
+            "F6_requirement_discovery": 0,
+            "F7_verification_demand": 2,
+            "F8_existing_coverage": 2
+          }
+        }
+      ],
+      "consensus": {
+        "F1_interacting_requirements": 2,
+        "F2_state_space": 1,
+        "F3_cross_module": 0,
+        "F4_concurrency_failure": 3,
+        "F5_compatibility": 0,
+        "F6_requirement_discovery": 0,
+        "F7_verification_demand": 2,
+        "F8_existing_coverage": 2
+      },
+      "tier": "medium",
+      "notes": "Idempotency, atomic rollback and multi-process duplicate delivery interact (F1, F4). The prompt states all eight obligations, including the processed_events record and the connection state (F6 = 0). One file changes; store/outbox are read for context.",
+      "discovery": "specified"
+    },
+    "NEW-02": {
+      "provenance": "post_hoc",
+      "set": "historical",
+      "raters": [
+        {
+          "rater_id": "post-hoc-audit-2026-11-22",
+          "scores": {
+            "F1_interacting_requirements": 2,
+            "F2_state_space": 1,
+            "F3_cross_module": 0,
+            "F4_concurrency_failure": 3,
+            "F5_compatibility": 0,
+            "F6_requirement_discovery": 0,
+            "F7_verification_demand": 2,
+            "F8_existing_coverage": 2
+          }
+        }
+      ],
+      "consensus": {
+        "F1_interacting_requirements": 2,
+        "F2_state_space": 1,
+        "F3_cross_module": 0,
+        "F4_concurrency_failure": 3,
+        "F5_compatibility": 0,
+        "F6_requirement_discovery": 0,
+        "F7_verification_demand": 2,
+        "F8_existing_coverage": 2
+      },
+      "tier": "medium",
+      "notes": "Validation order, all-or-nothing and 8-process overselling interact. Every obligation, including error precedence and the reservation-id format, is in the prompt (F6 = 0).",
+      "discovery": "specified"
+    },
+    "NEW-03": {
+      "provenance": "post_hoc",
+      "set": "historical",
+      "raters": [
+        {
+          "rater_id": "post-hoc-audit-2026-11-22",
+          "scores": {
+            "F1_interacting_requirements": 3,
+            "F2_state_space": 2,
+            "F3_cross_module": 0,
+            "F4_concurrency_failure": 0,
+            "F5_compatibility": 2,
+            "F6_requirement_discovery": 0,
+            "F7_verification_demand": 1,
+            "F8_existing_coverage": 2
+          }
+        }
+      ],
+      "consensus": {
+        "F1_interacting_requirements": 3,
+        "F2_state_space": 2,
+        "F3_cross_module": 0,
+        "F4_concurrency_failure": 0,
+        "F5_compatibility": 2,
+        "F6_requirement_discovery": 0,
+        "F7_verification_demand": 1,
+        "F8_existing_coverage": 2
+      },
+      "tier": "medium",
+      "notes": "18 numbered clauses with an explicit precedence order; parser state (quoting, line numbers) and real-world CSV compatibility. No concurrency. The prompt is a complete contract (F6 = 0).",
+      "discovery": "specified"
+    },
+    "NEW-04": {
+      "provenance": "post_hoc",
+      "set": "historical",
+      "raters": [
+        {
+          "rater_id": "post-hoc-audit-2026-11-22",
+          "scores": {
+            "F1_interacting_requirements": 3,
+            "F2_state_space": 2,
+            "F3_cross_module": 0,
+            "F4_concurrency_failure": 3,
+            "F5_compatibility": 2,
+            "F6_requirement_discovery": 0,
+            "F7_verification_demand": 3,
+            "F8_existing_coverage": 2
+          }
+        }
+      ],
+      "consensus": {
+        "F1_interacting_requirements": 3,
+        "F2_state_space": 2,
+        "F3_cross_module": 0,
+        "F4_concurrency_failure": 3,
+        "F5_compatibility": 2,
+        "F6_requirement_discovery": 0,
+        "F7_verification_demand": 3,
+        "F8_existing_coverage": 2
+      },
+      "tier": "hard",
+      "notes": "Lease state machine with expiry, retries, dedupe, legacy NULL-lease jobs, multi-process claims. Intrinsically the most complex (intrinsic composite 15: hard), but the 18-clause prompt specifies every obligation including tie-break order (F6 = 0: discovery level 'specified'). Under rubric v1.0-draft the post-hoc F6 gate demoted it to medium; v1.1 keeps the two axes apart, so it is a hard, fully specified task that reached the ceiling in both arms.",
+      "discovery": "specified"
+    }
+  }
+}

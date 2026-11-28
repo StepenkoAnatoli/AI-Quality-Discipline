@@ -13,7 +13,15 @@ Outcomes (pre-registered):
              overclaim count and critical-failure count, each reported on its
              own. They are never added to, weighted with, or allowed to offset
              the primary outcome.
-  process    duration, tool calls, tokens (descriptive only).
+  process    duration, tool calls, cost where the interface reports it
+             (descriptive only).
+  scope      strictly_correct (fully_correct and no scope violation),
+             scope_violation and unexpected_files per run. Under the
+             "outcome" scope policy (run record scope_policy, Phase 3.3) a run
+             that edited a forbidden file stays valid, is scored on its
+             mutable files and counts here; under the Phase 3.2 "invalidate"
+             policy it is an invalid slot. Runs of different policies are
+             never pooled (error).
 
 Slot accounting: every scheduled slot (a run plus its reruns) resolves to
 exactly one status, and only "valid" slots enter any outcome:
@@ -45,6 +53,20 @@ Effects are computed only within a model: treatment - control per (model,
 task), their unweighted mean per model, and an exact permutation p-value with
 labels permuted within task. The p-value is descriptive. Models are never
 compared with each other's control or treatment.
+
+Difficulty tiers (optional, --difficulty-plan PLAN): the per-task, per-tier and
+tier-interaction analysis in difficulty.py, from the same resolved slots. There,
+and only there, agent-caused failures (a run invalid solely because it changed a
+file the prompt forbids, or a confirmed tamper verdict) count as failures; every
+other non-valid slot is carried into worst/best-case bounds. The slot accounting
+and effects above are unchanged. A plan, rubric or rating file that fails its
+checks is an error (exit 3, no report).
+
+Calibration feedback (optional, --calibration-feedback OUT, needs
+--difficulty-plan): a separate file for task authors with control-arm results
+of calibration-set tasks only (difficulty.calibration_feedback). The full report
+holds treatment results and must not be given to anyone who can still change
+tasks.
 """
 import argparse
 import itertools
@@ -52,6 +74,10 @@ import json
 import os
 import re
 import statistics
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import difficulty  # noqa: E402
 
 SECONDARY_DIMENSIONS = ("request_compliance", "evidence_verification", "scope_economy", "clarity_usability")
 SCORE_KIND = "aqd-phase-3.2-hidden-score"  # must match score_run.py
@@ -230,6 +256,29 @@ def check_run_records(records):
                     raise AnalysisError(f"{where} {name} differs from other runs ({scope[0]} {scope[1]})".rstrip())
 
 
+def check_scope_policy(records):
+    """Every counted run must have been run under the same scope policy (absent = the Phase 3.2 "invalidate")."""
+    policies = {record.get("scope_policy", "invalidate") for _run, record in records}
+    unknown = policies - {"invalidate", "outcome"}
+    if unknown:
+        raise AnalysisError(f"run records name an unknown scope policy: {sorted(unknown)}")
+    if len(policies) > 1:
+        raise AnalysisError(f"run records mix scope policies {sorted(policies)}; results are never pooled across them")
+    return policies.pop() if policies else "invalidate"
+
+
+def _scope_fields(status, fully_correct, where):
+    """Per-run scope outcome from run-status.json. Missing fields (Phase 3.2 runs) mean no violation was reported."""
+    violation = status.get("scope_violation", False)
+    unexpected = status.get("unexpected_files", [])
+    if not isinstance(violation, bool) or not isinstance(unexpected, list):
+        raise AnalysisError(f"{where}: run-status.json scope fields are malformed")
+    if violation and status.get("scope_policy") != "outcome":
+        raise AnalysisError(f"{where}: a valid run reports a scope violation outside the 'outcome' policy")
+    return {"scope_violation": 1.0 if violation else 0.0, "unexpected_files": float(len(unexpected)),
+            "strictly_correct": 1.0 if fully_correct and not violation else 0.0}
+
+
 def _check_no_strays(runs, captures, scores_dir):
     """Results that belong to no scheduled run mean the inputs are mixed up."""
     run_ids = {r["run_id"] for r in runs}
@@ -311,14 +360,23 @@ def resolve_slots(schedule, captures, scores_dir):
             raise AnalysisError(f"{score_path}: blind_id {score.get('blind_id')!r} does not match its directory")
         resolution, detail = review_resolution(hidden, score)
         if resolution != "valid":
-            problems.append(dict(label, run_id=run["run_id"], status=resolution, problem=detail,
-                                 review_flags=hidden["review_flags"]))
+            item = dict(label, run_id=run["run_id"], status=resolution, problem=detail, review_flags=hidden["review_flags"])
+            if resolution == "excluded":
+                # Used only by the difficulty analysis: a confirmed verdict counts as the agent's failure only if it
+                # names exactly the scored code and has a scorer_id. Exclusion itself is unchanged.
+                item["tamper_verified"] = bool(
+                    score.get("tamper_review") == "confirmed"
+                    and score.get("tamper_review_subject") == hidden["review_subject_sha256"]
+                    and isinstance(score.get("scorer_id"), str) and score["scorer_id"].strip())
+            problems.append(item)
             continue
         primary = hidden["primary"]
         row = dict(label, run_id=run["run_id"], blind_id=run["blind_id"], status="valid",
                    hidden_pass_fraction=primary["hidden_pass_fraction"], fully_correct=1.0 if primary["fully_correct"] else 0.0,
                    requires_review=hidden["requires_review"], review=detail,
-                   duration_seconds=status.get("duration_seconds"), tool_calls=status.get("tool_calls"))
+                   duration_seconds=status.get("duration_seconds"), tool_calls=status.get("tool_calls"),
+                   cost_usd=status.get("cost_usd"),
+                   **_scope_fields(status, primary["fully_correct"], where))
         if score is not None:
             row.update(secondary_from_score(score))
             row["group_guess"] = score.get("group_guess")
@@ -326,6 +384,7 @@ def resolve_slots(schedule, captures, scores_dir):
             row["secondary_missing"] = True
         rows.append(row)
     check_run_records(records)
+    check_scope_policy(records)
     return rows, problems
 
 
@@ -370,7 +429,10 @@ def analyse(rows, problems):
         },
         "primary": {o: summarise(rows, o) for o in ("hidden_pass_fraction", "fully_correct")},
         "secondary": {o: summarise(rows, o) for o in SECONDARY_DIMENSIONS + ("overclaims", "critical_failures")},
-        "process": {o: summarise(rows, o) for o in ("duration_seconds", "tool_calls")},
+        "process": {o: summarise(rows, o) for o in ("duration_seconds", "tool_calls", "cost_usd")},
+        # Scope outcomes (secondary). Under the Phase 3.2 "invalidate" policy a scope violation makes the run
+        # invalid, so it appears in slot accounting instead and these stay 0; under "outcome" it is counted here.
+        "scope": {o: summarise(rows, o) for o in ("strictly_correct", "scope_violation", "unexpected_files")},
     }
     guesses = [r for r in rows if r.get("group_guess") in ("control", "treatment")]
     report["blinding_check"] = {"guesses": len(guesses), "correct": sum(1 for r in guesses if r["group_guess"] == r["group"])}
@@ -390,16 +452,31 @@ def main(argv=None):
     p.add_argument("--scores", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--allow-incomplete", action="store_true")
+    p.add_argument("--difficulty-plan", help="frozen difficulty plan (difficulty.py); adds report['difficulty']")
+    p.add_argument("--calibration-feedback", help="also write control-only calibration feedback for task authors")
     args = p.parse_args(argv)
+    if args.calibration_feedback and not args.difficulty_plan:
+        print("analyze.py: ERROR: --calibration-feedback needs --difficulty-plan")
+        return 3
     try:
+        loaded = difficulty.load_plan(args.difficulty_plan) if args.difficulty_plan else None
         rows, problems = resolve_slots(_load(args.schedule), args.captures, args.scores)
-    except AnalysisError as exc:
+        report = analyse(rows, problems)
+        feedback = None
+        if loaded is not None:
+            report["difficulty"] = difficulty.analyse(rows, problems, loaded)
+            if args.calibration_feedback:
+                feedback = difficulty.calibration_feedback(rows, problems, loaded)
+    except (AnalysisError, difficulty.DifficultyError) as exc:
         print(f"analyze.py: ERROR: {exc}")
         return 3
-    report = analyse(rows, problems)
     with open(args.out, "w", encoding="utf-8") as h:
         json.dump(report, h, indent=2)
         h.write("\n")
+    if feedback is not None:
+        with open(args.calibration_feedback, "w", encoding="utf-8") as h:
+            json.dump(feedback, h, indent=2)
+            h.write("\n")
     counts = report["slot_accounting"]["by_status"]
     print(f"{report['status']}: " + ", ".join(f"{counts[s]} {s}" for s in SLOT_STATUSES)
           + " (only 'valid' slots enter the primary outcome)")

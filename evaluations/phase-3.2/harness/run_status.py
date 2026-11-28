@@ -12,7 +12,14 @@ Pre-registered validity rules (SPECIFICATION.md section 6.2). A run is VALID onl
   * export_checks says valid (pre-registered model+variant on every
     assistant message; treatment skill text in context; no skill text in
     control);
-  * the post-run manifest verification shows every immutable file intact;
+  * the post-run manifest verification shows every immutable file intact,
+    unless the run record's scope_policy is "outcome" (Phase 3.3): then an
+    edit to an immutable file keeps the run valid, it is scored on its
+    mutable files only (score_run.py always takes immutable files from the
+    pristine project), and scope_violation / scope_findings report it. A
+    record without scope_policy, or with "invalidate", keeps the Phase 3.2
+    rule. Unexpected new files never invalidate; they are listed in
+    unexpected_files;
   * the HOME configuration listing equals the expected listing;
   * run-record.json names the model (with its parts), interface version,
     prompt, workspace and global-config SHA-256, and the skill SHA-256 for
@@ -108,10 +115,17 @@ def build_status(capture, group, started, ended, api_exit, driver_exit, step):
         reasons.append("no export analysed")
     elif not export_checks.get("valid"):
         reasons.extend(export_checks.get("invalid_reasons") or ["export checks failed"])
+    scope_policy = (_load(os.path.join(capture, "run-record.json")) or {}).get("scope_policy", "invalidate")
+    findings = (post or {}).get("findings") or {}
+    scope_findings = {k: sorted(findings.get(k) or []) for k in ("immutable_modified", "immutable_missing")}
+    if scope_policy not in ("invalidate", "outcome"):
+        reasons.append(f"run record names an unknown scope policy {scope_policy!r}")
     if post is None:
         reasons.append("no post-run manifest verification")
-    elif not post.get("integrity_ok"):
+    elif not post.get("integrity_ok") and scope_policy != "outcome":
         reasons.append("immutable files changed or missing")
+    elif not post.get("integrity_ok") and not any(scope_findings.values()):
+        reasons.append("post-run manifest verification failed without naming the changed files")
     if listing is None:
         reasons.append("no HOME configuration listing")
     elif listing != expected_home_listing(group):
@@ -134,6 +148,11 @@ def build_status(capture, group, started, ended, api_exit, driver_exit, step):
         "tool_calls": sum(tools.values()),
         "tokens": (export_checks or {}).get("tokens"),
         "workspace_findings": {k: v for k, v in ((post or {}).get("findings") or {}).items() if v},
+        "scope_policy": scope_policy,
+        "scope_violation": post is not None and not post.get("integrity_ok"),
+        "scope_findings": scope_findings,
+        "unexpected_files": sorted(findings.get("unexpected") or []),
+        "cost_usd": (export_checks or {}).get("cost_usd"),
         "session_id": driver.get("session_id"),
         "api_export": driver.get("api_export"),
     }

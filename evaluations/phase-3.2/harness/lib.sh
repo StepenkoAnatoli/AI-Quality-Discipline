@@ -53,6 +53,14 @@ AQD_RUN_TIMEOUT_SECONDS=2700
 #                   (requires explicit user approval: it changes the prompt text)
 AQD_ACTIVATION_MODE="${AQD_ACTIVATION_MODE:-api-attachment}"
 
+# What an agent edit to an immutable (forbidden) file does to the run, fixed for
+# every run of a schedule and written into each run record:
+#   invalidate  the run is INVALID (Phase 3.2 rule; the default, so historical
+#               runs and existing workflows are unchanged)
+#   outcome     the run stays valid, is scored on its mutable files only, and
+#               run-status.json reports scope_violation (Phase 3.3)
+AQD_SCOPE_POLICY="${AQD_SCOPE_POLICY:-invalidate}"
+
 # Files and directories whose presence above a project would inject
 # configuration, instructions or skills into OpenCode.
 AQD_FORBIDDEN_ANCESTOR_NAMES=(AGENTS.md CLAUDE.md opencode.json opencode.jsonc .opencode .claude .agents)
