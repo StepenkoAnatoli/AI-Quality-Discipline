@@ -1,0 +1,77 @@
+--- a/.github/workflows/phase3-ab-run.yml	2026-11-28 19:02:26.309558200 +0000
++++ b/.github/workflows/phase3-ab-run.yml	2026-11-28 19:02:39.914443522 +0000
+@@ -20,8 +20,11 @@
+ # What leaves the runner:
+ #   * public: this file, the job logs and the job summary. They hold fixed status
+ #     lines only: no harness output, transcript, code, diff, score or test name.
+-#   * one artifact, encrypted on the runner (OpenPGP symmetric, AES-256), 1-day
+-#     retention. The repository is public: ANYONE WITH READ ACCESS (any signed-in
++#   * one artifact, encrypted on the runner (OpenPGP symmetric, AES-256), 90-day
++#     retention (the maximum for a public repository; it was 1 day, which made
++#     every published result unverifiable a day later). The bundle includes a
++#     public results record (counts and hashes only, results_record.py) whose
++#     SHA-256 is printed in the log, to be committed after blind scoring. The repository is public: ANYONE WITH READ ACCESS (any signed-in
+ #     GitHub user) CAN DOWNLOAD THE ENCRYPTED FILE; only a holder of the
+ #     passphrase can decrypt it.
+ # Everything else (operator store, hidden tests, OpenCode data) is discarded
+@@ -298,6 +301,7 @@
+           SEALED_FILES = {
+               "schedule.json", "preflight.json", "preflight-catalog-anthropic.json", "preflight-serve-anthropic.log",
+               "opencode-install.json", "activation-mode", "sandbox-tests.log", "pristine-extra.sha256", "STOP",
++              "scope-policy", "public-results.json",
+           }
+ 
+           WINDOW = 16 if len(KEY) >= 16 else len(KEY)
+@@ -715,6 +719,25 @@
+           fi
+           note "hidden tests removed from the runner"
+ 
++      - name: Public results record (counts and hashes only; inside the encrypted bundle)
++        id: record
++        if: always() && steps.runs.outcome != 'skipped'
++        run: |
++          [[ -f "$RUNNER_TEMP/aqd/env.sh" ]] || exit 0
++          source "$RUNNER_TEMP/aqd/env.sh"
++          if [[ ! -f "$H/results_record.py" ]]; then
++              note "pinned harness has no results_record.py; no public results record"
++              exit 0
++          fi
++          # Kept inside the encrypted bundle, not uploaded in clear: it pairs conditions with scores, and blind
++          # secondary scoring must not see that. Its SHA-256 in this public log makes the later commit checkable.
++          python3 "$H/results_record.py" build --schedule "$SEALED/schedule.json" --captures "$CAPTURES" \
++              --out "$SEALED/public-results.json" --workflow-run-id "$GITHUB_RUN_ID" --harness-commit "$AQD_TEST_SHA" \
++              >"$LOGS/results-record.log" 2>&1 || die "results_record.py failed; see the encrypted bundle"
++          sha="$(sha256sum "$SEALED/public-results.json" | cut -d' ' -f1)"
++          mark public_results_sha256 "$sha"
++          note "public results record built (inside the encrypted bundle); SHA-256 $sha"
++
+       - name: Package results (credential scan, then AES-256 encryption on the runner)
+         id: pack
+         if: always()
+@@ -759,7 +782,7 @@
+           echo "encrypted=true" >>"$GITHUB_OUTPUT"
+           note "results encrypted on the runner (AES-256); encrypted file SHA-256 $sha"
+ 
+-      - name: Upload the encrypted results only (1-day retention)
++      - name: Upload the encrypted results only (90-day retention)
+         id: upload
+         if: always() && steps.pack.outputs.encrypted == 'true'
+         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+@@ -767,7 +790,7 @@
+           name: aqd-ab-results-encrypted
+           path: ${{ runner.temp }}/aqd/upload/aqd-ab-results.tar.gz.gpg
+           if-no-files-found: error
+-          retention-days: 1
++          retention-days: 90
+ 
+       - name: Public summary (status only; no scores)
+         if: always()
+@@ -797,7 +820,7 @@
+               echo "| Hidden scoring (step) | ${S_SCORE:-skipped} |"
+               echo "| Both evaluations valid | ${SCORED_VALID:-false} |"
+               echo "| Results encrypted on the runner | ${S_PACK:-not run} |"
+-              echo "| Encrypted artifact uploaded (1 day) | ${S_UPLOAD:-skipped} |"
++              echo "| Encrypted artifact uploaded (90 days) | ${S_UPLOAD:-skipped} |"
+               echo "| Encrypted file SHA-256 | ${ENC_SHA:-none} |"
+               echo
+               echo "Scores, transcripts, diffs and logs are only inside the encrypted artifact."

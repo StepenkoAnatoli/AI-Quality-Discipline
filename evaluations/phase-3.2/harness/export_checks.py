@@ -54,7 +54,7 @@ def analyse(export, group, model_ref):
     messages = export["messages"]
     report = {"group": group, "model_ref": model_ref, "message_count": len(messages), "assistant_messages": 0,
               "model_mismatches": [], "observed_models": [], "errors": [], "tool_counts": {},
-              "tokens": {"input": 0, "output": 0, "reasoning": 0},
+              "tokens": {"input": 0, "output": 0, "reasoning": 0}, "cost_usd": None, "cost_messages": 0,
               "skill_messages": [], "user_skill_attachments": [], "skill_tool_calls": []}
     expected = {"providerID": provider_id, "id": model_id}
     if variant is not None:
@@ -74,6 +74,12 @@ def analyse(export, group, model_ref):
                 report["model_mismatches"].append({"index": index, "model": actual})
             if msg.get("error") or msg.get("finish") == "error":
                 report["errors"].append({"index": index, "error": msg.get("error"), "finish": msg.get("finish")})
+            cost = msg.get("cost")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+                # Provider-reported cost per assistant message, when the interface exports one; None when no
+                # message reports it (never a fabricated zero).
+                report["cost_usd"] = (report["cost_usd"] or 0) + cost
+                report["cost_messages"] += 1
             for key in report["tokens"]:
                 value = (msg.get("tokens") or {}).get(key)
                 if isinstance(value, (int, float)):

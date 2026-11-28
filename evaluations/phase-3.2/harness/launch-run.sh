@@ -74,6 +74,13 @@ if [[ -f "$AQD_SEALED/activation-mode" ]]; then
 else
     printf '%s' "$AQD_ACTIVATION_MODE" >"$AQD_SEALED/activation-mode"
 fi
+[[ "$AQD_SCOPE_POLICY" =~ ^(invalidate|outcome)$ ]] || { log "unknown scope policy"; exit 2; }
+if [[ -f "$AQD_SEALED/scope-policy" ]]; then
+    [[ "$(cat "$AQD_SEALED/scope-policy")" == "$AQD_SCOPE_POLICY" ]] \
+        || { log "scope policy differs from the one used by earlier runs"; exit 2; }
+else
+    printf '%s' "$AQD_SCOPE_POLICY" >"$AQD_SEALED/scope-policy"
+fi
 
 AGENT_USER="${AQD_USER_FOR_ENV[$ENV_LABEL]}"
 OTHER_ENV="env-a"; [[ "$ENV_LABEL" == "env-a" ]] && OTHER_ENV="env-b"
@@ -174,14 +181,16 @@ make_agent_env "$RUN_ROOT" "$PASSWORD"
 add_provider_credential "$MODEL_PROVIDER"
 "$PY" - "$CAP/run-record.json" "$RUN_ID" "$TASK" "$GROUP" "$MODEL_REF" "$AQD_ACTIVATION_MODE" "$MESSAGE_FILE" "$MANIFEST" \
     "$AQD_PRISTINE/skill/$AQD_SKILL_ID/SKILL.md" "$(opencode_version)" \
-    "$AQD_PRISTINE/config/global-opencode.jsonc" "$AQD_SEALED/opencode-install.json" "$AQD_AGENT" "$AQD_RUN_TIMEOUT_SECONDS" <<'PY'
+    "$AQD_PRISTINE/config/global-opencode.jsonc" "$AQD_SEALED/opencode-install.json" "$AQD_AGENT" "$AQD_RUN_TIMEOUT_SECONDS" \
+    "$AQD_SCOPE_POLICY" <<'PY'
 import datetime, hashlib, json, os, sys
-out, run_id, task, group, model, mode, prompt, manifest, skill, version, config, install, agent, timeout = sys.argv[1:15]
+out, run_id, task, group, model, mode, prompt, manifest, skill, version, config, install, agent, timeout, scope = sys.argv[1:16]
 sha = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
 provider, model_id, variant = model.split("/", 1)[0], model.split("/", 1)[1].split("#")[0], (model.split("#", 1)[1] if "#" in model else None)
 json.dump({"schema_version": 2, "run_id": run_id, "task": task, "group": group, "model": model,
            "model_provider": provider, "model_id": model_id, "model_variant": variant,
            "interface": f"opencode {version}", "activation_mode": mode, "agent": agent, "timeout_seconds": int(timeout),
+           "scope_policy": scope,
            "skill": {"installed": group == "treatment", "sha256": sha(skill) if group == "treatment" else None},
            "prompt_sha256": sha(prompt), "workspace_sha256": json.load(open(manifest, encoding="utf-8"))["workspace_sha256"],
            "global_config_sha256": sha(config),

@@ -143,12 +143,20 @@ Construction rules for every task:
 
 Reused unchanged from Phase 3.2 (SPECIFICATION.md §2, §4, §6; `.github/workflows/phase3-ab-run.yml` on main): per-condition OS users, fresh HOME per run, skill only in treatment via API attachment with activation verified from the export, byte-identical prompts and workspaces, the same pinned model, variant, OpenCode version, tools and permissions, network limited to the provider API, a 45-minute limit, a sealed random order per block, hidden tests decoded only after both runs, Docker-sandboxed fail-closed scoring, at most one pre-registered infrastructure rerun per slot, and no rerun for wrong code.
 
-Required harness changes. These are not implemented here, because they change the semantics of run validity, which must stay fixed for the historical Phase 3.2 records. Each needs its own version and tests:
+Required harness changes. They must not change the semantics of run validity for the historical Phase 3.2 records, so each is versioned and tested. Items 1, 2 and the harness part of 4 are implemented (2026-11-28); 3 is not:
 
-1. **Scope violations become an outcome, not an exclusion.** Today an edit to any immutable file makes the run INVALID (`run_status.py`), so a scope violation leaves the comparison. That is backwards for a skill whose rules include scope control. In 3.3: a valid run with `scope_violation: true` is scored on its mutable files, and `strictly_correct = fully_correct ∧ ¬scope_violation` is reported next to `fully_correct`. (Since the 2026-11-22 revision, the difficulty analysis already counts such a run as a failure of its arm, intention to treat; see below. What remains for the harness is scoring the run's mutable files, so `fully_correct` and `strictly_correct` can be reported separately.)
-2. **Unexpected new files** (recorded today in `workspace_findings.unexpected` but never reported) become a secondary outcome.
+1. **Scope violations become an outcome, not an exclusion.** *Implemented 2026-11-28 as the `outcome` scope policy:*
+   - `AQD_SCOPE_POLICY=outcome` is sealed per schedule and written into every run record.
+   - `run_status.py` keeps such a run valid and reports `scope_violation`, `scope_findings` and `unexpected_files`.
+   - `score_run.py` already scores only the mutable files, against pristine immutable files.
+   - `analyze.py` reports `strictly_correct`, `scope_violation` and `unexpected_files`, and refuses to pool runs from different policies.
+   - `strictly_correct` is accepted as a plan outcome. Pre-register it as the primary outcome for `outcome`-policy runs: it keeps the intention-to-treat meaning.
+   - A record without the field keeps the Phase 3.2 `invalidate` rule, which is also the default.
+
+   Original proposal: Today an edit to any immutable file makes the run INVALID (`run_status.py`), so a scope violation leaves the comparison. That is backwards for a skill whose rules include scope control. In 3.3: a valid run with `scope_violation: true` is scored on its mutable files, and `strictly_correct = fully_correct ∧ ¬scope_violation` is reported next to `fully_correct`. (Since the 2026-11-22 revision, the difficulty analysis already counts such a run as a failure of its arm, intention to treat; see below. What remains for the harness is scoring the run's mutable files, so `fully_correct` and `strictly_correct` can be reported separately.)
+2. **Unexpected new files** (recorded today in `workspace_findings.unexpected` but never reported) become a secondary outcome. *Implemented: `run-status.json` `unexpected_files`; `analyze.py` scope section. They never invalidate a run.*
 3. **Control-only calibration runs.** Stage 1 (§6) needs 4 control-only hard-task runs. `schedule.validate` accepts only blocks of one control and one treatment run, so these runs need a separate, sealed calibration schedule kind, with its own tests. Until that exists, Stage 1 cannot be scheduled as specified.
-4. **Results retention.** The Phase 3.2 encrypted artifacts have 1-day retention, so the evidence behind AB-RESULTS.md expires within a day of each run. In 3.3 the operator archives each encrypted bundle and records its SHA-256 next to the results, and a machine-readable per-run results file (scores, costs, validity, no code or transcripts) is committed with the report.
+4. **Results retention.** *Harness part implemented 2026-11-28; workflow part prepared as a patch for `main`, not applied. See [RESULTS-RETENTION.md](RESULTS-RETENTION.md).* The Phase 3.2 encrypted artifacts have 1-day retention, so the evidence behind AB-RESULTS.md expires within a day of each run. In 3.3 the operator archives each encrypted bundle and records its SHA-256 next to the results, and a machine-readable per-run results file (scores, costs, validity, no code or transcripts) is committed with the report.
 
 Already handled in analysis (this change):
 

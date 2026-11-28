@@ -76,7 +76,9 @@ RUBRIC_KIND = "aqd-difficulty-rubric"
 RATINGS_KIND = "aqd-difficulty-ratings"
 SETS = ("historical", "calibration", "confirmatory")
 PROVENANCE = ("prospective", "post_hoc")
-OUTCOMES = ("fully_correct", "hidden_pass_fraction")
+# strictly_correct (fully_correct and no scope violation, from analyze.py) is the outcome to pre-register for runs
+# under the "outcome" scope policy: it keeps the meaning that ITT gives a scope violation under "invalidate".
+OUTCOMES = ("fully_correct", "hidden_pass_fraction", "strictly_correct")
 DECISIONS = ("benefit", "harm", "no_meaningful_effect", "inconclusive")
 ARMS = ("control", "treatment")
 AXES = ("intrinsic", "discovery")

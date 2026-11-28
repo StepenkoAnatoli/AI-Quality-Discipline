@@ -13,7 +13,15 @@ Outcomes (pre-registered):
              overclaim count and critical-failure count, each reported on its
              own. They are never added to, weighted with, or allowed to offset
              the primary outcome.
-  process    duration, tool calls, tokens (descriptive only).
+  process    duration, tool calls, cost where the interface reports it
+             (descriptive only).
+  scope      strictly_correct (fully_correct and no scope violation),
+             scope_violation and unexpected_files per run. Under the
+             "outcome" scope policy (run record scope_policy, Phase 3.3) a run
+             that edited a forbidden file stays valid, is scored on its
+             mutable files and counts here; under the Phase 3.2 "invalidate"
+             policy it is an invalid slot. Runs of different policies are
+             never pooled (error).
 
 Slot accounting: every scheduled slot (a run plus its reruns) resolves to
 exactly one status, and only "valid" slots enter any outcome:
@@ -248,6 +256,29 @@ def check_run_records(records):
                     raise AnalysisError(f"{where} {name} differs from other runs ({scope[0]} {scope[1]})".rstrip())
 
 
+def check_scope_policy(records):
+    """Every counted run must have been run under the same scope policy (absent = the Phase 3.2 "invalidate")."""
+    policies = {record.get("scope_policy", "invalidate") for _run, record in records}
+    unknown = policies - {"invalidate", "outcome"}
+    if unknown:
+        raise AnalysisError(f"run records name an unknown scope policy: {sorted(unknown)}")
+    if len(policies) > 1:
+        raise AnalysisError(f"run records mix scope policies {sorted(policies)}; results are never pooled across them")
+    return policies.pop() if policies else "invalidate"
+
+
+def _scope_fields(status, fully_correct, where):
+    """Per-run scope outcome from run-status.json. Missing fields (Phase 3.2 runs) mean no violation was reported."""
+    violation = status.get("scope_violation", False)
+    unexpected = status.get("unexpected_files", [])
+    if not isinstance(violation, bool) or not isinstance(unexpected, list):
+        raise AnalysisError(f"{where}: run-status.json scope fields are malformed")
+    if violation and status.get("scope_policy") != "outcome":
+        raise AnalysisError(f"{where}: a valid run reports a scope violation outside the 'outcome' policy")
+    return {"scope_violation": 1.0 if violation else 0.0, "unexpected_files": float(len(unexpected)),
+            "strictly_correct": 1.0 if fully_correct and not violation else 0.0}
+
+
 def _check_no_strays(runs, captures, scores_dir):
     """Results that belong to no scheduled run mean the inputs are mixed up."""
     run_ids = {r["run_id"] for r in runs}
@@ -343,7 +374,9 @@ def resolve_slots(schedule, captures, scores_dir):
         row = dict(label, run_id=run["run_id"], blind_id=run["blind_id"], status="valid",
                    hidden_pass_fraction=primary["hidden_pass_fraction"], fully_correct=1.0 if primary["fully_correct"] else 0.0,
                    requires_review=hidden["requires_review"], review=detail,
-                   duration_seconds=status.get("duration_seconds"), tool_calls=status.get("tool_calls"))
+                   duration_seconds=status.get("duration_seconds"), tool_calls=status.get("tool_calls"),
+                   cost_usd=status.get("cost_usd"),
+                   **_scope_fields(status, primary["fully_correct"], where))
         if score is not None:
             row.update(secondary_from_score(score))
             row["group_guess"] = score.get("group_guess")
@@ -351,6 +384,7 @@ def resolve_slots(schedule, captures, scores_dir):
             row["secondary_missing"] = True
         rows.append(row)
     check_run_records(records)
+    check_scope_policy(records)
     return rows, problems
 
 
@@ -395,7 +429,10 @@ def analyse(rows, problems):
         },
         "primary": {o: summarise(rows, o) for o in ("hidden_pass_fraction", "fully_correct")},
         "secondary": {o: summarise(rows, o) for o in SECONDARY_DIMENSIONS + ("overclaims", "critical_failures")},
-        "process": {o: summarise(rows, o) for o in ("duration_seconds", "tool_calls")},
+        "process": {o: summarise(rows, o) for o in ("duration_seconds", "tool_calls", "cost_usd")},
+        # Scope outcomes (secondary). Under the Phase 3.2 "invalidate" policy a scope violation makes the run
+        # invalid, so it appears in slot accounting instead and these stay 0; under "outcome" it is counted here.
+        "scope": {o: summarise(rows, o) for o in ("strictly_correct", "scope_violation", "unexpected_files")},
     }
     guesses = [r for r in rows if r.get("group_guess") in ("control", "treatment")]
     report["blinding_check"] = {"guesses": len(guesses), "correct": sum(1 for r in guesses if r["group_guess"] == r["group"])}
