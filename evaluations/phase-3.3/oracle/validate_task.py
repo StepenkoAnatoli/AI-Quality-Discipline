@@ -2,6 +2,8 @@
 """Mechanical oracle validation of one Phase 3.3 task package (STAGE0-SOLO.md §2.2). Offline, no model, no network.
 
     python3 -I validate_task.py --package DIR --out report.json [--max-mutations N] [--timeout S]
+        (by default every mechanical mutation site runs; N caps them, and the report then says `sampled: true`)
+        [--image NAME@sha256:DIGEST]   (score in the scorer's Docker sandbox instead of the local runner)
 
 Every candidate solution is scored with the harness's own fail-closed scorer (`phase-3.2/harness/score_run.py`), so the
 checks validated here are exactly the checks Stage 1 scores. Candidate code here is written by the protocol's own
@@ -47,7 +49,8 @@ but fails a baseline check is counted as killed by the baseline (it cannot be fu
 
 Limits (review 2026-11-26): VALID means mechanical acceptance by these rules. It does not establish that each
 assertion follows from its quoted source (semantic review), that the task is solvable from public material within the
-time budget, or that it behaves the same in the pinned scoring container (this tool uses the local runner).
+time budget, or that it behaves the same in the pinned scoring container unless --image is given (then every candidate is scored
+in the scorer's Docker sandbox, as for real scoring).
 
 Exit 0 = valid, 1 = invalid, 2 = usage error (unreadable package).
 """
@@ -153,9 +156,11 @@ class Package:
 
 
 class Validator:
-    def __init__(self, pkg, timeout):
+    def __init__(self, pkg, timeout, image=None):
         self.pkg = pkg
-        self.runner = score_run.LocalRunner(timeout)
+        # The local runner by default; with an image pinned by digest, the scorer's own Docker sandbox (no network,
+        # read-only code, non-root), as used for real scoring (review 2026-11-26, finding 4).
+        self.runner = score_run.DockerRunner(timeout, image) if image else score_run.LocalRunner(timeout)
         self.scratch = tempfile.mkdtemp(prefix="aqd-validate-")
         self.inventory = score_run.build_inventory(pkg.root, pkg.task, pkg.pristine, pkg.hidden, timeout)
         self.check_ids = sorted(score_run.CHECK_ID.search(i).group(1) for i in self.inventory["hidden_ids"])
@@ -303,8 +308,8 @@ def _apply(kind, target):
     return lambda: body.__setitem__(i, old)
 
 
-def mechanical_mutants(pkg, max_mutations):
-    """Seeded mutants of the reference: [(label, {rel: source})]. Deterministic for a package."""
+def mechanical_mutants(pkg, max_mutations=None):
+    """Seeded mutants of the reference: [(label, {rel: source})]. Deterministic for a package. None: every site."""
     ref = os.path.join(pkg.root, "oracle", "reference")
     candidates = []
     for rel in pkg.mutable:
@@ -319,7 +324,7 @@ def mechanical_mutants(pkg, max_mutations):
     rng = random.Random(pkg.seed)
     rng.shuffle(candidates)
     out = []
-    for rel, source, kind, index in candidates[:max_mutations]:
+    for rel, source, kind, index in (candidates if max_mutations is None else candidates[:max_mutations]):
         tree = ast.parse(source)
         site_kind, target = _sites(tree)[index]
         _apply(site_kind, target)
@@ -329,9 +334,23 @@ def mechanical_mutants(pkg, max_mutations):
 
 # ------------------------------------------------------------------ the validation
 
-def validate(package_root, max_mutations=25, timeout=60):
+def mutation_sites(pkg):
+    """How many mechanical mutation sites the reference has (the size of a complete run)."""
+    ref = os.path.join(pkg.root, "oracle", "reference")
+    total = 0
+    for rel in pkg.mutable:
+        path = os.path.join(ref, *rel.split("/"))
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as h:
+                total += len(_sites(ast.parse(h.read())))
+    return total
+
+
+def validate(package_root, max_mutations=None, timeout=60, image=None):
+    if image is not None and (not isinstance(image, str) or "@sha256:" not in image):
+        raise UsageError("--image must be pinned by digest (name@sha256:...)")
     pkg = Package(package_root)
-    v = Validator(pkg, timeout)
+    v = Validator(pkg, timeout, image)
     reasons, report = [], {"task": pkg.task, "checks": v.check_ids}
     try:
         ref_dir = os.path.join(pkg.root, "oracle", "reference")
@@ -424,6 +443,10 @@ def validate(package_root, max_mutations=25, timeout=60):
             else:
                 mech["survivors"].append(label)
         mech["hidden_kill_rate"] = round(mech["killed_by_hidden"] / mech["scored"], 4) if mech["scored"] else None
+        # A capped run is a sample: say so, so that a sample is never read as the whole (H4 and H6 were sampled at
+        # 60 of 105 and 40 of 77 sites before this was recorded).
+        mech["sites"] = mutation_sites(pkg)
+        mech["sampled"] = mech["generated"] < mech["sites"]
         report["mechanical_mutation"] = mech
     finally:
         v.close()
@@ -436,11 +459,12 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--package", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--max-mutations", type=int, default=25)
+    p.add_argument("--max-mutations", type=int, default=None, help="cap on mechanical mutants (default: every site)")
     p.add_argument("--timeout", type=int, default=60)
+    p.add_argument("--image", help="score in the scorer's Docker sandbox with this image, pinned by digest")
     args = p.parse_args(argv)
     try:
-        report = validate(args.package, args.max_mutations, args.timeout)
+        report = validate(args.package, args.max_mutations, args.timeout, args.image)
     except (UsageError, score_run.Invalid) as exc:
         print(f"[validate] refused: {exc}", file=sys.stderr)
         return 2
@@ -450,7 +474,8 @@ def main(argv=None):
     mech = report["mechanical_mutation"]
     verdict = "VALID" if report["valid"] else "INVALID"
     print(f"[validate] {report['task']}: {verdict}; reasons: {len(report['reasons'])}; "
-          f"mechanical mutants killed {mech['killed_by_hidden']} of {mech['scored']}")
+          f"mechanical mutants killed {mech['killed_by_hidden']} of {mech['scored']}"
+          + (f" (a SAMPLE of {mech['generated']} of {mech['sites']} sites)" if mech.get("sampled") else ""))
     for reason in report["reasons"]:
         print(f"[validate]   {reason}")
     return 0 if report["valid"] else 1

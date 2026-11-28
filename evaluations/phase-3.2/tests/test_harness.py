@@ -885,6 +885,16 @@ class AnalyzeTests(TempDirTest):
                 self.assertEqual(report["slot_accounting"]["by_status"]["excluded"], 1)
                 self.assertEqual(report["slot_accounting"]["by_model_and_condition"][runs[2]["model"]][runs[2]["group"]]["excluded"], 1)
 
+    def test_memory_limit_and_timeout_are_counted_failures(self):
+        run = self.sched["runs"][0]
+        base = self.hidden_score(run["task"], fraction=0.5)
+        hidden = dict(base, hidden_checks=dict(base["hidden_checks"], H03="memory_limit", H04="timeout"))
+        self.put(run, hidden=hidden)
+        rows, problems = self.resolve()
+        self.assertNotIn(run["run_id"], [p.get("run_id") for p in problems])
+        row = next(r for r in rows if r.get("run_id") == run["run_id"])
+        self.assertEqual((row["status"], row["hidden_pass_fraction"], row["fully_correct"]), ("valid", 0.5, 0.0))
+
     # --- integrity of the score files (fail closed, never "missing data")
 
     def test_inconsistent_hidden_scores_are_errors(self):

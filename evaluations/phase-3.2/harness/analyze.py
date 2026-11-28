@@ -74,7 +74,7 @@ import difficulty  # noqa: E402
 SECONDARY_DIMENSIONS = ("request_compliance", "evidence_verification", "scope_economy", "clarity_usability")
 SCORE_KIND = "aqd-phase-3.2-hidden-score"  # must match score_run.py
 SCORE_SCHEMA_VERSION = 3
-CHECK_OUTCOMES = ("pass", "fail", "error", "timeout")
+CHECK_OUTCOMES = ("pass", "fail", "error", "timeout", "memory_limit")
 REVIEW_VERDICTS = ("none", "suspected", "confirmed")
 SLOT_STATUSES = ("valid", "invalid", "excluded", "unresolved", "missing")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")

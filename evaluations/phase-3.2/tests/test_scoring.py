@@ -9,9 +9,11 @@ break the evaluator. Standard library only; no network, no Docker.
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 PHASE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -410,11 +412,142 @@ class CliTests(ScoringTest):
         cmd = score_run.DockerRunner(10, "python@sha256:" + "0" * 64).command("/t", "/o", ["run", "{out}/r.json", "x"], "c1")
         joined = " ".join(cmd)
         for flag in ("--network none", "--read-only", "--cap-drop ALL", "no-new-privileges", "--user 65534:65534",
-                     "/t:/work:ro", "/o:/out:rw"):
+                     "/t:/work:ro", "/o:/out:rw", "--memory 1g", "--memory-swap 1g"):
             self.assertIn(flag, joined)
         self.assertNotIn("--env-file", joined)
+        # Not --rm: the container's OOMKilled state is read after it exits, then DockerRunner.run removes it.
+        self.assertNotIn("--rm", cmd)
         self.assertEqual(cmd[-3:], ["run", "/out/r.json", "x"])
 
+
+FAKE_DOCKER = r"""#!/usr/bin/env python3
+# Stands in for the docker CLI in FakeDockerTests. It runs the real run_checks.py on the host for listings, and for
+# the test itself in the modes that need a real result; FAKE_DOCKER_MODE says what the "container" does.
+import os, subprocess, sys, time
+mode, log = os.environ["FAKE_DOCKER_MODE"], os.environ["FAKE_DOCKER_LOG"]
+args = sys.argv[1:]
+with open(log, "a") as h:
+    h.write(" ".join(args[:1] + [a for a in args if a.startswith(("aqd-score-", "aqd-score-runner="))][:2]) + "\n")
+cmd = args[0]
+if cmd == "run":
+    mounts = dict(reversed(v.rsplit(":", 1)[0].split(":", 1)) for v in args if v.endswith((":ro", ":rw")))
+    tree, out = mounts["/work"], mounts["/out"]
+    script = args[args.index("run_checks.py") + 1:]
+    local = [sys.executable, "run_checks.py"] + [a.replace("/out", out, 1) if a.startswith("/out") else a for a in script]
+    if script[0] == "list":
+        sys.exit(subprocess.run(local, cwd=tree, stdin=sys.stdin).returncode)
+    if mode == "hang":
+        time.sleep(30)
+    if mode in ("result_then_oom_kill", "child_oom_exit0"):
+        code = subprocess.run(local, cwd=tree, stdin=sys.stdin).returncode
+        sys.exit(137 if mode == "result_then_oom_kill" else code)
+    sys.exit(0 if mode == "clean_exit_no_result_oom" else 137)
+if cmd == "inspect":
+    oom = mode in ("oom_no_result", "result_then_oom_kill", "child_oom_exit0", "clean_exit_no_result_oom")
+    if mode == "oom_flag_late":
+        counter = log + "." + args[-1]
+        n = int(open(counter).read()) if os.path.exists(counter) else 0
+        open(counter, "w").write(str(n + 1))
+        oom = n >= 2
+    print("true" if oom else "false")
+sys.exit(0)
+"""
+
+
+class FakeDockerTests(ScoringTest):
+    """DockerRunner's memory-kill handling, without Docker: a fake docker CLI plays the container."""
+
+    def install_fake(self, mode):
+        bindir = os.path.join(self.tmp, "fakebin")
+        os.makedirs(bindir, exist_ok=True)
+        fake = os.path.join(bindir, "docker")
+        with open(fake, "w", encoding="utf-8") as handle:
+            handle.write(FAKE_DOCKER)
+        os.chmod(fake, 0o755)
+        self.log = os.path.join(self.tmp, "docker.log")
+        return fake, dict(FAKE_DOCKER_MODE=mode, FAKE_DOCKER_LOG=self.log)
+
+    def docker_score(self, mode, timeout=30):
+        fake, env = self.install_fake(mode)
+        os.environ.update(env)
+        self.runner = score_run.DockerRunner(timeout, "python@sha256:" + "0" * 64, docker=fake)
+        self.runner.OOM_SETTLE_SECONDS = 0.01
+        try:
+            return score_run.score(self.phase, "SYN", self.pristine, self.agent(), self.hidden, self.inventory, self.runner)
+        finally:
+            for key in env:
+                os.environ.pop(key, None)
+
+    def calls(self, kind):
+        with open(self.log, encoding="utf-8") as handle:
+            return [line.split() for line in handle if line.split()[0] == kind]
+
+    def assertEveryContainerRemoved(self):
+        started = [c[1] for c in self.calls("run")]
+        removed = [c[1] for c in self.calls("rm")]
+        self.assertTrue(started)
+        self.assertEqual(sorted(started), sorted(removed))
+
+    def test_memory_kill_without_a_result_is_a_valid_failure(self):
+        report = self.docker_score("oom_no_result")
+        self.assertEqual(report["evaluation_status"], "valid", report["invalid_reasons"])
+        self.assertEqual(report["hidden_checks"], {"H01": "memory_limit", "H02": "memory_limit"})
+        self.assertEqual(set(report["baseline_outcomes"].values()), {"memory_limit"})
+        self.assertEqual(report["primary"], {"hidden_pass_fraction": 0.0, "fully_correct": False})
+        self.assertIn("memory limit", report["details"]["hidden"][self.inventory["hidden_ids"][0]]["detail"])
+        self.assertEveryContainerRemoved()
+
+    def test_memory_kill_after_the_result_was_written_is_still_a_memory_limit_failure(self):
+        # e.g. a thread that keeps allocating until the interpreter is killed at shutdown
+        report = self.docker_score("result_then_oom_kill")
+        self.assertEqual(report["evaluation_status"], "valid", report["invalid_reasons"])
+        self.assertEqual(report["hidden_checks"], {"H01": "memory_limit", "H02": "memory_limit"})
+
+    def test_oom_flag_recorded_late_is_still_read(self):
+        report = self.docker_score("oom_flag_late")
+        self.assertEqual(report["evaluation_status"], "valid", report["invalid_reasons"])
+        self.assertEqual(report["hidden_checks"], {"H01": "memory_limit", "H02": "memory_limit"})
+
+    def test_kill_that_is_not_a_memory_kill_stays_invalid(self):
+        self.assertInvalid(self.docker_score("crash_no_result"), "no result file")
+
+    def test_clean_exit_without_a_result_stays_invalid_even_with_a_memory_killed_child(self):
+        self.assertInvalid(self.docker_score("clean_exit_no_result_oom"), "no result file")
+
+    def test_clean_exit_with_a_result_after_a_child_was_memory_killed_is_judged_as_usual(self):
+        report = self.docker_score("child_oom_exit0")
+        self.assertEqual(report["evaluation_status"], "valid", report["invalid_reasons"])
+        self.assertEqual(report["hidden_checks"], {"H01": "pass", "H02": "pass"})
+
+    def test_timeout_still_a_timeout_and_its_container_removed(self):
+        report = self.docker_score("hang", timeout=2)
+        self.assertEqual(report["evaluation_status"], "valid", report["invalid_reasons"])
+        self.assertEqual(report["hidden_checks"], {"H01": "timeout", "H02": "timeout"})
+        self.assertEveryContainerRemoved()
+        self.assertTrue(self.calls("kill"))
+
+    def test_every_container_carries_the_runner_label(self):
+        self.docker_score("oom_no_result")
+        self.assertEqual({c[2] for c in self.calls("run")}, {self.runner.label})
+
+    def test_sigterm_removes_the_running_container(self):
+        fake, env = self.install_fake("hang")
+        inv = os.path.join(self.tmp, "inventory.json")
+        with open(inv, "w", encoding="utf-8") as handle:
+            json.dump(self.inventory, handle)
+        env = dict(os.environ, PATH=os.path.dirname(fake) + os.pathsep + os.environ["PATH"], **env)
+        proc = subprocess.Popen([sys.executable, os.path.join(HARNESS, "score_run.py"), "score", "--phase-root", self.phase,
+                                 "--task", "SYN", "--pristine", self.pristine, "--agent", self.agent(), "--hidden", self.hidden,
+                                 "--inventory", inv, "--out", os.path.join(self.tmp, "score.json"),
+                                 "--sandbox", "docker", "--image", "python@sha256:" + "0" * 64],
+                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.time() + 20
+        while time.time() < deadline and not (os.path.exists(self.log) and self.calls("run")):
+            time.sleep(0.1)
+        time.sleep(0.5)
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=20)
+        self.assertEveryContainerRemoved()
 
 if __name__ == "__main__":
     unittest.main()

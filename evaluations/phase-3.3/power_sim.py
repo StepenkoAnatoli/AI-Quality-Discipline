@@ -118,6 +118,46 @@ def stop_probability(n, k, p):
     return sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(k, n + 1))
 
 
+def _betabinom_pmf(reps, a, b):
+    """P(j successes in `reps` runs) when the task's success probability is Beta(a, b)."""
+    def lbeta(x, y):
+        return math.lgamma(x) + math.lgamma(y) - math.lgamma(x + y)
+    return [math.comb(reps, j) * math.exp(lbeta(j + a, reps - j + b) - lbeta(a, b)) for j in range(reps + 1)]
+
+
+def _convolve(pmfs):
+    total = [1.0]
+    for pmf in pmfs:
+        out = [0.0] * (len(total) + len(pmf) - 1)
+        for i, x in enumerate(total):
+            for j, y in enumerate(pmf):
+                out[i + j] += x * y
+        total = out
+    return total
+
+
+def stop_probability_clustered(tasks, reps, k, mean, kappa=None):
+    """P(the Stage 1 stop rule fires: >= k successes over `tasks` hard tasks x `reps` control runs each), when each
+    task's success probability is drawn from Beta(mean*kappa, (1-mean)*kappa) and runs within a task are Bernoulli.
+
+    kappa=None is the binomial model (every task has the same probability, `mean`): stop_probability(tasks*reps, ...).
+    Smaller kappa means more difference between tasks; runs of one task are then correlated, which is what the
+    binomial table ignores (review 2026-11-26, finding 15). Exact, not simulated."""
+    if kappa is None:
+        return stop_probability(tasks * reps, k, mean)
+    pmf = _convolve([_betabinom_pmf(reps, mean * kappa, (1 - mean) * kappa)] * tasks)
+    return sum(pmf[k:])
+
+
+def stop_probability_two_point(tasks, reps, k, share_solvable, p_solvable=1.0, p_unsolvable=0.0):
+    """The limiting case: each task is independently 'solvable' (success p_solvable) with probability share_solvable,
+    otherwise 'unsolvable' (success p_unsolvable)."""
+    task = [share_solvable * x + (1 - share_solvable) * y for x, y in zip(
+        [math.comb(reps, j) * p_solvable ** j * (1 - p_solvable) ** (reps - j) for j in range(reps + 1)],
+        [math.comb(reps, j) * p_unsolvable ** j * (1 - p_unsolvable) ** (reps - j) for j in range(reps + 1)])]
+    return sum(_convolve([task] * tasks)[k:])
+
+
 # ------------------------------------------------------------------ reports
 
 DESIGNS = [(4, 3), (6, 2), (12, 1), (8, 3), (25, 2)]
@@ -218,6 +258,16 @@ def report_stop_rule():
     for n, k, label in ((4, 4, "4 runs, >= 0.9 (4/4)"), (4, 3, "4 runs, >= 3/4"), (8, 8, "8 runs, >= 0.9 (8/8)"),
                         (8, 7, "8 runs, >= 7/8")):
         print(f"{label:20} | " + " ".join(f"{stop_probability(n, k, p):6.3f}" for p in (0.95, 0.9, 0.8, 0.7, 0.6, 0.5)))
+    print("\nWith task heterogeneity (review 2026-11-26, finding 15): rule '>= 7 of 8', mean control success m; each")
+    print("task's success ~ Beta(m*kappa, (1-m)*kappa). kappa=inf is the binomial row above. Exact.")
+    for tasks, reps in ((2, 4), (4, 2), (8, 1)):
+        print(f"  {tasks} hard tasks x {reps} control runs")
+        for kappa in (None, 20.0, 5.0, 2.0, 1.0):
+            row = " ".join(f"{stop_probability_clustered(tasks, reps, 7, m, kappa):6.3f}"
+                           for m in (0.95, 0.9, 0.8, 0.7, 0.6, 0.5))
+            print(f"    kappa={'inf' if kappa is None else kappa:<5} | {row}")
+    print("  limiting case, 2 x 4: 60% of tasks always solved, 40% never (mean 0.6): "
+          f"P(stop) = {stop_probability_two_point(2, 4, 7, 0.6):.3f}")
 
 
 def main(argv=None):

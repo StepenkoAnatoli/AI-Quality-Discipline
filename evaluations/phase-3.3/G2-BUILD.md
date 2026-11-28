@@ -1,10 +1,12 @@
 # G2 pilot batch: build record (2026-11-25)
 
 **Status:**
+- **Updated 2026-11-26, later:** the final figures after the cross-provider (GPT) roles, the coverage audit and full mechanical runs are in `REVIEW-2026-11-26.md` §5. They supersede the check and mutant counts in §2 below.
+- **Re-rated 2026-11-26** with blind labels (`REVIEW-2026-11-26.md` §6). The final tiers are E4 and E6 easy, and M3, M6, H4 and H6 hard. They supersede the rating columns in §2.
 - **Six task packages were built offline under the solo protocol** (`STAGE0-SOLO.md` §2). Every package passes the oracle validator. That is **mechanical acceptance** under its rules, not proof that each package is a valid research task (review 2026-11-26, finding 4).
 - **Corrected 2026-11-26** after an external review (`REVIEW-2026-11-26.md`). The mechanical-mutation numbers in §2 were wrong for the four two-file tasks and have been re-measured with the fixed validator.
 - **No model ran on any task.** No live run, no scoring and no Stage 1 dispatch took place.
-- **Gate G2 is not yet decided.** It waits on the owner's spot check 1 (§6).
+- **Gate G2: go** (owner, 2026-11-26; §6).
 
 **This is a public record.** It holds only task IDs, the public briefs (`DESIGN.md` §4) and counts. The prompts, hidden tests, obligation lists, solutions and ratings stay in the private repository `aqd-private-tasks` until the runs that use them are complete (`DESIGN.md` §6).
 
@@ -40,6 +42,7 @@
 
 **Validator:**
 - Every package: the reference passes every check; the pristine project and the shortcut each fail at least one; the source map is clean.
+- **In the pinned scoring container (2026-11-26):** all 76 candidates of the six packages give the same per-check results as with the local runner (`REVIEW-2026-11-26.md` §4, finding 4).
 - **Checks loosened after an alternative design failed: 0.** No alternative failed a check, so the T7 count is 0 for the whole batch. This covers only that one pathway. Revisions triggered by reviewers, mechanical survivors and realistic mutants (§3) are also adaptations to Claude-generated behaviour, and are listed in the private revision ledger.
 
 **Ratings:**
@@ -90,6 +93,7 @@ This is far below the human-effort estimate in `STAGE0-PLAN.md` §3 (0.5–4 day
 1. **The medium tier is under-filled.**
    - The ratings put M3 in hard and M6 on the medium/hard boundary. Under `DESIGN.md` §3 the rated composite, not the brief, sets the tier, so this batch is 2 easy, 0–1 medium and 3–4 hard.
    - Medium tasks need to be briefed or built smaller. This is the main G2 finding for D2.
+   - M6's tier also depends on how the consensus rule rounds a half (11 to 14), which `REVIEW-2026-11-26.md` §3 does not fix. `D2-REBRIEF.md` proposes a fix and the re-brief of the remaining 18 tasks.
 2. **The projects are small:** 228–570 lines of Python each.
    - Their difficulty comes from interacting requirements, concurrency and state, not from size, as the rubric intends.
    - Whether 45 minutes is enough for the hard tasks is not known until Stage 1 (T4).
@@ -103,6 +107,11 @@ This is far below the human-effort estimate in `STAGE0-PLAN.md` §3 (0.5–4 day
 6. **E6's alternative design, mutants and ratings predate its last one-line prompt addition** (the H13 obligation). The alternative still passes every check, but the ratings are against the earlier prompt.
 7. **Two reviewers (M3 and H4) wrote scratch solutions** while they had the hidden tests, to check feasibility. These were not delivered and not used, but it goes beyond the reviewer role.
 8. **Child sessions opened draft pull requests in the private repository** (their harness default). None was merged; packages are assembled on `main` by the orchestrator.
+9. **Spot check 1 was done by a model.**
+   - The owner had GPT review the 46 obligations and adopted its verdict, so the protocol's one human judgement is a cross-provider model check endorsed by the owner.
+   - GPT read the private repository through the owner's GitHub connector. It reports reading only the spot-check sheet, the S prompts and two project files.
+   - Its reverse question (does every prompt rule have a check?) found 3 rules in one hard task with no hidden or baseline check. They were routed to that task's builder (`STAGE0-SOLO.md` §2.6, owner decision), with hidden checks only and no prompt change.
+   - The same audit, and a GPT alternative design and wrong implementations per task, are planned for all six pilot tasks. The model-family bias they address is T1/T3.
 
 ## 6. Gate G2 (`STAGE0-SOLO.md` §4)
 
@@ -110,7 +119,7 @@ This is far below the human-effort estimate in `STAGE0-PLAN.md` §3 (0.5–4 day
 |---|---|
 | Validator passes each task, with every alternative-triggered revision logged | **met, re-measured 2026-11-26** with the fixed validator (§2): 6 of 6, with 0 such revisions. Mechanical survivors are routed to the builders |
 | Model-rater agreement within one point ≥ 0.6 per factor | **met**: 6 of 6 tasks on every factor (task level). Tier agreement 5 of 6 |
-| Spot check 1 finds no unreasonable obligation | **pending**: the owner checks E6, M3 and H6 (seeded draw `aqd-phase-3.3-g2-spot-check-1-v1`); the sheet is `spot-check/SPOT-CHECK-1.md` in the private repository |
+| Spot check 1 finds no unreasonable obligation | **met (2026-11-26):** 46 of 46 obligations of E6, M3 and H6 accepted, 0 rejected (seeded draw `aqd-phase-3.3-g2-spot-check-1-v1`). The review was done by another provider's model (GPT) at the owner's request and adopted by the owner as their own decision, so it is a cross-provider model check, not an independent human reading (§5 item 9) |
 | Build effort within about 2× of `STAGE0-PLAN.md` §3 | **met** (§4) |
 
-**Decision:** the owner's, after the spot check. Whatever the spot check finds, the tier finding (§5 item 1) means the remaining 18 tasks should be briefed with the medium tier in mind before they are built.
+**Decision (owner, 2026-11-26): G2 go.** All four criteria are met. The remaining 18 tasks are briefed per `D2-REBRIEF.md` once its proposals are ratified. Whatever the spot check finds, the tier finding (§5 item 1) means the remaining 18 tasks should be briefed with the medium tier in mind before they are built.
