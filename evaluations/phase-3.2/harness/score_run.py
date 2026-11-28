@@ -22,7 +22,10 @@ every hidden-test file. The evaluator keeps it with the hidden tests.
     duplicated, skipped or unrequested result, a crashed runner or an
     inventory mismatch makes the evaluation INVALID: no score is produced.
   * A test that fails, errors, times out, or cannot import the candidate's code
-    is a VALID failure of that check. A valid zero is not an invalid evaluation.
+    is a VALID failure of that check. So is a test whose sandbox container the
+    kernel killed for exceeding its memory limit (Docker State.OOMKilled): the
+    outcome is `memory_limit`. Any other crash stays INVALID. A valid zero is
+    not an invalid evaluation.
 Exit codes: 0 valid evaluation, 3 invalid evaluation, 2 usage error.
 
 The scoring tree is the pristine project plus only the task's mutable file
@@ -43,10 +46,12 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import tokenize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -202,32 +207,60 @@ class LocalRunner:
 
 
 class DockerRunner:
-    """One fresh container per test: no network, read-only code, non-root, no host env."""
+    """One fresh container per test: no network, read-only code, non-root, no host env.
+
+    A test that the kernel killed for the container's memory limit is reported as "memory_limit", a valid failure
+    of that check (owner decision 2026-11-28): the run must exit non-zero and Docker must record State.OOMKilled.
+    A memory limit can only lower a score, so this does not weaken the anti-forgery rules in run_one. An exit 0
+    keeps its usual meaning (a child process killed for memory while the test still finished), and every other
+    crash stays INVALID. Scoring hosts must not be under host-wide memory pressure: on cgroup v2 a kill by the
+    host's own OOM killer may also set OOMKilled (SPECIFICATION.md section 7)."""
 
     name = "docker"
+    OOM_SETTLE_TRIES = 10       # Docker may record OOMKilled shortly after the exit is reported
+    OOM_SETTLE_SECONDS = 0.2
 
     def __init__(self, timeout, image, docker="docker"):
         self.timeout = timeout
         self.image = image
         self.docker = docker
+        # Every container this runner starts carries this label, so its own containers can be found and removed
+        # without touching another scorer's.
+        self.label = f"aqd-score-runner={secrets.token_hex(8)}"
 
     def command(self, tree, outdir, args, container):
         return [
-            self.docker, "run", "--rm", "-i", "--name", container,
+            self.docker, "run", "-i", "--name", container, "--label", self.label,
             "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-            "--pids-limit", "256", "--memory", "1g", "--cpus", "2", "--user", "65534:65534",
+            "--pids-limit", "256", "--memory", "1g", "--memory-swap", "1g", "--cpus", "2", "--user", "65534:65534",
             "--tmpfs", "/tmp:rw,size=256m", "--shm-size", "128m",
             "-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "PYTHONHASHSEED=0",
             "-e", "LANG=C.UTF-8", "-v", f"{tree}:/work:ro", "-v", f"{outdir}:/out:rw", "-w", "/work",
             self.image, "python", "run_checks.py",
         ] + [a.replace("{out}", "/out") for a in args]
 
+    def oom_killed(self, container, settle=False):
+        """True only when Docker records that the kernel killed the container for its memory limit."""
+        for attempt in range(self.OOM_SETTLE_TRIES if settle else 1):
+            if attempt:
+                time.sleep(self.OOM_SETTLE_SECONDS)
+            proc = subprocess.run([self.docker, "inspect", "--format", "{{.State.OOMKilled}}", container],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            if proc.returncode == 0 and proc.stdout.strip() == "true":
+                return True
+        return False
+
     def run(self, tree, outdir, args, stdin_text):
+        # The container is not started with --rm: its State.OOMKilled must be read after it exits. It is always
+        # removed here, also after a timeout or when the scorer is stopped by SIGTERM or SIGHUP (main installs a
+        # handler that raises, so this finally runs).
         container = f"aqd-score-{secrets.token_hex(6)}"
         os.chmod(outdir, 0o777)
         try:
             proc = subprocess.run(self.command(tree, outdir, args, container), input=stdin_text, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, timeout=self.timeout, text=True, encoding="utf-8", errors="replace")
+            if proc.returncode != 0 and self.oom_killed(container, settle=proc.returncode == 137):
+                return "memory_limit", proc.stdout[-8000:]
             return proc.returncode, proc.stdout[-8000:]
         except subprocess.TimeoutExpired as exc:
             subprocess.run([self.docker, "kill", container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -235,6 +268,8 @@ class DockerRunner:
             if isinstance(out, bytes):
                 out = out.decode("utf-8", "replace")
             return "timeout", out[-8000:]
+        finally:
+            subprocess.run([self.docker, "rm", "-f", container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def make_world_readable(tree):
@@ -365,6 +400,10 @@ def run_one(runner, tree, scratch, test_id):
     code, log = runner.run(tree, outdir, ["run", "{out}/result.json", test_id], nonce + "\n")
     if code == "timeout":
         return "timeout", "the test did not finish within the time limit", log
+    if code == "memory_limit":
+        # Only DockerRunner reports this: a non-zero exit with Docker's own OOMKilled state, also when a result was
+        # written before the kill. It can only lower the score, so the anti-forgery rules below are unaffected.
+        return "memory_limit", "the test exceeded the sandbox memory limit and was killed", log
     path = os.path.join(outdir, "result.json")
     extra = sorted(set(os.listdir(outdir)) - {"result.json"})
     if not os.path.isfile(path):
@@ -506,7 +545,15 @@ def _write_json(path, data):
         handle.write("\n")
 
 
+def _stop_on_signal(signum, _frame):
+    """SIGTERM or SIGHUP ends the scorer through SystemExit, so DockerRunner's finally removes the running container."""
+    raise SystemExit(128 + signum)
+
+
 def main(argv=None):
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), _stop_on_signal)
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     inv = sub.add_parser("inventory")
